@@ -205,3 +205,20 @@ doralite_lite-main/
 
 # 主播档案抓取工作区（gjts.cn 抓取/打包脚本与原始数据，仅本地保留；运行时数据在 public/streamer-data）
 主播/
+
+# 原项目遗留：截图/驱动资源/编辑器配置（已删除或不再分发）
+docs/screenshots/
+R560-developer/
+.zcodeignore
+
+# 临时文件、备份与调试工具（不随仓库分发）
+*.bak
+*.tmp
+*.log
+screenshot*.png
+test-*.png
+debug-*.png
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
