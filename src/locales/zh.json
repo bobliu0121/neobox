@@ -63,7 +63,8 @@
     "screenTest": "屏幕检测",
     "bsodLog": "蓝屏日志",
     "imageConverter": "图片转换",
-    "audioConverter": "音频转换"
+    "audioConverter": "音频转换",
+    "wallpaper": "壁纸管理"
   },
   "customPage": {
     "title": "自定义页面",
@@ -2649,5 +2650,19 @@
     "noOutput": "请先选择输出位置",
     "samePath": "输出路径不能与输入相同",
     "autoSaveHint": "未选择保存位置时，将自动保存到输入文件所在目录（文件名加 _converted 后缀）"
+  },
+  "wallpaper": {
+    "title": "壁纸管理",
+    "selectFolderTitle": "选择壁纸文件夹",
+    "importFolder": "导入壁纸文件夹",
+    "noImages": "该文件夹没有支持的图片",
+    "loadedCount": "已加载 {{count}} 张壁纸",
+    "applied": "壁纸已设置",
+    "rotate": "轮换播放",
+    "intervalUnit": "分钟",
+    "list": "壁纸列表",
+    "refresh": "刷新",
+    "history": "壁纸历史",
+    "emptyHint": "点击上方按钮导入壁纸文件夹开始使用"
   }
 }

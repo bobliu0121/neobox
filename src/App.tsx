@@ -38,6 +38,7 @@ import CustomPage from "./pages/CustomPage";
 import NvidiaRecordingPage from "./pages/NvidiaRecordingPage";
 import TimeSyncPage from "./pages/TimeSyncPage";
 import ScreenTestPage from "./pages/ScreenTestPage";
+import WallpaperPage from "./pages/WallpaperPage";
 import BsodLogPage from "./pages/BsodLogPage";
 import ImageConverterPage from "./pages/ImageConverterPage";
 import AudioConverterPage from "./pages/AudioConverterPage";
@@ -128,6 +129,12 @@ function App() {
                     path="/builtin-tools"
                     element={
                       <BuiltinToolsPage />
+                    }
+                  />
+                  <Route
+                    path="/wallpaper"
+                    element={
+                      <WallpaperPage />
                     }
                   />
                   <Route

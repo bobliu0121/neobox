@@ -63,7 +63,8 @@
     "speedtest": "網路測速",
     "vtxVirtualization": "VT-X 虛擬化修復",
     "contextMenu": "右鍵選單管理",
-    "screenTest": "螢幕檢測"
+    "screenTest": "螢幕檢測",
+    "wallpaper": "桌布管理"
   },
   "customPage": {
     "title": "自訂頁面",
@@ -2787,5 +2788,19 @@
     },
     "scanning": "掃描中...",
     "junkScanning": "正在深度掃描..."
+  },
+  "wallpaper": {
+    "title": "桌布管理",
+    "selectFolderTitle": "選擇桌布資料夾",
+    "importFolder": "匯入桌布資料夾",
+    "noImages": "該資料夾沒有支援的圖片",
+    "loadedCount": "已載入 {{count}} 張桌布",
+    "applied": "桌布已設定",
+    "rotate": "輪換播放",
+    "intervalUnit": "分鐘",
+    "list": "桌布列表",
+    "refresh": "重新整理",
+    "history": "桌布歷史",
+    "emptyHint": "點擊上方按鈕匯入桌布資料夾開始使用"
   }
 }

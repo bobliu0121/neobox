@@ -1133,7 +1133,6 @@ function GeneralSettings() {
                 {navOrder.map((path) => {
                   const labelMap: Record<string, string> = {
                     "/hardware": t("sidebar.hardware"),
-                    "/tools": t("sidebar.tools"),
                     "/builtin-tools": t("sidebar.builtinTools"),
                     "/optimization": t("sidebar.optimization"),
                     "/music": t("sidebar.music"),

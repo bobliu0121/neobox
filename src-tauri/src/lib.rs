@@ -40,6 +40,7 @@ mod overlay_panel;
 mod power_settings;
 mod vertical_overlay;
 mod vtx_virtualization;
+mod wallpaper;
 
 mod sensor;
 mod sensor_monitor;
@@ -949,6 +950,10 @@ pub fn run() {
         // === 文件格式转换（图片/音频） ===
         file_convert::convert_image,
         file_convert::convert_audio,
+
+        // === 壁纸管理 ===
+        wallpaper::set_wallpaper,
+        wallpaper::scan_wallpaper_folder,
     ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

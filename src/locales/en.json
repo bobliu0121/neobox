@@ -63,7 +63,8 @@
     "imageConverter": "Image Converter",
     "audioConverter": "Audio Converter",
     "autoclicker": "Auto Clicker",
-    "resolutionConverter": "Resolution Converter"
+    "resolutionConverter": "Resolution Converter",
+    "wallpaper": "Wallpapers"
   },
   "customPage": {
     "title": "Custom Dashboard",
@@ -2847,5 +2848,19 @@
     "revertSuccess": "Reverted successfully",
     "reverting": "Reverting…",
     "success": "Applied successfully"
+  },
+  "wallpaper": {
+    "title": "Wallpaper Manager",
+    "selectFolderTitle": "Select wallpaper folder",
+    "importFolder": "Import Wallpaper Folder",
+    "noImages": "No supported images in this folder",
+    "loadedCount": "Loaded {{count}} wallpapers",
+    "applied": "Wallpaper applied",
+    "rotate": "Rotate",
+    "intervalUnit": "min",
+    "list": "Wallpapers",
+    "refresh": "Refresh",
+    "history": "History",
+    "emptyHint": "Click the button above to import a wallpaper folder"
   }
 }

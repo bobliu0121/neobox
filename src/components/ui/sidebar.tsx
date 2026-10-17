@@ -1,5 +1,5 @@
 import { Box as ChakraBox, Flex, IconButton, Text, useColorModeValue, Badge, Image, useColorMode } from "@chakra-ui/react";
-import { Home, Wrench, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Gamepad2 } from "lucide-react";
+import { Home, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Images } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useBackground } from "@/contexts/background-context";
@@ -7,10 +7,9 @@ import { useThemeColor } from "@/contexts/theme-color-context";
 import { getBorderGlowStyle } from "@/hooks/use-glow-effect";
 import { useLiquidGlassRefraction } from "@/components/special/liquid-glass-svg-filter";
 import { store } from "@/lib/store";
-import { IS_STORE_BUILD } from "@/lib/build-flags";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 
-const HIDEABLE_NAV_PATHS = ["/hardware", "/tools", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
+const HIDEABLE_NAV_PATHS = ["/hardware", "/builtin-tools", "/wallpaper", "/optimization", "/system-optimizer", "/music", "/custom"];
 const getNavStorageKey = (path: string) => `neobox_nav_visible_${path.replace(/\//g, "").replace(/-/g, "_")}`;
 
 // 同步从 localStorage 预填充导航可见性：store 的读取是异步的，若首帧用空对象初始化，
@@ -390,9 +389,8 @@ export function Sidebar() {
   const navItems: NavItem[] = [
     { path: "/", icon: Home, ariaLabel: t("sidebar.home") },
     { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
-    // 商店版不显示工具箱入口（其全部栏目均为第三方软件获取入口，见 ToolsPage）
-    ...(IS_STORE_BUILD ? [] : [{ path: "/tools", icon: Wrench, ariaLabel: t("sidebar.tools") }]),
     { path: "/builtin-tools", icon: Package, ariaLabel: t("sidebar.builtinTools") },
+    { path: "/wallpaper", icon: Images, ariaLabel: t("sidebar.wallpaper") },
     { path: "/optimization", icon: TrendingUp, ariaLabel: t("sidebar.optimization") },
     { path: "/system-optimizer", icon: Settings2, ariaLabel: t("sidebar.systemOptimizer") },
     { path: "/music", icon: Music, ariaLabel: t("sidebar.music") },
