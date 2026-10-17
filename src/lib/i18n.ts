@@ -6,14 +6,11 @@ const STORAGE_KEY = "i18nextLng";
 const LANGUAGE_MODE_STORAGE_KEY = "neobox_language_mode";
 const SYSTEM_LANGUAGE = "system";
 
-/** 语言包按需加载：静态 import 会让每个常驻窗口都解析并常驻全部 6 份 JSON */
+/** 语言包按需加载：静态 import 会让每个常驻窗口都解析并常驻全部语言 JSON */
 const LOADERS: Record<string, () => Promise<{ default: object }>> = {
   zh: () => import("@/locales/zh.json"),
   en: () => import("@/locales/en.json"),
   "zh-TW": () => import("@/locales/zh-TW.json"),
-  fr: () => import("@/locales/fr.json"),
-  ja: () => import("@/locales/ja.json"),
-  de: () => import("@/locales/de.json"),
 };
 
 const FALLBACK_LNG = "zh";
@@ -45,9 +42,6 @@ async function getSystemLocale(): Promise<string> {
       "zh-Hans": "zh",
       "zh-Hant": "zh-TW",
       "en": "en",
-      "fr": "fr",
-      "ja": "ja",
-      "de": "de",
     };
     return localeMap[locale] || "zh";
   } catch {

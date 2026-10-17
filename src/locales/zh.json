@@ -1284,10 +1284,7 @@
         "system": "跟随系统",
         "zh": "简体中文",
         "zh-TW": "繁體中文",
-        "en": "English",
-        "fr": "Français",
-        "ja": "日本語",
-        "de": "Deutsch"
+        "en": "English"
       },
       "homepage": "主页",
       "homeUsernameLabel": "标题用户名",

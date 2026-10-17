@@ -61,7 +61,9 @@
     "screenTest": "Screen Test",
     "bsodLog": "BSOD Log",
     "imageConverter": "Image Converter",
-    "audioConverter": "Audio Converter"
+    "audioConverter": "Audio Converter",
+    "autoclicker": "Auto Clicker",
+    "resolutionConverter": "Resolution Converter"
   },
   "customPage": {
     "title": "Custom Dashboard",
@@ -979,6 +981,10 @@
       "icon": "Tool icon",
       "pickIcon": "Choose icon",
       "submitPr": "Submit (PR)"
+    },
+    "hardwareModel": {
+      "loading": "Loading…",
+      "unknown": "Unknown"
     }
   },
   "floatingNav": {
@@ -1093,7 +1099,13 @@
     "screenTestDesc": "Detect monitor dead pixels, response time, refresh rate and screen uniformity",
     "bsodLogDesc": "Analyze BSOD crash events and dump files to pinpoint culprit drivers and hardware",
     "imageConverterDesc": "Convert between image formats (PNG/JPG/JPEG/WebP/BMP)",
-    "audioConverterDesc": "Convert between audio formats (WAV/MP3/M4A)"
+    "audioConverterDesc": "Convert between audio formats (WAV/MP3/M4A)",
+    "applyResolution": "Apply Resolution",
+    "autoclickerDesc": "Automatic clicking tool with custom speed and hotkey",
+    "resolutionApplied": "Resolution applied",
+    "resolutionManagement": "Resolution Management",
+    "selectDisplay": "Select display",
+    "selectResolution": "Select resolution"
   },
   "contextMenu": {
     "title": "Context Menu & This PC",
@@ -1446,10 +1458,7 @@
         "system": "Follow system",
         "zh": "Simplified Chinese",
         "zh-TW": "Traditional Chinese",
-        "en": "English",
-        "fr": "French",
-        "ja": "Japanese",
-        "de": "German"
+        "en": "English"
       },
       "homepage": "Homepage",
       "homeUsernameLabel": "Title Username",
@@ -1693,7 +1702,14 @@
     "refreshRate": "Refresh Rate",
     "refreshRateInputPlaceholder": "Refresh Rate",
     "applyCustomResolution": "Apply Custom Resolution",
-    "customResolutionHint": "Enter a custom resolution and optionally a refresh rate to apply to the current display"
+    "customResolutionHint": "Enter a custom resolution and optionally a refresh rate to apply to the current display",
+    "applyCustom": "Apply Custom",
+    "applyFailed": "Failed to apply resolution",
+    "applying": "Applying…",
+    "loadModesFailed": "Failed to load display modes",
+    "noModes": "No display modes available",
+    "resolutionApplied": "Resolution applied",
+    "selectDisplayFirst": "Select a display first"
   },
   "systemOptimizer": {
     "yuqi": {
@@ -2686,5 +2702,150 @@
     "noOutput": "Please choose an output location first",
     "samePath": "Output path must differ from input",
     "autoSaveHint": "If no save location is chosen, the output is saved to the input file's folder (with a _converted suffix)"
+  },
+  "autoclicker": {
+    "button": "Hotkey",
+    "buttonHint": "Press the hotkey to start/stop the auto clicker",
+    "cps": "CPS",
+    "currentSpeed": "Current speed",
+    "customInterval": "Custom interval (ms)",
+    "enableToggleHint": "Enable the toggle to control the clicker",
+    "hotkey": "Start/Stop Hotkey",
+    "hotkeyHint": "Press the hotkey to toggle the auto clicker on/off",
+    "hotkeyPresets": "Hotkey Presets",
+    "hotkeySaved": "Hotkey saved",
+    "interval": "Interval",
+    "intervalMs": "Interval (ms)",
+    "left": "Left Click",
+    "presetF8": "F8",
+    "presetSide1": "Mouse Side Button 1",
+    "presetSide2": "Mouse Side Button 2",
+    "presetSpace": "Spacebar",
+    "presets": "Presets",
+    "right": "Right Click",
+    "running": "Running",
+    "stopped": "Stopped",
+    "title": "Auto Clicker"
+  },
+  "networkOptimize": {
+    "adapterPower": {
+      "description": "Enable power saving for network adapters to reduce power consumption",
+      "title": "Adapter Power Saving"
+    },
+    "applyError": "Failed to apply: {error}",
+    "batch": {
+      "disable": "Disable all",
+      "enable": "Enable all",
+      "title": "Batch Apply"
+    },
+    "batchError": "Batch operation failed",
+    "batchOptimized": "All selected optimizations applied",
+    "batchReverted": "All selected optimizations reverted",
+    "chimney": {
+      "description": "Disable TCP Chimney Offload to reduce network latency",
+      "title": "TCP Chimney Offload"
+    },
+    "clearDnsError": "Failed to clear DNS cache",
+    "currentDns": "Current DNS",
+    "dns": {
+      "applied": "DNS applied",
+      "apply": "Apply",
+      "customLabel": "Custom DNS",
+      "hijacked": "DNS appears to be hijacked",
+      "latencyTimeout": "Latency test timeout",
+      "primary": "Primary DNS",
+      "restore": "Restore",
+      "secondary": "Secondary DNS",
+      "title": "DNS Settings"
+    },
+    "dnsApplied": "DNS applied",
+    "dnsCache": {
+      "clear": "Clear",
+      "clearing": "Clearing…",
+      "description": "Clear the system DNS resolver cache to fix domain resolution issues",
+      "title": "DNS Cache"
+    },
+    "dnsCacheCleared": "DNS cache cleared",
+    "dnsRequired": "DNS is required",
+    "dnsRestored": "DNS restored",
+    "fixDhcp": {
+      "description": "Reset the DHCP service to restore automatic IP assignment",
+      "done": "DHCP fixed",
+      "error": "Failed to fix DHCP",
+      "fix": "Fix DHCP",
+      "fixing": "Fixing DHCP…",
+      "title": "Fix DHCP"
+    },
+    "loadFailed": "Failed to load network info",
+    "nagle": {
+      "description": "Disable Nagle's algorithm to reduce packet latency",
+      "title": "Nagle's Algorithm"
+    },
+    "noDnsConfig": "No DNS configuration found",
+    "operationError": "Operation failed",
+    "optimized": "Optimized",
+    "optimizing": "Optimizing…",
+    "pageDesc": "Optimize network latency and DNS settings",
+    "pageTitle": "Network Optimize",
+    "publicIp": {
+      "copied": "Public IP copied",
+      "copy": "Copy",
+      "copyFailed": "Failed to copy",
+      "failed": "Failed to get public IP",
+      "fetchFailed": "Failed to fetch public IP",
+      "label": "Public IP",
+      "loading": "Loading…",
+      "refresh": "Refresh",
+      "title": "Public IP",
+      "updated": "Public IP updated"
+    },
+    "rescan": "Rescan",
+    "rescanComplete": "Scan complete",
+    "resetNetwork": {
+      "description": "Reset Winsock and the TCP/IP stack to fix network and connectivity issues",
+      "done": "Network reset done",
+      "error": "Failed to reset network",
+      "reset": "Reset Network",
+      "resetting": "Resetting network…",
+      "title": "Reset Network"
+    },
+    "reverted": "Reverted",
+    "scanError": "Scan failed",
+    "scanning": "Scanning…",
+    "tcpCongestion": {
+      "description": "Switch TCP congestion control algorithm (e.g. BBR) to improve throughput",
+      "title": "TCP Congestion Control"
+    }
+  },
+  "peripheralOptimize": {
+    "apply": "Apply",
+    "applying": "Applying…",
+    "currentValue": "Current value",
+    "error": "Failed to apply",
+    "keyboardDesc": "Optimize keyboard response by adjusting input delay",
+    "keyboardSection": "Keyboard",
+    "keyboardValue16": "16 (default)",
+    "keyboardValue18": "18",
+    "keyboardValue20": "20",
+    "keyboardValue22": "22",
+    "mouseDesc": "Optimize mouse responsiveness for gaming",
+    "mouseQueueDesc": "Adjust the mouse buffer queue size for lower input lag",
+    "mouseQueueSection": "Mouse Buffer Queue",
+    "mouseQueueValue16": "16 (default)",
+    "mouseQueueValue18": "18",
+    "mouseQueueValue20": "20",
+    "mouseQueueValue22": "22",
+    "mouseSection": "Mouse",
+    "mouseValue26": "26 (default)",
+    "mouseValue36": "36",
+    "mouseValue38": "38",
+    "mouseValue40": "40",
+    "pageDesc": "Optimize keyboard and mouse input latency",
+    "pageTitle": "Peripheral Optimize",
+    "recommended": "Recommended",
+    "revert": "Revert",
+    "revertSuccess": "Reverted successfully",
+    "reverting": "Reverting…",
+    "success": "Applied successfully"
   }
 }
