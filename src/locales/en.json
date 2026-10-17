@@ -2861,6 +2861,7 @@
     "list": "Wallpapers",
     "refresh": "Refresh",
     "history": "History",
-    "emptyHint": "Click the button above to import a wallpaper folder"
+    "emptyHint": "Click the button above to import a wallpaper folder",
+    "folderExists": "This folder is already imported"
   }
 }

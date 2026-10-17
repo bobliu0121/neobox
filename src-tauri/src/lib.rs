@@ -953,6 +953,7 @@ pub fn run() {
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,
+        wallpaper::get_current_wallpaper,
         wallpaper::scan_wallpaper_folder,
     ])
         .build(tauri::generate_context!())

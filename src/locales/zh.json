@@ -2663,6 +2663,7 @@
     "list": "壁纸列表",
     "refresh": "刷新",
     "history": "壁纸历史",
-    "emptyHint": "点击上方按钮导入壁纸文件夹开始使用"
+    "emptyHint": "点击上方按钮导入壁纸文件夹开始使用",
+    "folderExists": "该文件夹已导入"
   }
 }

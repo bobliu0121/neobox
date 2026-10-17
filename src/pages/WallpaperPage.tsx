@@ -16,13 +16,16 @@ import {
   SimpleGrid,
   Spinner,
   Image,
+  Tag,
+  TagLabel,
+  TagCloseButton,
   useColorModeValue,
   useToast,
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Images, FolderOpen, RefreshCw, Play, Square } from "lucide-react";
+import { ArrowLeft, Images, FolderOpen, RefreshCw, Play } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
@@ -38,6 +41,10 @@ interface HistoryItem {
   time: number;
 }
 
+function dedupe(paths: string[]): string[] {
+  return Array.from(new Set(paths));
+}
+
 export default function WallpaperPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -49,9 +56,9 @@ export default function WallpaperPage() {
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
 
+  const [folders, setFolders] = useState<string[]>([]);
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [currentFolder, setCurrentFolder] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [rotateEnabled, setRotateEnabled] = useState(false);
   const [rotateInterval, setRotateInterval] = useState(10);
@@ -70,6 +77,24 @@ export default function WallpaperPage() {
       if (Array.isArray(hist)) setHistory(hist);
       if (typeof rot === "boolean") setRotateEnabled(rot);
       if (typeof interval === "number" && interval > 0) setRotateInterval(interval);
+    })();
+  }, []);
+
+  // 进入页面时读取系统当前壁纸（可反映其他应用/Windows 设置中的修改），补入历史
+  useEffect(() => {
+    (async () => {
+      try {
+        const current = await invoke<string | null>("get_current_wallpaper");
+        if (current) {
+          setHistory((prev) => {
+            const next = [{ path: current, time: Date.now() }, ...prev.filter((h) => h.path !== current)].slice(0, 12);
+            store.set(WALLPAPER_HISTORY_KEY, next).then(() => store.save());
+            return next;
+          });
+        }
+      } catch {
+        // 读取失败不阻塞页面
+      }
     })();
   }, []);
 
@@ -120,7 +145,7 @@ export default function WallpaperPage() {
     [persistRotate, rotateEnabled],
   );
 
-  // 导入壁纸文件夹
+  // 导入壁纸文件夹（可多次导入，合并结果）
   const handleImportFolder = useCallback(async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -130,30 +155,49 @@ export default function WallpaperPage() {
         title: t("wallpaper.selectFolderTitle"),
       });
       if (typeof selected !== "string") return;
+      if (folders.includes(selected)) {
+        toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
+        return;
+      }
       setLoading(true);
       const files = await invoke<string[]>("scan_wallpaper_folder", { dir: selected });
-      setWallpapers(files);
-      setCurrentFolder(selected);
+      setFolders((prev) => [...prev, selected]);
+      setWallpapers((prev) => dedupe([...prev, ...files]));
       rotateIndexRef.current = 0;
       if (files.length === 0) {
-        toast({
-          title: t("wallpaper.noImages"),
-          status: "warning",
-          duration: 2500,
-        });
+        toast({ title: t("wallpaper.noImages"), status: "warning", duration: 2500 });
       } else {
-        toast({
-          title: t("wallpaper.loadedCount", { count: files.length }),
-          status: "success",
-          duration: 2500,
-        });
+        toast({ title: t("wallpaper.loadedCount", { count: files.length }), status: "success", duration: 2500 });
       }
     } catch (e) {
       toast({ title: String(e), status: "error", duration: 3000 });
     } finally {
       setLoading(false);
     }
-  }, [t, toast]);
+  }, [t, toast, folders]);
+
+  // 移除已导入文件夹并重扫剩余文件夹
+  const handleRemoveFolder = useCallback(
+    async (folder: string) => {
+      const rest = folders.filter((f) => f !== folder);
+      setFolders(rest);
+      setLoading(true);
+      try {
+        let merged: string[] = [];
+        for (const f of rest) {
+          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f });
+          merged = dedupe([...merged, ...files]);
+        }
+        setWallpapers(merged);
+        rotateIndexRef.current = 0;
+      } catch (e) {
+        toast({ title: String(e), status: "error", duration: 3000 });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [folders, toast],
+  );
 
   // 设置壁纸并记录历史
   const applyWallpaper = useCallback(
@@ -194,48 +238,57 @@ export default function WallpaperPage() {
       </HStack>
 
       <VStack spacing={5} align="stretch">
-        {/* 操作区：导入文件夹 + 轮换开关 */}
+        {/* 操作区：导入文件夹 + 已导入文件夹列表 + 轮换开关 */}
         <LiquidGlassCard px={4} py={4}>
-          <HStack flexWrap="wrap" spacing={4}>
-            <Button
-              leftIcon={<FolderOpen />}
-              colorScheme="blue"
-              size="sm"
-              onClick={handleImportFolder}
-              isLoading={loading}
-            >
-              {t("wallpaper.importFolder")}
-            </Button>
-            {currentFolder && (
-              <Text fontSize="xs" color={subTextColor} maxW="300px" isTruncated>
-                {currentFolder}
-              </Text>
-            )}
-            <HStack ml="auto" spacing={2}>
-              <Text fontSize="sm" color={subTextColor}>
-                {t("wallpaper.rotate")}
-              </Text>
-              <Switch size="sm" isChecked={rotateEnabled} onChange={handleRotateToggle} />
-              <NumberInput
+          <VStack align="stretch" spacing={3}>
+            <HStack flexWrap="wrap" spacing={3}>
+              <Button
+                leftIcon={<FolderOpen />}
+                colorScheme="blue"
                 size="sm"
-                width="110px"
-                min={1}
-                max={1440}
-                value={rotateInterval}
-                onChange={handleIntervalChange}
-                isDisabled={!rotateEnabled}
+                onClick={handleImportFolder}
+                isLoading={loading}
               >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
-              <Text fontSize="xs" color={subTextColor}>
-                {t("wallpaper.intervalUnit")}
-              </Text>
+                {t("wallpaper.importFolder")}
+              </Button>
+              <HStack ml="auto" spacing={2}>
+                <Text fontSize="sm" color={subTextColor}>
+                  {t("wallpaper.rotate")}
+                </Text>
+                <Switch size="sm" isChecked={rotateEnabled} onChange={handleRotateToggle} />
+                <NumberInput
+                  size="sm"
+                  width="110px"
+                  min={1}
+                  max={1440}
+                  value={rotateInterval}
+                  onChange={handleIntervalChange}
+                  isDisabled={!rotateEnabled}
+                >
+                  <NumberInputField />
+                  <NumberInputStepper>
+                    <NumberIncrementStepper />
+                    <NumberDecrementStepper />
+                  </NumberInputStepper>
+                </NumberInput>
+                <Text fontSize="xs" color={subTextColor}>
+                  {t("wallpaper.intervalUnit")}
+                </Text>
+              </HStack>
             </HStack>
-          </HStack>
+            {folders.length > 0 && (
+              <HStack flexWrap="wrap" spacing={2}>
+                {folders.map((f) => (
+                  <Tag key={f} size="md" colorScheme="blue" variant="subtle">
+                    <TagLabel maxW="240px" isTruncated>
+                      {f}
+                    </TagLabel>
+                    <TagCloseButton onClick={() => handleRemoveFolder(f)} />
+                  </Tag>
+                ))}
+              </HStack>
+            )}
+          </VStack>
         </LiquidGlassCard>
 
         {/* 壁纸网格 */}
@@ -245,6 +298,9 @@ export default function WallpaperPage() {
               <Images size={18} color={themeColorHex} />
               <Text fontSize="md" fontWeight="semibold" color={headingColor}>
                 {t("wallpaper.list")}
+              </Text>
+              <Text fontSize="xs" color={subTextColor}>
+                ({wallpapers.length})
               </Text>
             </HStack>
             <SimpleGrid columns={{ base: 3, md: 4, lg: 6 }} spacing={3}>

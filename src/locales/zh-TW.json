@@ -2801,6 +2801,7 @@
     "list": "桌布列表",
     "refresh": "重新整理",
     "history": "桌布歷史",
-    "emptyHint": "點擊上方按鈕匯入桌布資料夾開始使用"
+    "emptyHint": "點擊上方按鈕匯入桌布資料夾開始使用",
+    "folderExists": "該資料夾已匯入"
   }
 }
