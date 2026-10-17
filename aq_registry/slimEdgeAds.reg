@@ -1,0 +1,19 @@
+Windows Registry Editor Version 5.00
+
+;Reduce Microsoft Edge recommendations, ads, shopping assistant, first-run prompts, and new tab noise
+;This uses Microsoft Edge policies only. It does not uninstall, block, or disable Edge updates.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge]
+"HideFirstRunExperience"=dword:00000001
+"HubsSidebarEnabled"=dword:00000000
+"PersonalizationReportingEnabled"=dword:00000000
+"AdsSettingForIntrusiveAdsSites"=dword:00000002
+"NewTabPageContentEnabled"=dword:00000000
+"NewTabPageQuickLinksEnabled"=dword:00000000
+"ConfigureDoNotTrack"=dword:00000001
+"SearchSuggestEnabled"=dword:00000000
+"EdgeShoppingAssistantEnabled"=dword:00000000
+"DiagnosticData"=dword:00000001
+"NewTabPageHideDefaultTopSites"=dword:00000001
+"ShowRecommendationsEnabled"=dword:00000000
+"SpotlightExperiencesAndRecommendationsEnabled"=dword:00000000

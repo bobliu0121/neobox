@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; 启用 NVIDIA Image Sharpening 全局锐化
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\nvlddmkm\FTS]
+"EnableGR535"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\NVIDIA Corporation\Global\FTS]
+"EnableGR535"=dword:00000000

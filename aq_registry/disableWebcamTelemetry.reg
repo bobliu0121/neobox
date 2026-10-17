@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;Disable webcam telemetry at system level
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam]
+"Value"="Deny"

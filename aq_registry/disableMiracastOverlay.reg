@@ -1,0 +1,13 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 Miracast 和 NVIDIA 覆盖层
+; Miracast 是无线投屏协议，不用时可禁用减少后台
+; Overlay 是驱动叠加层（非 MPO），影响帧延迟
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"PlatformSupportMiracast"=dword:00000000
+"DisableOverlay"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"PlatformSupportMiracast"=dword:00000000
+"DisableOverlay"=dword:00000001

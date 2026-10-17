@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;恢复允许启用Recall
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"AllowRecallEnablement"=-

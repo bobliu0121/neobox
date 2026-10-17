@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 缩短服务关闭超时，加快关机速度
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control]
+"WaitToKillServiceTimeout"="2000"

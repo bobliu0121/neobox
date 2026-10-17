@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;关闭AI设置代理 - 禁用 AI 驱动的设置代理功能
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableSettingsAgent"=dword:00000001

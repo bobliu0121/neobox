@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 全局禁用 DirectX 最大化窗口模式
+; 强制游戏使用独占全屏或普通窗口，避免 DWM 合成延迟
+; 通过环境变量 __COMPAT_LAYER 实现
+
+[HKEY_CURRENT_USER\Environment]
+"__COMPAT_LAYER"="~ DISABLEDXMAXIMIZEDWINDOWEDMODE"

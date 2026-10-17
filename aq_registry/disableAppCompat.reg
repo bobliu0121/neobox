@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+;Disable Application Compatibility Engine, Telemetry and PCA
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\AppCompat]
+"DisableEngine"=dword:00000001
+"AITEnable"=dword:00000000
+"DisablePCA"=dword:00000001
+"DisableUAR"=dword:00000001

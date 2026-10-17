@@ -1,0 +1,657 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  HStack,
+  VStack,
+  Button,
+  Text,
+  IconButton,
+  Tooltip,
+  Avatar,
+  Box,
+  Badge,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalCloseButton,
+  ModalBody,
+  Menu,
+  MenuButton,
+  MenuList,
+  MenuItem,
+  Spinner,
+  Input,
+  FormLabel,
+  useColorModeValue,
+} from "@chakra-ui/react";
+import { QRCodeSVG } from "qrcode.react";
+import { useDynamicIsland } from "@/components/ui/dynamic-island";
+import {
+  ExternalLink,
+  LogOut,
+  Crown,
+  Plus,
+  ChevronDown,
+  Check,
+  Construction,
+} from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
+import { useMusicStore, coverProxyUrl } from "@/stores/music-store";
+import { useThemeColor } from "@/contexts/theme-color-context";
+import type { MusicProvider } from "@/types/music";
+
+interface ProviderOption {
+  id: MusicProvider;
+  name: string;
+  desc: string;
+  color: string;
+  logo: string;
+  /** 开发中：仅展示，不响应交互 */
+  disabled?: boolean;
+}
+
+const PROVIDERS: ProviderOption[] = [
+  {
+    id: "netease",
+    name: "网易云音乐",
+    desc: "海量曲库 · 歌单 · 云村社区",
+    color: "#C20C0C",
+    logo: "/music-providers/wyy.webp",
+  },
+  {
+    id: "kugou",
+    name: "酷狗音乐",
+    desc: "千万曲库 · 高品质音效",
+    color: "#00A0E9",
+    logo: "/music-providers/kugou.webp",
+  },
+  {
+    id: "qqmusic",
+    name: "QQ 音乐",
+    desc: "海量曲库 · Hi-Res · 精准推荐",
+    color: "#FEC135",
+    logo: "/music-providers/qqmusic.webp",
+  },
+  {
+    id: "migu",
+    name: "咪咕音乐",
+    desc: "华语曲库 · 臻品音质",
+    color: "#FF69B4",
+    logo: "/music-providers/migu.webp",
+  },
+  {
+    id: "qishui",
+    name: "汽水音乐",
+    desc: "字节曲库 · 视频热门 BGM",
+    color: "#22C55E",
+    logo: "/music-providers/qishui.webp",
+  },
+  {
+    id: "spotify",
+    name: "Spotify",
+    desc: "国际曲库 · 30 秒试听（需自备 API 凭据）",
+    color: "#1DB954",
+    logo: "/music-providers/spotify.svg",
+  },
+];
+
+/** 平台 Logo 圆角图片容器（用于选择 Modal 与下拉菜单） */
+function ProviderLogo({ src, size = 40, rounded = "lg" }: { src: string; size?: number; rounded?: string }) {
+  return (
+    <Box
+      w={`${size}px`}
+      h={`${size}px`}
+      borderRadius={rounded}
+      overflow="hidden"
+      flexShrink={0}
+      bg="white"
+      display="flex"
+      alignItems="center"
+      justifyContent="center"
+    >
+      <img
+        src={src}
+        alt=""
+        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        draggable={false}
+      />
+    </Box>
+  );
+}
+
+/** 会员徽章（各平台统一样式）：VIP 与 SVIP 同款金底，只有文字不同；非会员显示「普通用户」 */
+export function VipBadge({
+  isVip,
+  isSvip,
+  fallbackColor,
+}: {
+  isVip?: boolean;
+  isSvip?: boolean;
+  fallbackColor: string;
+}) {
+  if (!isSvip && !isVip) {
+    return (
+      <Text color={fallbackColor} fontSize="xs">
+        普通用户
+      </Text>
+    );
+  }
+  return (
+    <Box
+      as="span"
+      display="inline-flex"
+      alignItems="center"
+      gap={1}
+      px={1.5}
+      py={0.5}
+      borderRadius="sm"
+      fontSize="10px"
+      fontWeight="bold"
+      bg="linear-gradient(135deg, #f6d365 0%, #fda085 50%, #f6d365 100%)"
+      color="#5a3000"
+    >
+      <Crown size={10} strokeWidth={2.5} />
+      {isSvip ? "SVIP" : "VIP"}
+    </Box>
+  );
+}
+
+export function MusicLoginSection() {
+  const {
+    loginInfo,
+    loginInfos,
+    playbackSource,
+    proxyPort,
+    logout,
+    openLoginWindow,
+    switchPlaybackSource,
+    qishuiQrOpen,
+    qishuiQrUrl,
+    qishuiQrLoading,
+    qishuiQrStatus,
+    openQishuiQr,
+    closeQishuiQr,
+  } = useMusicStore(
+    useShallow((s) => ({
+      loginInfo: s.loginInfo,
+      loginInfos: s.loginInfos,
+      playbackSource: s.playbackSource,
+      proxyPort: s.proxyPort,
+      logout: s.logout,
+      openLoginWindow: s.openLoginWindow,
+      switchPlaybackSource: s.switchPlaybackSource,
+      qishuiQrOpen: s.qishuiQrOpen,
+      qishuiQrUrl: s.qishuiQrUrl,
+      qishuiQrLoading: s.qishuiQrLoading,
+      qishuiQrStatus: s.qishuiQrStatus,
+      openQishuiQr: s.openQishuiQr,
+      closeQishuiQr: s.closeQishuiQr,
+    }))
+  );
+  const { getActiveColor, getContrastTextColor } = useThemeColor();
+  const toast = useDynamicIsland("music");
+  const [isSelecting, setIsSelecting] = useState(false);
+  // Spotify 凭据配置弹窗（Spotify 无扫码/网页登录，填 Client ID/Secret 即完成配置）
+  const [spotifyConfigOpen, setSpotifyConfigOpen] = useState(false);
+  const [spotifyClientId, setSpotifyClientId] = useState("");
+  const [spotifyClientSecret, setSpotifyClientSecret] = useState("");
+  const [spotifyConfigSaving, setSpotifyConfigSaving] = useState(false);
+
+  const activeColor = getActiveColor();
+  const contrastText = getContrastTextColor();
+
+  const textColor = useColorModeValue("gray.800", "#ffffff");
+  const subTextColor = useColorModeValue("gray.500", "#ffffff");
+  const modalBg = useColorModeValue("white", "#1a1a1a");
+  const modalBorder = useColorModeValue("gray.200", "#333333");
+  const menuBg = useColorModeValue("white", "#1a1a1a");
+  const menuBorder = useColorModeValue("gray.200", "#333333");
+  const menuHoverBg = useColorModeValue("gray.50", "#252525");
+
+  // 已登录的平台数量
+  const loggedInProviders = PROVIDERS.filter((p) => !p.disabled && loginInfos[p.id]?.logged_in);
+  const hasMultipleLoggedIn = loggedInProviders.length > 1;
+
+  // 处理平台选择点击：所有平台均可直接切换（未登录也可匿名搜索/试听）
+  const handleProviderClick = (p: ProviderOption) => {
+    if (p.disabled) {
+      toast({
+        title: `${p.name} 正在开发中`,
+        description: "该平台暂未上线，敬请期待",
+        status: "info",
+        duration: 2500,
+        isClosable: true,
+      });
+      return;
+    }
+    setIsSelecting(false);
+    // Spotify 未配置凭据时先引导填写 Client ID/Secret
+    if (p.id === "spotify" && !loginInfos.spotify?.logged_in) {
+      setSpotifyClientId("");
+      setSpotifyClientSecret("");
+      setSpotifyConfigOpen(true);
+      return;
+    }
+    switchPlaybackSource(p.id);
+  };
+
+  // 保存 Spotify 凭据 → 刷新登录态 → 自动切换为当前播放源
+  const saveSpotifyConfig = async () => {
+    if (!spotifyClientId.trim() || !spotifyClientSecret.trim()) {
+      toast({
+        title: "请填写完整的 Client ID 与 Client Secret",
+        status: "warning",
+        duration: 2500,
+        isClosable: true,
+      });
+      return;
+    }
+    setSpotifyConfigSaving(true);
+    try {
+      await invoke("spotify_configure", {
+        clientId: spotifyClientId.trim(),
+        clientSecret: spotifyClientSecret.trim(),
+      });
+      await useMusicStore.getState().loginStatusFor("spotify");
+      setSpotifyConfigOpen(false);
+      await switchPlaybackSource("spotify");
+      toast({
+        title: "Spotify 已配置",
+        description: "已启用搜索与 30 秒试听（完整播放需 Spotify Premium 客户端）",
+        status: "success",
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (e) {
+      console.error("spotify_configure failed:", e);
+      toast({
+        title: "Spotify 配置失败",
+        description: String(e),
+        status: "error",
+        duration: 4000,
+        isClosable: true,
+      });
+    } finally {
+      setSpotifyConfigSaving(false);
+    }
+  };
+
+  // 平台选择 Modal (已登录/未登录共用)
+  const platformModal = (
+    <Modal isOpen={isSelecting} onClose={() => setIsSelecting(false)} isCentered>
+      <ModalOverlay />
+      <ModalContent bg={modalBg} border="1px solid" borderColor={modalBorder} maxW="400px" mx={4}>
+        <ModalHeader fontSize="md" pb={2}>
+          选择登录平台
+        </ModalHeader>
+        <ModalCloseButton />
+        <ModalBody pb={5}>
+          <VStack spacing={3} align="stretch">
+            {PROVIDERS.map((p) => {
+              const loggedIn = !p.disabled && loginInfos[p.id]?.logged_in;
+              return (
+                <Button
+                  key={p.id}
+                  variant="outline"
+                  h="auto"
+                  justifyContent="flex-start"
+                  px={4}
+                  py={3}
+                  borderColor={modalBorder}
+                  opacity={p.disabled ? 0.65 : 1}
+                  cursor={p.disabled ? "not-allowed" : "pointer"}
+                  _hover={
+                    p.disabled
+                      ? { borderColor: modalBorder }
+                      : { bg: `${p.color}12`, borderColor: p.color }
+                  }
+                  _disabled={{ opacity: 0.65, cursor: "not-allowed" }}
+                  isDisabled={p.disabled}
+                  onClick={() => handleProviderClick(p)}
+                >
+                  <HStack spacing={3} w="100%">
+                    <ProviderLogo src={p.logo} size={40} />
+                    <VStack spacing={0} align="start" flex={1}>
+                      <HStack spacing={1.5}>
+                        <Text fontSize="sm" fontWeight="semibold" color={textColor}>
+                          {p.name}
+                        </Text>
+                        {p.disabled && (
+                          <Badge
+                            variant="subtle"
+                            colorScheme="orange"
+                            fontSize="9px"
+                            display="inline-flex"
+                            alignItems="center"
+                            gap={0.5}
+                            px={1.5}
+                          >
+                            <Construction size={9} />
+                            开发中
+                          </Badge>
+                        )}
+                      </HStack>
+                      <Text fontSize="xs" color={subTextColor}>
+                        {p.desc}
+                      </Text>
+                    </VStack>
+                    {!p.disabled && (
+                      <HStack spacing={2}>
+                        <Badge variant="subtle" colorScheme={loggedIn ? "green" : "gray"} fontSize="10px">
+                          {loggedIn ? "已登录" : "未登录"}
+                        </Badge>
+                        {!loggedIn && (
+                          <Text
+                            fontSize="xs"
+                            color={activeColor}
+                            cursor="pointer"
+                            textDecoration="underline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openLoginWindow(p.id);
+                            }}
+                          >
+                            去登录
+                          </Text>
+                        )}
+                      </HStack>
+                    )}
+                  </HStack>
+                </Button>
+              );
+            })}
+          </VStack>
+        </ModalBody>
+      </ModalContent>
+    </Modal>
+  );
+
+  // 汽水音乐扫码弹窗（官方 Passport Web 扫码，需汽水音乐 / 抖音 App 扫码确认）
+  const qishuiQrModal = (
+    <Modal isOpen={qishuiQrOpen} onClose={() => closeQishuiQr()} isCentered>
+      <ModalOverlay />
+      <ModalContent bg={modalBg} border="1px solid" borderColor={modalBorder} maxW="360px" mx={4}>
+        <ModalHeader fontSize="md" pb={2}>
+          汽水音乐扫码登录
+        </ModalHeader>
+        <ModalCloseButton />
+        <ModalBody pb={5}>
+          <VStack spacing={3}>
+            <Text fontSize="xs" color={subTextColor}>
+              请用 <b>汽水音乐 App</b> 扫码并确认登录
+            </Text>
+            <Box
+              p={3}
+              borderRadius="lg"
+              bg="white"
+              border="1px solid"
+              borderColor={modalBorder}
+              w="100%"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+            >
+              {qishuiQrLoading ? (
+                <Spinner color={activeColor} />
+              ) : qishuiQrUrl ? (
+                <QRCodeSVG value={qishuiQrUrl} size={220} />
+              ) : (
+                <Text color={subTextColor} fontSize="sm">二维码加载中...</Text>
+              )}
+            </Box>
+            <Text fontSize="sm" color={qishuiQrStatus.includes("成功") ? "green.400" : subTextColor}>
+              {qishuiQrStatus || "正在获取二维码..."}
+            </Text>
+            {qishuiQrOpen && !qishuiQrLoading && (
+              <Button size="sm" variant="ghost" color={activeColor} onClick={() => openQishuiQr()}>
+                重新获取二维码
+              </Button>
+            )}
+          </VStack>
+        </ModalBody>
+      </ModalContent>
+    </Modal>
+  );
+
+  // 未登录状态：点击登录后弹出平台选择
+  if (!loginInfo?.logged_in) {
+    return (
+      <>
+        <Button
+          size="sm"
+          leftIcon={<ExternalLink size={14} />}
+          onClick={() => setIsSelecting(true)}
+          sx={{
+            bg: activeColor,
+            color: contrastText,
+            _hover: { bg: activeColor, filter: "brightness(0.9)" },
+            _active: { bg: activeColor, filter: "brightness(0.8)" },
+          }}
+        >
+          选择平台
+        </Button>
+        {platformModal}
+        {qishuiQrModal}
+      </>
+    );
+  }
+
+  // 已登录状态
+  return (
+    <>
+      <HStack spacing={2} justify="space-between">
+        <HStack spacing={2}>
+          {/* 平台切换 Menu */}
+          {hasMultipleLoggedIn ? (
+            <Menu placement="bottom-start">
+              <MenuButton
+                as={Box}
+                cursor="pointer"
+                borderRadius="md"
+                _hover={{ bg: useColorModeValue("gray.100", "#252525") }}
+                p={1}
+              >
+                <HStack spacing={2}>
+                  <Avatar size="sm" src={coverProxyUrl(loginInfo.avatar, proxyPort)} />
+                  <VStack spacing={0} align="start" maxW="120px">
+                    <Text color={textColor} fontSize="sm" fontWeight="medium" noOfLines={1}>
+                      {loginInfo.nickname}
+                    </Text>
+                    <HStack spacing={1}>
+                      <VipBadge
+                        isVip={loginInfo.is_vip}
+                        isSvip={loginInfo.is_svip}
+                        fallbackColor={subTextColor}
+                      />
+                    </HStack>
+                  </VStack>
+                  <ChevronDown size={14} color={subTextColor} />
+                </HStack>
+              </MenuButton>
+              <MenuList bg={menuBg} border="1px solid" borderColor={menuBorder} minW="200px">
+                {loggedInProviders.map((p) => {
+                  const info = loginInfos[p.id]!;
+                  return (
+                    <MenuItem
+                      key={p.id}
+                      bg={menuBg}
+                      _hover={{ bg: menuHoverBg }}
+                      onClick={() => switchPlaybackSource(p.id)}
+                    >
+                      <HStack spacing={3} w="100%">
+                        <Avatar size="xs" src={coverProxyUrl(info.avatar, proxyPort)} />
+                        <VStack spacing={0} align="start" flex={1}>
+                          <Text fontSize="sm" color={textColor} noOfLines={1}>
+                            {info.nickname}
+                          </Text>
+                          <Text fontSize="xs" color={p.color}>
+                            {p.name}
+                          </Text>
+                        </VStack>
+                        {playbackSource === p.id && (
+                          <Check size={16} color={p.color} />
+                        )}
+                      </HStack>
+                    </MenuItem>
+                  );
+                })}
+                {/* 分隔线 + 添加平台 / 开发中平台 */}
+                {PROVIDERS.filter((p) => p.disabled || !loginInfos[p.id]?.logged_in).length > 0 && (
+                  <Box my={1} borderTop="1px solid" borderColor={menuBorder} />
+                )}
+                {PROVIDERS.filter((p) => p.disabled || !loginInfos[p.id]?.logged_in).map((p) => (
+                  <MenuItem
+                    key={p.id}
+                    bg={menuBg}
+                    opacity={p.disabled ? 0.6 : 1}
+                    cursor={p.disabled ? "not-allowed" : "pointer"}
+                    _hover={p.disabled ? { bg: menuBg } : { bg: menuHoverBg }}
+                    onClick={() => {
+                      if (p.disabled) {
+                        toast({
+                          title: `${p.name} 正在开发中`,
+                          description: "该平台暂未上线，敬请期待",
+                          status: "info",
+                          duration: 2500,
+                          isClosable: true,
+                        });
+                        return;
+                      }
+                      if (p.id === "spotify") {
+                        // Spotify 无扫码/网页登录：填写 API 凭据即完成配置
+                        setSpotifyClientId("");
+                        setSpotifyClientSecret("");
+                        setSpotifyConfigOpen(true);
+                        return;
+                      }
+                      // 「添加平台」语义 = 登录该平台账号（可选，解锁更高音质）
+                      openLoginWindow(p.id);
+                    }}
+                  >
+                    <HStack spacing={3} w="100%">
+                      <ProviderLogo src={p.logo} size={28} rounded="full" />
+                      <Text fontSize="sm" color={textColor} flex={1}>
+                        {p.disabled ? p.name : p.id === "spotify" ? `配置${p.name}` : `添加${p.name}`}
+                      </Text>
+                      {p.disabled ? (
+                        <Badge
+                          variant="subtle"
+                          colorScheme="orange"
+                          fontSize="9px"
+                          display="inline-flex"
+                          alignItems="center"
+                          gap={0.5}
+                        >
+                          <Construction size={9} />
+                          开发中
+                        </Badge>
+                      ) : (
+                        <Plus size={14} color={subTextColor} />
+                      )}
+                    </HStack>
+                  </MenuItem>
+                ))}
+              </MenuList>
+            </Menu>
+          ) : (
+            <HStack spacing={2}>
+              <Avatar size="sm" src={coverProxyUrl(loginInfo.avatar, proxyPort)} />
+              <VStack spacing={0} align="start" maxW="120px">
+                <Text color={textColor} fontSize="sm" fontWeight="medium" noOfLines={1}>
+                  {loginInfo.nickname}
+                </Text>
+                <VipBadge
+                  isVip={loginInfo.is_vip}
+                  isSvip={loginInfo.is_svip}
+                  fallbackColor={subTextColor}
+                />
+              </VStack>
+            </HStack>
+          )}
+
+          {/* 添加平台按钮（只在存在非开发中且未登录平台时显示） */}
+          {!hasMultipleLoggedIn &&
+            PROVIDERS.some((p) => !p.disabled && !loginInfos[p.id]?.logged_in) && (
+              <Tooltip label="添加其他平台账号">
+                <IconButton
+                  aria-label="Add platform"
+                  icon={<Plus size={16} />}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setIsSelecting(true)}
+                />
+              </Tooltip>
+            )}
+        </HStack>
+
+        <Tooltip label="退出登录">
+          <IconButton
+            aria-label="Logout"
+            icon={<LogOut size={16} />}
+            size="sm"
+            variant="ghost"
+            onClick={() => logout()}
+          />
+        </Tooltip>
+      </HStack>
+      {platformModal}
+      {qishuiQrModal}
+
+      {/* Spotify 凭据配置弹窗：填写官方 API Client ID / Client Secret 即完成配置 */}
+      <Modal isOpen={spotifyConfigOpen} onClose={() => setSpotifyConfigOpen(false)} isCentered>
+        <ModalOverlay />
+        <ModalContent bg={modalBg} border="1px solid" borderColor={modalBorder} maxW="440px" mx={4}>
+          <ModalHeader fontSize="md" pb={2}>
+            <HStack spacing={2}>
+              <ProviderLogo src="/music-providers/spotify.svg" size={24} rounded="full" />
+              <Text>配置 Spotify</Text>
+            </HStack>
+          </ModalHeader>
+          <ModalCloseButton />
+          <ModalBody pb={5}>
+            <VStack spacing={4} align="stretch">
+              <Text fontSize="xs" color={subTextColor} lineHeight="1.6">
+                Spotify 官方 API 需要自备应用凭据（免费）：登录 developer.spotify.com 创建应用后，复制 Client ID 与 Client Secret 填入即可。配置后即可搜索国际曲库并播放 30 秒官方试听片段；完整播放需 Spotify Premium 会员。
+              </Text>
+              <Box>
+                <FormLabel fontSize="xs" mb={1} color={textColor}>Client ID</FormLabel>
+                <Input
+                  value={spotifyClientId}
+                  onChange={(e) => setSpotifyClientId(e.target.value)}
+                  placeholder="32 位字符的 Client ID"
+                  size="sm"
+                  bg={modalBg}
+                  borderColor={modalBorder}
+                  autoFocus
+                />
+              </Box>
+              <Box>
+                <FormLabel fontSize="xs" mb={1} color={textColor}>Client Secret</FormLabel>
+                <Input
+                  value={spotifyClientSecret}
+                  onChange={(e) => setSpotifyClientSecret(e.target.value)}
+                  placeholder="32 位字符的 Client Secret"
+                  size="sm"
+                  bg={modalBg}
+                  borderColor={modalBorder}
+                  type="password"
+                />
+              </Box>
+              <Button
+                size="sm"
+                colorScheme="green"
+                isLoading={spotifyConfigSaving}
+                loadingText="保存中..."
+                onClick={saveSpotifyConfig}
+                w="100%"
+              >
+                保存并启用
+              </Button>
+            </VStack>
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+    </>
+  );
+}

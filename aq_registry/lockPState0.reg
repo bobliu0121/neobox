@@ -1,0 +1,11 @@
+Windows Registry Editor Version 5.00
+
+; 锁定 NVIDIA GPU P-State 到 P0（最高性能状态）
+; 防止显卡在游戏中动态降频，保持最大时钟频率
+; 注意：会增加待机功耗和温度
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"DisableDynamicPstate"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"DisableDynamicPstate"=dword:00000001

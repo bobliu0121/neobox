@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+;恢复Windows Copilot - 删除全部相关策略值
+
+[HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=-
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=-
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Copilot]
+"IsCopilotAvailable"=-
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CopilotKey]
+"SetCopilotHardwareKey"=-
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"AllowCopilotRuntime"=-
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Copilot\BingChat]
+"IsUserEligible"=-

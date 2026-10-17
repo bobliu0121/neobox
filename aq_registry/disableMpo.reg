@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;禁用MPO（多平面覆盖层）- 修复多显示器闪烁、黑屏和卡顿
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Dwm]
+"OverlayTestMode"=dword:00000005

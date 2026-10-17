@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 游戏系统响应能力 - 恢复
+; SystemResponsiveness=20 恢复 Windows 默认值
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile]
+"SystemResponsiveness"=dword:00000014

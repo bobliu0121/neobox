@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;关闭Click to Do - 禁用 Windows Click to Do AI 功能
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableClickToDo"=dword:00000001

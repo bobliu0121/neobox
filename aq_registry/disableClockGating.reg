@@ -1,0 +1,19 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 NVIDIA 5 类时钟门控（Clock Gating）
+; BLCG / ELCG / ELPG / FSPG / SLCG
+; 时钟门控是省电机制，禁用后 GPU 各单元始终保持时钟信号，减少微卡顿
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"RMDisableBlcg"=dword:00000001
+"RMDisableElcg"=dword:00000001
+"RMDisableElpg"=dword:00000001
+"RMDisableFspg"=dword:00000001
+"RMDisableSlcg"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"RMDisableBlcg"=dword:00000001
+"RMDisableElcg"=dword:00000001
+"RMDisableElpg"=dword:00000001
+"RMDisableFspg"=dword:00000001
+"RMDisableSlcg"=dword:00000001

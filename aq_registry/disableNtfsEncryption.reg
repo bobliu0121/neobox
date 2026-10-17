@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 NTFS 文件系统加密支持
+; 关闭 EFS（Encrypting File System）功能
+; 减少文件系统开销，大多数家庭用户不使用 EFS
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Policies]
+"NtfsDisableEncryption"=dword:00000001

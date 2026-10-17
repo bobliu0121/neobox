@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 启用 DirectX VRR (可变刷新率) 优化
+
+[HKEY_CURRENT_USER\Software\Microsoft\DirectX\GraphicsSettings]
+"VRROptimizeEnable"=dword:00000001

@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 移除启动延迟，让开机后程序更快加载
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize]
+"StartupDelayInMSec"=dword:00000000

@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 游戏模式
+; 开启 Windows 游戏模式，系统在玩游戏时自动暂停后台任务，优先分配资源给游戏
+
+[HKEY_CURRENT_USER\Software\Microsoft\GameBar]
+"AutoGameModeEnabled"=dword:00000001

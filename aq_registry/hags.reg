@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 硬件加速GPU调度 (HAGS)
+; HwSchMode=2 开启硬件加速 GPU 调度，让 GPU 管理自身内存与调度，降低延迟（需重启生效）
+
+[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\GraphicsDrivers]
+"HwSchMode"=dword:00000002

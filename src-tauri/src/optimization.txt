@@ -1,0 +1,64 @@
+use std::collections::HashMap;
+use std::os::windows::process::CommandExt;
+use std::panic;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::{env, fs, path::Path};
+use sysinfo::System;
+use tauri::Manager;
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::System::Threading::{OpenProcess, SetPriorityClass};
+
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn get_powershell_path() -> String {
+    if let Ok(sysroot) = env::var("SystemRoot") {
+        let ps_path = format!(r"{}\System32\WindowsPowerShell\v1.0\powershell.exe", sysroot);
+        if Path::new(&ps_path).exists() {
+            return ps_path;
+        }
+    }
+    "powershell.exe".to_string()
+}
+
+const PROCESS_SET_INFORMATION: u32 = 0x0200;
+const IDLE_PRIORITY_CLASS: u32 = 0x00000040;
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
+const PROCESS_MODE_BACKGROUND_BEGIN: u32 = 0x00100000;
+
+fn enable_process_efficiency_mode(pid: u32) -> bool {
+    unsafe {
+        let handle = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+
+        // Step 1: Background mode ??I/O VeryLow + Memory Low (CPU temporarily IDLE)
+        let bg_ok = SetPriorityClass(handle, PROCESS_MODE_BACKGROUND_BEGIN) != 0;
+
+        // Step 2: CPU ??BELOW_NORMAL, keeping low I/O and memory from background mode
+        if SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS) == 0 {
+            // ??? CPU ???????????????????????? I/O ????????        }
+
+        CloseHandle(handle);
+        bg_ok
+    }
+}
+
+fn set_process_low_priority(pid: u32) -> bool {
+    unsafe {
+        let handle = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+
+        let ok = if SetPriorityClass(handle, IDLE_PRIORITY_CLASS) == 0 {
+            false
+        } else {
+            true
+        };
+
+        CloseHandle(han

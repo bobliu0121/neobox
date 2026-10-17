@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 优化后台服务 - 恢复
+; ServicesPipeTimeout=60000 恢复 Windows 默认的服务启动超时（60 秒）
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control]
+"ServicesPipeTimeout"=dword:0000ea60

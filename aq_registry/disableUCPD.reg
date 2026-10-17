@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;Disable UCPD (User Choice Protection Driver)
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\UCPD]
+"Start"=dword:00000004

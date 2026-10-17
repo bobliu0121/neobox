@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+;Disable DiagTrack and dmwappushservice telemetry services
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\DiagTrack]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\dmwappushservice]
+"Start"=dword:00000004

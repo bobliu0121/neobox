@@ -1,0 +1,11 @@
+Windows Registry Editor Version 5.00
+
+; 强制启用 AMD Shader Cache
+; 确保着色器缓存始终处于开启状态
+; 减少游戏首次加载和场景切换时的编译卡顿
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000\UMD]
+"ShaderCache"=dword:00000032
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001\UMD]
+"ShaderCache"=dword:00000032

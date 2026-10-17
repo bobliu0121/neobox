@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;恢复AI数据分析
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableAIDataAnalysis"=-

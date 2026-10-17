@@ -1,0 +1,14 @@
+Windows Registry Editor Version 5.00
+
+; 关闭 Windows Defender 实时防护（通过组策略键，可恢复）
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows Defender]
+"DisableAntiSpyware"=dword:00000001
+"DisableAntiVirus"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection]
+"DisableRealtimeMonitoring"=dword:00000001
+"DisableBehaviorMonitoring"=dword:00000001
+"DisableOnAccessProtection"=dword:00000001
+"DisableScanOnRealtimeEnable"=dword:00000001
+"DisableIOAVProtection"=dword:00000001
+"DisableRoutinelyTakingAction"=dword:00000001

@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 游戏系统响应能力
+; SystemResponsiveness=10 减少 MMCSS 保留给后台的 CPU 时间百分比（默认20%），
+; 让游戏获得更多 CPU 时间，降低后台干扰
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile]
+"SystemResponsiveness"=dword:0000000a

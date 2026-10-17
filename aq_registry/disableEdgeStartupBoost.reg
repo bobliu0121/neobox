@@ -1,0 +1,11 @@
+Windows Registry Editor Version 5.00
+
+;Disable Microsoft Edge Startup Boost and background running
+;StartupBoostEnabled=0 prevents Edge from pre-launching at system startup
+;AllowPrelaunch=0 prevents Edge from pre-launching in the background
+;BackgroundModeEnabled=0 prevents Edge from running in the background after closing
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge]
+"StartupBoostEnabled"=dword:00000000
+"AllowPrelaunch"=dword:00000000
+"BackgroundModeEnabled"=dword:00000000

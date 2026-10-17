@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+;关闭Windows Copilot - 禁用 Copilot 策略、Shell 集成、硬件键和运行时
+
+[HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=dword:00000001
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Copilot]
+"IsCopilotAvailable"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CopilotKey]
+"SetCopilotHardwareKey"=""
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"AllowCopilotRuntime"=dword:00000000
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Copilot\BingChat]
+"IsUserEligible"=dword:00000000

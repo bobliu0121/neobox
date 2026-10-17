@@ -1,0 +1,10 @@
+Windows Registry Editor Version 5.00
+
+; 启用 NVIDIA Per-CPU Core DPC
+; 让 GPU 中断分散到多个 CPU 核心处理，减少单核瓶颈
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"RmGpsPsEnablePerCpuCoreDpc"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"RmGpsPsEnablePerCpuCoreDpc"=dword:00000001

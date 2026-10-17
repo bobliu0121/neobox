@@ -1,0 +1,492 @@
+import {
+  Box,
+  Flex,
+  HStack,
+  VStack,
+  Text,
+  Badge,
+  Button,
+  Input,
+  IconButton,
+  Spinner,
+  Divider,
+  useColorModeValue,
+  useDisclosure,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalCloseButton,
+  ModalBody,
+  ModalFooter,
+} from "@chakra-ui/react";
+import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { useDynamicIsland, setIslandExternalRequested } from "@/components/ui/dynamic-island";
+import { useThemeColor } from "@/contexts/theme-color-context";
+import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
+import { CustomSelect } from "@/components/special/custom-select";
+import { ThemeSwitch } from "@/components/special/theme-switch";
+import { PawnioInstallModal } from "@/components/PawnioInstallModal";
+import { IS_STORE_BUILD } from "@/lib/build-flags";
+import { store } from "@/lib/store";
+import { useMusicStore } from "@/stores/music-store";
+import {
+  LuRefreshCw,
+  LuTrash2,
+  LuHardDrive,
+  LuDatabase,
+  LuKeyboard,
+  LuMonitor,
+} from "react-icons/lu";
+import { Download } from "lucide-react";
+
+interface StorageSizes {
+  cache_size: number;
+  data_size: number;
+}
+
+/** 字节数格式化为可读大小 */
+function formatSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+/** 桌面灵动岛开关的持久化键（store 为权威，localStorage 仅做首帧镜像避免开关自己弹一下） */
+const ISLAND_EXTERNAL_KEY = "neobox_island_external_window";
+
+export default function AdvancedPage() {
+  const { t } = useTranslation();
+  const toast = useDynamicIsland("settings");
+  const titleColor = useColorModeValue("gray.800", "#ffffff");
+  const labelColor = useColorModeValue("gray.700", "#ffffff");
+  const subLabelColor = useColorModeValue("gray.500", "#ffffff");
+  const dividerColor = useColorModeValue("gray.200", "#333333");
+  const { getActiveColor, getHoverColor, getContrastTextColor, getBorderColor } = useThemeColor();
+
+  // ── 存储大小 ──
+  const [sizes, setSizes] = useState<StorageSizes>({ cache_size: 0, data_size: 0 });
+  const [clearingCache, setClearingCache] = useState(false);
+  const [clearingData, setClearingData] = useState(false);
+  const {
+    isOpen: isClearDataConfirmOpen,
+    onOpen: onClearDataConfirmOpen,
+    onClose: onClearDataConfirmClose,
+  } = useDisclosure();
+
+  // ── PawnIO ──
+  const [pawnioStatus, setPawnioStatus] = useState<{ installed: boolean; version?: string } | null>(null);
+  const [pawnioChecking, setPawnioChecking] = useState(true);
+  const [installing, setInstalling] = useState(false);
+  const {
+    isOpen: isPawnioModalOpen,
+    onOpen: onPawnioModalOpen,
+    onClose: onPawnioModalClose,
+  } = useDisclosure();
+
+  // ── 键盘媒体键控制音乐播放器 ──
+  const [mediaKeysEnabled, setMediaKeysEnabled] = useState(true);
+  const handleMediaKeysToggle = () => {
+    const newValue = !mediaKeysEnabled;
+    setMediaKeysEnabled(newValue);
+    store.set("neobox_media_keys_enabled", newValue).then(() => store.save());
+    useMusicStore.getState().setMediaKeysEnabled(newValue);
+    invoke("set_media_keys_enabled", { enabled: newValue })
+      .then(() => {
+        // 关闭时后端已同步停用本应用 SMTC 会话（把媒体键还给其他软件）；
+        // 重新开启时立即恢复推送，无需等待下次播放事件
+        if (newValue) useMusicStore.getState().refreshSmtc();
+      })
+      .catch((e) => console.error("[MediaKeys] 设置失败:", e));
+  };
+
+  // ── 灵动岛显示在桌面上（独立透明置顶窗口）──
+  // 提示队列/计时等状态真源仍在主窗口，开关只负责创建/销毁渲染用的桌面窗口；
+  // 外部渲染的开启由 island:ready / island:closed / island:setting-changed 事件自动收敛。
+  // 首帧从 localStorage 镜像同步取值：否则本页每次挂载都先渲染成「关」，异步读到 store
+  // 后再自己弹一下开关。
+  const [islandExternalEnabled, setIslandExternalEnabled] = useState(
+    () => localStorage.getItem(ISLAND_EXTERNAL_KEY) === "true"
+  );
+  const handleIslandExternalToggle = () => {
+    const newValue = !islandExternalEnabled;
+    setIslandExternalEnabled(newValue);
+    localStorage.setItem(ISLAND_EXTERNAL_KEY, String(newValue));
+    store.set(ISLAND_EXTERNAL_KEY, newValue).then(() => store.save());
+    // 与 store 同一 JS 上下文：直接写模块开关，主窗口内的岛立即隐藏/恢复，
+    // 不等任何跨窗口事件（否则关掉后会有可见的延迟）
+    setIslandExternalRequested(newValue);
+    // 通知桌面岛窗口（它需要据此立即 hide 退场，不等 Rust 销毁）与桥接组件
+    void emit("island:setting-changed", { enabled: newValue });
+    invoke("set_dynamic_island_enabled", { enabled: newValue }).catch((e) => {
+      console.error("[Island] 桌面灵动岛窗口切换失败:", e);
+      setIslandExternalEnabled(!newValue);
+      setIslandExternalRequested(!newValue);
+      void emit("island:setting-changed", { enabled: !newValue });
+      toast({ title: t("settings.advanced.error", "操作失败"), description: String(e), status: "error", duration: 3000, isClosable: true });
+    });
+  };
+
+  const refreshSizes = useCallback(async () => {
+    try {
+      const result = await invoke<StorageSizes>("get_storage_sizes");
+      setSizes(result);
+    } catch (e) {
+      console.error("Failed to load storage sizes:", e);
+    }
+  }, []);
+
+  const refreshPawnio = useCallback(async () => {
+    setPawnioChecking(true);
+    try {
+      const status = await invoke<{ installed: boolean; version?: string }>("check_pawnio_status");
+      setPawnioStatus(status);
+    } catch {
+      setPawnioStatus(null);
+    } finally {
+      setPawnioChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSizes();
+    refreshPawnio();
+    // 加载键盘媒体键控制开关（默认开启）
+    store
+      .get<boolean>("neobox_media_keys_enabled")
+      .then((v) => {
+        if (v != null) setMediaKeysEnabled(v);
+      })
+      .catch(() => {});
+    // 加载桌面灵动岛开关（store 为权威，纠正其他窗口里改过的值）
+    store
+      .get<boolean>(ISLAND_EXTERNAL_KEY)
+      .then((v) => {
+        if (v != null) {
+          const enabled = Boolean(v);
+          setIslandExternalEnabled(enabled);
+          localStorage.setItem(ISLAND_EXTERNAL_KEY, String(enabled));
+        }
+      })
+      .catch(() => {});
+  }, [refreshSizes, refreshPawnio]);
+
+  const activeColor = getActiveColor();
+  const accent = getContrastTextColor();
+  const accentBorder = getBorderColor();
+  const accentSoft = getHoverColor();
+  const isPawnioInstalled = !!pawnioStatus?.installed;
+
+  // ── PawnIO 卸载 ──
+  const handleUninstallPawnio = async () => {
+    setInstalling(true);
+    try {
+      await invoke<string>("uninstall_pawnio_driver");
+      await invoke("restart_monitor_process");
+      toast({ title: t("settings.pawnio.uninstalled", "已卸载"), status: "success", duration: 3000, isClosable: true });
+      setPawnioStatus({ installed: false });
+    } catch (e) {
+      toast({ title: t("settings.pawnio.error", "操作失败"), description: String(e), status: "error", duration: 3000, isClosable: true });
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  // ── 清除缓存 / 数据 ──
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      await invoke<number>("clear_cache");
+      await refreshSizes();
+      toast({ title: t("settings.advanced.cacheCleared", "已清除"), status: "success", duration: 3000, isClosable: true });
+    } catch (e) {
+      toast({ title: t("settings.advanced.error", "操作失败"), description: String(e), status: "error", duration: 3000, isClosable: true });
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const handleClearData = async () => {
+    onClearDataConfirmClose();
+    setClearingData(true);
+    try {
+      await invoke<number>("clear_data");
+      toast({ title: t("settings.advanced.dataCleared", "已重置"), description: t("settings.advanced.restarting", "正在重启应用…"), status: "success", duration: 2000, isClosable: false });
+      // 重启应用以彻底清理被占用的 WebView2 数据
+      await invoke("restart_app");
+    } catch (e) {
+      toast({ title: t("settings.advanced.error", "操作失败"), description: String(e), status: "error", duration: 3000, isClosable: true });
+      setClearingData(false);
+    }
+  };
+
+  return (
+    <Box>
+      <Text fontSize="lg" fontWeight="bold" mb={6} color={titleColor}>
+        {t("settings.advanced.label", "高级")}
+      </Text>
+
+      {/* PawnIO 精简管理：商店版不展示驱动安装入口 */}
+      {!IS_STORE_BUILD && (
+        <LiquidGlassCard mb={4} px={4} py={4} boxShadow="sm">
+          <VStack spacing={4} align="stretch">
+            <HStack spacing={4} align="center">
+              <img
+                src="/pawnio.webp"
+                alt={t("settings.pawnio.label", "PawnIO")}
+                style={{ width: 44, height: 44, objectFit: "contain", flexShrink: 0 }}
+              />
+              <VStack align="flex-start" spacing={0.5} flex={1}>
+                <HStack spacing={2}>
+                  <Text fontSize="sm" color={subLabelColor} fontWeight="medium">
+                    {t("settings.pawnio.label", "PawnIO")}
+                  </Text>
+                  {!pawnioChecking && (
+                    <Badge
+                      variant="solid"
+                      bg={isPawnioInstalled ? activeColor : undefined}
+                      color={isPawnioInstalled ? accent : undefined}
+                      fontSize="xs"
+                      borderRadius="full"
+                      px={2.5}
+                      py={0.5}
+                      textTransform="none"
+                    >
+                      {isPawnioInstalled
+                        ? `${t("settings.pawnio.installed", "已安装")}${pawnioStatus.version ? ` v${pawnioStatus.version}` : ""}`
+                        : t("settings.pawnio.notInstalled", "未安装")}
+                    </Badge>
+                  )}
+                </HStack>
+                <Text fontSize="sm" color={subLabelColor}>
+                  {t("settings.pawnio.descriptionShort", "可选内核级驱动，提供 CPU 温度、风扇转速等更详细的硬件信息。")}
+                </Text>
+              </VStack>
+              {pawnioChecking && <Spinner size="sm" color={activeColor} />}
+            </HStack>
+            <Divider borderColor={dividerColor} />
+            <HStack spacing={3}>
+              {isPawnioInstalled ? (
+                <>
+                  <Button
+                    size="sm"
+                    bg={activeColor}
+                    color={accent}
+                    _hover={{ bg: activeColor, opacity: 0.85 }}
+                    leftIcon={<LuRefreshCw size={14} />}
+                    onClick={refreshPawnio}
+                    isLoading={pawnioChecking}
+                  >
+                    {t("settings.pawnio.refresh", "刷新状态")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    borderColor={accentBorder}
+                    color={labelColor}
+                    leftIcon={<LuTrash2 size={14} />}
+                    onClick={handleUninstallPawnio}
+                    isLoading={installing}
+                  >
+                    {t("settings.pawnio.uninstall", "卸载")}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  bg={activeColor}
+                  color={accent}
+                  _hover={{ bg: activeColor, opacity: 0.85 }}
+                  leftIcon={<Download size={14} />}
+                  onClick={onPawnioModalOpen}
+                >
+                  {t("settings.pawnio.install", "安装 PawnIO 驱动")}
+                </Button>
+              )}
+            </HStack>
+          </VStack>
+        </LiquidGlassCard>
+      )}
+
+      {/* 清除缓存 / 数据 */}
+      <LiquidGlassCard mb={4} px={4} py={4} boxShadow="sm">
+        <VStack spacing={4} align="stretch">
+          {/* 清除缓存 */}
+          <HStack spacing={4}>
+            <Flex
+              align="center"
+              justify="center"
+              w="40px"
+              h="40px"
+              borderRadius="xl"
+              flexShrink={0}
+              bg={accentSoft}
+              border={`1px solid ${accentBorder}`}
+              color={activeColor}
+            >
+              <LuHardDrive size={20} />
+            </Flex>
+            <VStack align="flex-start" spacing={0.5} flex={1}>
+              <Text fontSize="sm" color={labelColor} fontWeight="semibold">
+                {t("settings.advanced.cacheTitle", "清除缓存")}
+              </Text>
+              <Text fontSize="xs" color={subLabelColor}>
+                {t("settings.advanced.cacheDesc", "图标等缓存文件，可自动重建")} · {formatSize(sizes.cache_size)}
+              </Text>
+            </VStack>
+            <Button
+              size="sm"
+              bg={activeColor}
+              color={accent}
+              _hover={{ bg: activeColor, opacity: 0.85 }}
+              leftIcon={<LuTrash2 size={14} />}
+              onClick={handleClearCache}
+              isLoading={clearingCache}
+            >
+              {t("settings.advanced.clearCache", "清除")}
+            </Button>
+          </HStack>
+          <Divider borderColor={dividerColor} />
+          {/* 清除数据 */}
+          <HStack spacing={4}>
+            <Flex
+              align="center"
+              justify="center"
+              w="40px"
+              h="40px"
+              borderRadius="xl"
+              flexShrink={0}
+              bg={accentSoft}
+              border={`1px solid ${accentBorder}`}
+              color={activeColor}
+            >
+              <LuDatabase size={20} />
+            </Flex>
+            <VStack align="flex-start" spacing={0.5} flex={1}>
+              <Text fontSize="sm" color={labelColor} fontWeight="semibold">
+                {t("settings.advanced.dataTitle", "清除数据")}
+              </Text>
+              <Text fontSize="xs" color={subLabelColor}>
+                {t("settings.advanced.dataDesc", "全部数据，重置所有设置")} · {formatSize(sizes.data_size)}
+              </Text>
+            </VStack>
+            <Button
+              size="sm"
+              bg={activeColor}
+              color={accent}
+              _hover={{ bg: activeColor, opacity: 0.85 }}
+              leftIcon={<LuTrash2 size={14} />}
+              onClick={onClearDataConfirmOpen}
+            >
+              {t("settings.advanced.clearData", "重置")}
+            </Button>
+          </HStack>
+        </VStack>
+      </LiquidGlassCard>
+
+      {/* 键盘媒体键控制音乐播放器 */}
+      <LiquidGlassCard mb={4} px={4} py={4} boxShadow="sm">
+        <HStack spacing={4} align="center">
+          <Flex
+            align="center"
+            justify="center"
+            w="40px"
+            h="40px"
+            borderRadius="xl"
+            flexShrink={0}
+            bg={accentSoft}
+            border={`1px solid ${accentBorder}`}
+            color={activeColor}
+          >
+            <LuKeyboard size={20} />
+          </Flex>
+          <VStack align="flex-start" spacing={0.5} flex={1}>
+            <Text fontSize="sm" color={labelColor} fontWeight="semibold">
+              {t("settings.advanced.mediaKeysTitle", "键盘媒体键控制音乐（SMTC）")}
+            </Text>
+            <Text fontSize="xs" color={subLabelColor}>
+              {t("settings.advanced.mediaKeysDesc", "关闭后同时停用系统媒体会话（SMTC）：音量浮层/锁屏不再显示新境盒，媒体键交还给其他软件")}
+            </Text>
+          </VStack>
+          <ThemeSwitch
+            size="md"
+            isChecked={mediaKeysEnabled}
+            onChange={handleMediaKeysToggle}
+          />
+        </HStack>
+      </LiquidGlassCard>
+
+      {/* 灵动岛显示在桌面上 */}
+      <LiquidGlassCard mb={4} px={4} py={4} boxShadow="sm">
+        <HStack spacing={4} align="center">
+          <Flex
+            align="center"
+            justify="center"
+            w="40px"
+            h="40px"
+            borderRadius="xl"
+            flexShrink={0}
+            bg={accentSoft}
+            border={`1px solid ${accentBorder}`}
+            color={activeColor}
+          >
+            <LuMonitor size={20} />
+          </Flex>
+          <VStack align="flex-start" spacing={0.5} flex={1}>
+            <Text fontSize="sm" color={labelColor} fontWeight="semibold">
+              {t("settings.advanced.islandExternalTitle", "灵动岛显示在桌面上")}
+            </Text>
+            <Text fontSize="xs" color={subLabelColor}>
+              {t("settings.advanced.islandExternalDesc", "开启后提示与播放岛移出主窗口，固定显示在屏幕顶部中央；主窗口隐藏到托盘后仍然可见，光标不在岛体上时自动鼠标穿透")}
+            </Text>
+          </VStack>
+          <ThemeSwitch
+            size="md"
+            isChecked={islandExternalEnabled}
+            onChange={handleIslandExternalToggle}
+          />
+        </HStack>
+      </LiquidGlassCard>
+
+      {/* 清除数据确认框 */}
+      <Modal isOpen={isClearDataConfirmOpen} onClose={onClearDataConfirmClose} isCentered>
+        <ModalOverlay />
+        <ModalContent bg={useColorModeValue("white", "gray.800")}>
+          <ModalHeader color={labelColor}>{t("settings.advanced.clearDataConfirmTitle", "确认清除数据")}</ModalHeader>
+          <ModalCloseButton color={subLabelColor} />
+          <ModalBody pb={4}>
+            <Text fontSize="sm" color={labelColor}>
+              {t("settings.advanced.clearDataConfirm", "将清除全部数据并重置所有设置，此操作不可撤销。确认重置？")}
+            </Text>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="ghost" mr={3} onClick={onClearDataConfirmClose}>
+              {t("settings.advanced.cancel", "取消")}
+            </Button>
+            <Button size="sm" bg={activeColor} color={accent} _hover={{ bg: activeColor, opacity: 0.85 }} onClick={handleClearData} isLoading={clearingData}>
+              {t("settings.advanced.confirmReset", "确认重置")}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* PawnIO 安装对话框：商店版不提供安装功能 */}
+      {!IS_STORE_BUILD && (
+        <PawnioInstallModal
+          isOpen={isPawnioModalOpen}
+          onClose={onPawnioModalClose}
+          onSuccess={refreshPawnio}
+        />
+      )}
+    </Box>
+  );
+}

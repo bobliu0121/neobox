@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 禁用传真服务
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Fax]
+"Start"=dword:00000004

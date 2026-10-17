@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+;Disable Reserved Storage for Windows Updates
+;Frees up ~7GB of reserved disk space
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager]
+"ShippedWithReserves"=dword:00000000

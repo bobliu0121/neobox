@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 DCOM（分布式组件对象模型）
+; 减少 RPC 通信开销，适合不使用远程管理/OLE 自动化的场景
+; 注意：某些旧版企业软件可能依赖 DCOM
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Ole]
+"EnableDCOM"="N"

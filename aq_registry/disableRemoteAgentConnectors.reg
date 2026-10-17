@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;关闭远程Agent连接器 - 禁止 AI 代理通过远程连接器访问远程服务
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableRemoteAgentConnectors"=dword:00000001

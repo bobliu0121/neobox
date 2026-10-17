@@ -1,0 +1,11 @@
+Windows Registry Editor Version 5.00
+
+; NVMe 固态硬盘调优
+; ContiguousMemoryFromAnyNode：允许从任意 NUMA 节点分配连续内存
+; LogSize 设为 0：禁用驱动日志以减少写入
+; IdlePowerMode 设为 0：禁用空闲节能，保持全速响应
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device]
+"ContiguousMemoryFromAnyNode"=dword:00000001
+"LogSize"=dword:00000000
+"IdlePowerMode"=dword:00000000

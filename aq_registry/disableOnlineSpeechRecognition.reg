@@ -1,0 +1,12 @@
+Windows Registry Editor Version 5.00
+
+;关闭在线语音识别 - 禁止将语音数据发送到云端处理
+
+[HKEY_CURRENT_USER\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy]
+"HasAccepted"=dword:00000000
+
+[HKEY_CURRENT_USER\SOFTWARE\Policies\Microsoft\InputPersonalization]
+"AllowInputPersonalization"=-
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\InputPersonalization]
+"AllowInputPersonalization"=-

@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 将鼠标悬停延迟从默认 400ms 降低到 10ms
+; 让工具提示和悬停效果更快响应
+
+[HKEY_CURRENT_USER\Control Panel\Mouse]
+"MouseHoverTime"="10"

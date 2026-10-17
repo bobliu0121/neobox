@@ -1,0 +1,25 @@
+Windows Registry Editor Version 5.00
+
+; MMCSS 完整游戏配置文件
+; 设置 Games 任务最高优先级、音频任务高优先级
+; 禁用懒模式，GPU 优先级 8，SFIO 优先级 High
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile]
+"NoLazyMode"=dword:00000001
+"AlwaysOn"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games]
+"Affinity"=dword:00000000
+"Background Only"="False"
+"Clock Rate"=dword:00002710
+"GPU Priority"=dword:00000008
+"Priority"=dword:00000006
+"Scheduling Category"="High"
+"SFIO Priority"="High"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio]
+"Priority"=dword:00000001
+"Scheduling Category"="High"
+"SFIO Priority"="High"
+"GPU Priority"=dword:00000008
+"Clock Rate"=dword:00002710

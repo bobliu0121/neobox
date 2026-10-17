@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;关闭AI数据分析 - 禁止 Windows AI 分析用户数据
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableAIDataAnalysis"=dword:00000001

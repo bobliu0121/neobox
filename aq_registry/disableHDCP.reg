@@ -1,0 +1,10 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 NVIDIA HDCP (High-bandwidth Digital Content Protection)
+; 减少显卡处理 HDCP 握手的开销，对游戏和非 DRM 内容无负面影响
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"RMHdcpKeyglobZero"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"RMHdcpKeyglobZero"=dword:00000001

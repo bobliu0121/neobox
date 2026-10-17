@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+;Disable handwriting input feedback/writing data collection
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\TabletTip\1.7]
+"EnableInkingWithTouch"=dword:00000000
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Input\TIPC]
+"Enabled"=dword:00000000

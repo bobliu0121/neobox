@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 关闭 DirectX 自动色彩管理
+
+[HKEY_CURRENT_USER\Software\Microsoft\DirectX\GraphicsSettings]
+"AutoColorManagementEnable"=dword:00000000

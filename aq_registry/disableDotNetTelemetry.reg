@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;Disable .NET CLI Telemetry
+
+[HKEY_CURRENT_USER\Environment]
+"DOTNET_CLI_TELEMETRY_OPTOUT"="1"

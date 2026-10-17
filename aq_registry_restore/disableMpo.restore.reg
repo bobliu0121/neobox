@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;恢复MPO（多平面覆盖层）
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Dwm]
+"OverlayTestMode"=-

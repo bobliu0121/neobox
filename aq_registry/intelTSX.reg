@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 启用 Intel TSX（事务性同步扩展）
+; TSX 可以提升多线程应用性能
+; 仅对支持 TSX 的 Intel CPU 有效
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\kernel]
+"DisableTsx"=dword:00000000

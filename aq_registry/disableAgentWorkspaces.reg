@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;关闭AI Agent工作区 - 禁用 Windows AI Agent 工作区功能
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"DisableAgentWorkspaces"=dword:00000001

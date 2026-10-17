@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;Disable Steps Recorder (Problem Steps Recorder)
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\AppCompat]
+"DisableUAR"=dword:00000001

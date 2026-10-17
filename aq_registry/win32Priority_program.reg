@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 调整处理器以获得最佳性能 - 程序
+; Win32PrioritySeparation=0x26(38) 表示优先分配 CPU 时间给前台程序，系统响应更灵敏
+
+[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\PriorityControl]
+"Win32PrioritySeparation"=dword:00000026

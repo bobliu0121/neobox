@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 禁用打印后台处理程序服务
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Spooler]
+"Start"=dword:00000004

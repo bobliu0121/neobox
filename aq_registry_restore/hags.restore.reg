@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 硬件加速GPU调度 - 恢复
+; HwSchMode=1 关闭硬件加速 GPU 调度（需重启生效）
+
+[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\GraphicsDrivers]
+"HwSchMode"=dword:00000001

@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 禁用广播 DVR 用户服务
+; BcastDVRUserService 是 Windows 游戏录制后台服务
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\BcastDVRUserService]
+"Start"=dword:00000004

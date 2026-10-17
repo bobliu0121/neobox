@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 增大 ServiceHost 拆分阈值，减少 svchost.exe 进程数量
+; 设为 16GB (16777216 KB)，低于此内存的系统不会合并
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control]
+"SvcHostSplitThresholdInKB"=dword:01000000

@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; 恢复默认拆分阈值 (380000 KB ≈ 3.8GB)
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control]
+"SvcHostSplitThresholdInKB"=dword:0005cdd4

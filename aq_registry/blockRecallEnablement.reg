@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+;阻止启用Recall - 禁止通过策略启用 Windows Recall
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsAI]
+"AllowRecallEnablement"=dword:00000000

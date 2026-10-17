@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 强制启用 DirectX Flip Model 呈现模式
+; 减少帧延迟，改善 VSync 和 VRR 兼容性
+
+[HKEY_CURRENT_USER\Software\Microsoft\DirectX\UserGpuPreferences]
+"DirectXUserGlobalSettings"="SwapEffectUpgradeEnable=1;"

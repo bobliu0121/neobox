@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+;Disable 8.3 short filename creation on NTFS
+;Reduces overhead when creating files
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem]
+"NtfsDisable8dot3NameCreation"=dword:00000001

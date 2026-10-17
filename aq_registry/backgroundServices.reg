@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; 优化后台服务
+; ServicesPipeTimeout=30000 将 Windows 服务启动超时从 60 秒缩短到 30 秒，加快系统启动
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control]
+"ServicesPipeTimeout"=dword:00007530

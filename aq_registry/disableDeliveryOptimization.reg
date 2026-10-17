@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+;Disable Delivery Optimization (P2P update distribution)
+;Prevents Windows from using peer-to-peer technology to distribute updates
+;DODownloadMode=0 disables P2P downloads entirely
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization]
+"DODownloadMode"=dword:00000000

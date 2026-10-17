@@ -1,0 +1,13 @@
+Windows Registry Editor Version 5.00
+
+; 禁用 NVIDIA GPU 电源管理
+; 关闭运行时电源管理和 ASPM（活动状态电源管理）
+; 确保 PCIe 链路始终保持全速
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"EnableRuntimePowerManagement"=dword:00000000
+"DisableGpuASPMFlags"=dword:00000003
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"EnableRuntimePowerManagement"=dword:00000000
+"DisableGpuASPMFlags"=dword:00000003

@@ -1,0 +1,29 @@
+Windows Registry Editor Version 5.00
+
+; NVIDIA 低延迟阈值优化
+; 调整 GPU 调度器各项延迟阈值到最低值
+; 减少 D3PC 延迟、F1 切换延迟、3D 低延迟模式、GSPC 调度周期等
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000]
+"D3PCLatency"=dword:00000001
+"F1TransitionLatency"=dword:00000001
+"Node3DLowLatency"=dword:00000001
+"RmGspcMaxFtuS"=dword:00000001
+"RmGspcMinFtuS"=dword:00000001
+"RmGspcPerioduS"=dword:00000001
+"RMLpwrEiIdleThreshold"=dword:00000001
+"RMLpwrGrIdleThreshold"=dword:00000001
+"RMLpwrGrRgIdleThreshold"=dword:00000001
+"RMLpwrMsIdleThreshold"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0001]
+"D3PCLatency"=dword:00000001
+"F1TransitionLatency"=dword:00000001
+"Node3DLowLatency"=dword:00000001
+"RmGspcMaxFtuS"=dword:00000001
+"RmGspcMinFtuS"=dword:00000001
+"RmGspcPerioduS"=dword:00000001
+"RMLpwrEiIdleThreshold"=dword:00000001
+"RMLpwrGrIdleThreshold"=dword:00000001
+"RMLpwrGrRgIdleThreshold"=dword:00000001
+"RMLpwrMsIdleThreshold"=dword:00000001

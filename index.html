@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>新境盒</title>
+    <style>
+      * {
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+      
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      img {
+        -webkit-user-drag: none;
+        -khtml-user-drag: none;
+        -moz-user-drag: none;
+        -o-user-drag: none;
+        user-drag: none;
+        pointer-events: none;
+      }
+
+      /* 桌面灵动岛窗口（/dynamic-island）：必须在首帧之前整窗透明，
+         否则 :root 与 Chakra 的不透明底色会在屏幕顶部中央闪出一块深灰矩形，
+         并且 WebView2 背景不透明会让鼠标穿透完全失效。 */
+      html.neobox-island-window,
+      html.neobox-island-window body,
+      html.neobox-island-window #root {
+        background: transparent !important;
+        background-color: transparent !important;
+      }
+    </style>
+    <script>
+      // 首帧之前打上岛窗标记，让上面的透明规则从第一帧就生效
+      if (location.pathname === '/dynamic-island') {
+        document.documentElement.classList.add('neobox-island-window');
+      }
+    </script>
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('contextmenu', function(e) {
+          e.preventDefault();
+          return false;
+        });
+        
+        document.addEventListener('selectstart', function(e) {
+          e.preventDefault();
+          return false;
+        });
+        
+        document.addEventListener('dragstart', function(e) {
+          e.preventDefault();
+          return false;
+        });
+        
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
+            e.preventDefault();
+            return false;
+          }
+          
+          if (e.key === 'F12') {
+            e.preventDefault();
+            return false;
+          }
+          
+          if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j' || e.key === 'C' || e.key === 'c')) {
+            e.preventDefault();
+            return false;
+          }
+          
+          if (e.ctrlKey && (e.key === 'U' || e.key === 'u')) {
+            e.preventDefault();
+            return false;
+          }
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
