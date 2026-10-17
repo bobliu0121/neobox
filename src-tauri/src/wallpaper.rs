@@ -47,6 +47,20 @@ pub fn get_current_wallpaper() -> Result<Option<String>, String> {
 /// 支持的壁纸图片扩展名
 const WALLPAPER_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "jfif"];
 
+/// 保存壁纸编辑结果（data_url 覆盖/另存为指定路径）
+#[tauri::command]
+pub fn save_wallpaper_edit(path: String, data_url: String) -> Result<(), String> {
+    let b64 = data_url.split(',').nth(1).ok_or_else(|| "无效的图片数据".to_string())?;
+    let bytes = base64::decode(b64.trim()).map_err(|e| format!("图片数据解码失败: {e}"))?;
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.exists() {
+            return Err("目标文件夹不存在".to_string());
+        }
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(())
+}
+
 /// 扫描壁纸文件夹，返回支持的图片文件绝对路径
 #[tauri::command]
 pub fn scan_wallpaper_folder(dir: String) -> Result<Vec<String>, String> {

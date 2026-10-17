@@ -2802,6 +2802,24 @@
     "refresh": "重新整理",
     "history": "桌布歷史",
     "emptyHint": "點擊上方按鈕匯入桌布資料夾開始使用",
-    "folderExists": "該資料夾已匯入"
+    "folderExists": "該資料夾已匯入",
+    "menuAddToPlaylist": "新增到循環播放清單",
+    "menuEdit": "開啟編輯器",
+    "menuRemove": "從清單移除",
+    "addedToPlaylist": "已新增到循環播放清單",
+    "removedFromList": "已從清單移除（未刪除檔案）",
+    "playlist": "循環播放清單",
+    "editorTitle": "圖片編輯器",
+    "editorRotateLeft": "左轉 90°",
+    "editorRotateRight": "右轉 90°",
+    "editorFlipH": "水平翻轉",
+    "editorFlipV": "垂直翻轉",
+    "editorBrightness": "亮度",
+    "editorContrast": "對比度",
+    "editorSave": "儲存",
+    "editorCancel": "取消",
+    "editorLoadFailed": "圖片載入失敗",
+    "editorSaved": "已儲存（覆蓋原檔案）",
+    "editorSavedAs": "已另存為新 PNG 檔案"
   }
 }

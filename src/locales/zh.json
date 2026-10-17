@@ -2664,6 +2664,24 @@
     "refresh": "刷新",
     "history": "壁纸历史",
     "emptyHint": "点击上方按钮导入壁纸文件夹开始使用",
-    "folderExists": "该文件夹已导入"
+    "folderExists": "该文件夹已导入",
+    "menuAddToPlaylist": "添加到循环播放列表",
+    "menuEdit": "打开编辑器",
+    "menuRemove": "从列表移除",
+    "addedToPlaylist": "已添加到循环播放列表",
+    "removedFromList": "已从列表移除（未删除文件）",
+    "playlist": "循环播放列表",
+    "editorTitle": "图片编辑器",
+    "editorRotateLeft": "左转 90°",
+    "editorRotateRight": "右转 90°",
+    "editorFlipH": "水平翻转",
+    "editorFlipV": "垂直翻转",
+    "editorBrightness": "亮度",
+    "editorContrast": "对比度",
+    "editorSave": "保存",
+    "editorCancel": "取消",
+    "editorLoadFailed": "图片加载失败",
+    "editorSaved": "已保存（覆盖原文件）",
+    "editorSavedAs": "已另存为新 PNG 文件"
   }
 }

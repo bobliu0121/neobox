@@ -2862,6 +2862,24 @@
     "refresh": "Refresh",
     "history": "History",
     "emptyHint": "Click the button above to import a wallpaper folder",
-    "folderExists": "This folder is already imported"
+    "folderExists": "This folder is already imported",
+    "menuAddToPlaylist": "Add to Playlist",
+    "menuEdit": "Open Editor",
+    "menuRemove": "Remove from List",
+    "addedToPlaylist": "Added to playlist",
+    "removedFromList": "Removed from list (file kept)",
+    "playlist": "Playlist",
+    "editorTitle": "Image Editor",
+    "editorRotateLeft": "Rotate Left",
+    "editorRotateRight": "Rotate Right",
+    "editorFlipH": "Flip Horizontal",
+    "editorFlipV": "Flip Vertical",
+    "editorBrightness": "Brightness",
+    "editorContrast": "Contrast",
+    "editorSave": "Save",
+    "editorCancel": "Cancel",
+    "editorLoadFailed": "Failed to load image",
+    "editorSaved": "Saved (original overwritten)",
+    "editorSavedAs": "Saved as new PNG file"
   }
 }

@@ -955,6 +955,7 @@ pub fn run() {
         wallpaper::set_wallpaper,
         wallpaper::get_current_wallpaper,
         wallpaper::scan_wallpaper_folder,
+        wallpaper::save_wallpaper_edit,
     ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
