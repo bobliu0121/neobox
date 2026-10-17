@@ -38,7 +38,7 @@ log = "0.4"
 # 不含 devtools：release 构建下 wry 会 SetAreDevToolsEnabled(false)，
 # 关闭 F12/右键「检查」（DevTools 打开会额外占 100~300MB 且可任意调用本地 IPC 命令）；
 # dev 构建由 debug_assertions 兜住，配合 tauri.conf.json 的 "devtools": true 仍可调试。
-tauri = { version = "2.10", features = ["protocol-asset", "tray-icon", "unstable"] }
+tauri = { version = "2.10", features = ["protocol-asset", "tray-icon", "unstable", "webview-data-url"] }
 # WebView2 COM 接口（MemoryUsageTargetLevel 等 Win32 级控制，与 wry 同版本）
 webview2-com = "0.38"
 windows-core = "0.61"
