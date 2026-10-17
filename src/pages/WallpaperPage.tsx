@@ -126,12 +126,18 @@ export default function WallpaperPage() {
     })();
   }, []);
 
-  // 设置壁纸并记录历史
+  // 设置壁纸并记录历史（GIF 使用动态壁纸窗口，其他格式走系统 API）
   const applyWallpaper = useCallback(
     async (path: string, index: number, showToast = true) => {
       setSettingIndex(index);
       try {
-        await invoke("set_wallpaper", { path });
+        const ext = path.split(".").pop()?.toLowerCase();
+        if (ext === "gif") {
+          await invoke("set_gif_wallpaper", { path });
+        } else {
+          await invoke("stop_gif_wallpaper");
+          await invoke("set_wallpaper", { path });
+        }
         setHistory((prev) => {
           const next = [{ path, time: Date.now() }, ...prev.filter((h) => h.path !== path)].slice(0, 12);
           store.set(WALLPAPER_HISTORY_KEY, next).then(() => store.save());
