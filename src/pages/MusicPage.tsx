@@ -288,14 +288,19 @@ function parseLrc(lyric: string, translation?: string): LyricLine[] {
   for (const line of mainLines) {
     const matches = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
     if (matches.length === 0) continue;
-    const text = line
+    // MKA 内嵌字幕 \N 双行：第一行作主文本，第二行作翻译
+    const rawText = line
       .replace(/\[\d+:\d+(?:\.\d+)?\]/g, "")
       .trim()
       .replace(/\\N/g, "\n");
-    if (!text) continue;
+    if (!rawText) continue;
+    const parts = rawText.split("\n");
+    const mainText = parts[0]?.trim() || "";
+    const embeddedTrans = parts[1]?.trim() || "";
+    if (!mainText) continue;
     for (const m of matches) {
       const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
-      lines.push({ time, text, translation: transMap.get(time) });
+      lines.push({ time, text: mainText, translation: transMap.get(time) || embeddedTrans || undefined });
     }
   }
 

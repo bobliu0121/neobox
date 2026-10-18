@@ -33,22 +33,39 @@ export function parseYrc(yrcText: string): KaraokeLine[] {
     let fullText = "";
     let wm: RegExpExecArray | null;
 
+    // 先收集所有词的原始数据，整行统一判断时间戳格式（绝对 vs 相对行头偏移）。
+    // 网易云 YRC：词时间戳是绝对毫秒；部分平台（酷狗 KRC 等）是相对行头的偏移。
+    // 用第一个有效词的 rawStart 判定：若它落在 [lineStartMs-500, lineStartMs+lineDurMs+2000]
+    // 区间内则视为绝对时间，否则视为相对偏移。
+    const rawWords: { txt: string; rawStart: number; rawDur: number }[] = [];
     while ((wm = wordRegex.exec(body)) !== null) {
       const txt = (wm[3] || "").replace(/\s+/g, " ");
       if (!txt) continue;
+      rawWords.push({
+        txt,
+        rawStart: parseInt(wm[1], 10) || 0,
+        rawDur: parseInt(wm[2], 10) || 0,
+      });
+    }
 
-      const rawStart = parseInt(wm[1], 10) || 0;
-      const rawDur = parseInt(wm[2], 10) || 0;
-      // 判断是绝对时间戳还是相对行头的偏移
-      const absStartMs = rawStart >= lineStartMs - 500 ? rawStart : lineStartMs + rawStart;
+    let usesAbsoluteTime = false;
+    if (rawWords.length > 0) {
+      const firstStart = rawWords[0].rawStart;
+      const lower = lineStartMs - 500;
+      const upper = lineStartMs + Math.max(lineDurMs, 0) + 2000;
+      usesAbsoluteTime = firstStart >= lower && firstStart <= upper;
+    }
+
+    for (const rw of rawWords) {
+      const absStartMs = usesAbsoluteTime ? rw.rawStart : lineStartMs + rw.rawStart;
 
       const c0 = fullText.length;
-      fullText += txt;
+      fullText += rw.txt;
 
       words.push({
-        text: txt,
+        text: rw.txt,
         t: absStartMs / 1000,
-        d: Math.max(0.06, rawDur / 1000),
+        d: Math.max(0.06, rw.rawDur / 1000),
         c0,
         c1: fullText.length,
       });
@@ -126,20 +143,25 @@ export function parseLrcEnhanced(lyric: string, translation?: string): KaraokeLi
   for (const line of mainLines) {
     const matches = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
     if (matches.length === 0) continue;
-    // MKA 内嵌字幕用字面量 \N 表示同一句里的双行字幕，这里还原成换行
-    const text = line
+    // MKA 内嵌字幕用字面量 \N 表示同一句里的双行字幕（原文\N翻译），
+    // 还原成换行后拆成主文本 + 翻译：第一行作 text，第二行作 translation（无独立翻译时）。
+    const rawText = line
       .replace(/\[\d+:\d+(?:\.\d+)?\]/g, "")
       .trim()
       .replace(/\\N/g, "\n");
-    if (!text) continue;
+    if (!rawText) continue;
+    const parts = rawText.split("\n");
+    const mainText = parts[0]?.trim() || "";
+    const embeddedTrans = parts[1]?.trim() || "";
+    if (!mainText) continue;
     for (const m of matches) {
       const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
       lines.push({
         time,
         duration: 0,
-        text,
-        translation: transMap.get(time),
-        charCount: Math.max(1, text.length),
+        text: mainText,
+        translation: transMap.get(time) || embeddedTrans || undefined,
+        charCount: Math.max(1, mainText.length),
         hasKaraoke: false,
       });
     }
