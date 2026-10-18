@@ -1,7 +1,6 @@
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        use std::path::PathBuf;
         use tauri_build::WindowsAttributes;
         let mut windows = WindowsAttributes::new();
         // MSIX 限制：包内入口 exe 不允许 requireAdministrator 清单（会导致启动失败，

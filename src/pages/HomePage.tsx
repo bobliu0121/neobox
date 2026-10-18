@@ -109,7 +109,7 @@ export default function HomePage() {
   const { home: homeAds } = useAds();
   useEffect(() => {
     (async () => {
-      let saved = await store.get<boolean>("neobox_home_hardware_model_enabled");
+      const saved = await store.get<boolean>("neobox_home_hardware_model_enabled");
       if (saved !== null && saved !== undefined) {
         setHomeHardwareModelEnabled(saved);
       } else {

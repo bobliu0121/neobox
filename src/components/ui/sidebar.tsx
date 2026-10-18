@@ -204,13 +204,13 @@ export function Sidebar() {
 
   useEffect(() => {
     (async () => {
-      let v = await store.get<boolean>("neobox_sidebar_show_label");
+      const v = await store.get<boolean>("neobox_sidebar_show_label");
       if (v !== null && v !== undefined) {
         setShowLabel(v);
       } else {
         setShowLabel(localStorage.getItem("neobox_sidebar_show_label") !== "false");
       }
-      let nv = await store.get<string>("neobox_nav_position");
+      const nv = await store.get<string>("neobox_nav_position");
       if (nv === "top" || nv === "left") {
         setNavPosition(nv);
       } else {
@@ -286,11 +286,11 @@ export function Sidebar() {
       setNavVisibility(initial);
 
       // 读取导航栏排序
-      let orderStr = await store.get<string>("neobox_nav_order");
+      const orderStr = await store.get<string>("neobox_nav_order");
       if (orderStr) {
         try {
           const parsed = JSON.parse(orderStr) as string[];
-          const allPaths = ["/hardware", "/tools", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
+          const allPaths = ["/hardware", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
           let changed = false;
           for (const p of allPaths) {
             if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -307,7 +307,7 @@ export function Sidebar() {
           const saved = localStorage.getItem(NAV_ORDER_KEY);
           if (saved) {
             const parsed = JSON.parse(saved) as string[];
-            const allPaths = ["/hardware", "/tools", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
+            const allPaths = ["/hardware", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
             let changed = false;
             for (const p of allPaths) {
               if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -327,7 +327,7 @@ export function Sidebar() {
   useEffect(() => {
     const handler = async () => {
       try {
-        let saved = await store.get<string>("neobox_nav_order");
+        const saved = await store.get<string>("neobox_nav_order");
         if (saved) {
           setNavOrder(JSON.parse(saved));
         } else {

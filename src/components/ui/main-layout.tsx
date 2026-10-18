@@ -20,7 +20,7 @@ export function useNavPosition() {
 
   useEffect(() => {
     (async () => {
-      let nv = await store.get<string>("neobox_nav_position");
+      const nv = await store.get<string>("neobox_nav_position");
       if (nv === "top" || nv === "left") {
         setNavPosition(nv);
       } else {

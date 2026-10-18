@@ -1,10 +1,11 @@
-param()
+﻿param()
 
 $ErrorActionPreference = "Stop"
-$InstallerProject = "D:\NeoBox\installer"
+$InstallerProject = $PSScriptRoot
+$Root = Split-Path -Parent $InstallerProject
 
 # Read version from main project's Cargo.toml
-$mainCargo = "D:\NeoBox\src-tauri\Cargo.toml"
+$mainCargo = Join-Path $Root "src-tauri\Cargo.toml"
 $version = (Select-String -Path $mainCargo -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
 Write-Host "Main app version: $version" -ForegroundColor Cyan
 

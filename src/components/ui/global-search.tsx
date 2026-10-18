@@ -9,26 +9,19 @@ import {
   Icon,
   useColorModeValue,
   Kbd,
-  Image,
 } from "@chakra-ui/react";
-import { Search, Home, Cpu, Wrench, Package, Crosshair, TrendingUp, Heart, Settings } from "lucide-react";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { Search } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
-import { useAppStartup } from "@/contexts/app-startup-context";
 import {
   searchIndex,
   categoryLabels,
   categoryOrder,
-  getThirdPartyToolIcon,
   type SearchItem,
-  type SearchCategory,
 } from "@/config/search-index";
-import { invoke } from "@tauri-apps/api/core";
-import { IS_STORE_BUILD } from "@/lib/build-flags";
-import { useDynamicIsland } from "@/components/ui/dynamic-island";
 
 interface GroupedResults {
   [key: string]: SearchItem[];
@@ -51,10 +44,8 @@ function matchSearch(query: string, item: SearchItem, t: (key: string) => string
 export function GlobalSearch() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const toast = useDynamicIsland("search");
   const { liquidGlassEnabled, liquidGlassBlur } = useBackground();
-  const { getActiveColor, getHoverColor, getContrastTextColor } = useThemeColor();
-  const { tools } = useAppStartup();
+  const { getActiveColor, getContrastTextColor } = useThemeColor();
 
   const [isOpen, setIsOpen] = useState(false);
   // keydown 监听 deps 为空，用 ref 读取最新的开关状态
@@ -86,7 +77,6 @@ export function GlobalSearch() {
   );
   const textColor = useColorModeValue("gray.700", "#ffffff");
   const placeholderColor = useColorModeValue("gray.500", "gray.400");
-  const resultItemBg = useColorModeValue("gray.50", "gray.800");
   const resultItemHoverBg = useColorModeValue("gray.100", "gray.700");
   const categoryColor = useColorModeValue("gray.500", "gray.400");
   const noResultColor = useColorModeValue("gray.400", "gray.500");
@@ -138,27 +128,7 @@ export function GlobalSearch() {
     };
   }, [query]);
 
-  const allSearchItems = useMemo(() => {
-    const items: SearchItem[] = [...searchIndex];
-
-    // 商店版不把第三方工具作为可执行搜索结果（商店政策 10.1.5 / 10.2.3）
-    if (!IS_STORE_BUILD) {
-      tools.forEach((tool) => {
-        items.push({
-          id: tool.id,
-          nameKey: `tools.tools.${tool.id}`,
-          path: "/tools",
-          icon: getThirdPartyToolIcon(tool.id),
-          category: "thirdparty-tool",
-          keywords: [tool.name, tool.description, tool.category],
-          action: "run-tool",
-          toolId: tool.id,
-        });
-      });
-    }
-
-    return items;
-  }, [tools]);
+  const allSearchItems = searchIndex;
 
   useEffect(() => {
     if (!debouncedQuery.trim()) {
@@ -200,26 +170,12 @@ export function GlobalSearch() {
   }, [debouncedQuery, t, allSearchItems]);
 
   const handleSelect = useCallback(
-    async (item: SearchItem) => {
-      if (item.action === "run-tool" && item.toolId) {
-        try {
-          await invoke("run_tool", { toolId: item.toolId });
-        } catch (error) {
-          toast({
-            title: t("tools.messages.runFailed"),
-            description: String(error),
-            status: "error",
-            duration: 3000,
-            isClosable: true,
-          });
-        }
-      } else {
-        navigate(item.path);
-      }
+    (item: SearchItem) => {
+      navigate(item.path);
       setIsOpen(false);
       setQuery("");
     },
-    [navigate, toast, t]
+    [navigate]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

@@ -41,12 +41,12 @@ mod power_settings;
 mod vertical_overlay;
 mod vtx_virtualization;
 mod wallpaper;
+mod wallpaper_server;
 
 mod sensor;
 mod sensor_monitor;
 mod shader_cache;
 mod pawnio_driver;
-mod peripheral_drivers;
 mod smart;
 mod time_sync;
 mod thanks;
@@ -59,12 +59,11 @@ mod context_menu;
 mod speedtest;
 mod storage_clean;
 mod storage_scan;
-mod thirdparty_tools;
-mod community_tools;
 mod tray;
 mod uapi;
 mod utils;
 mod video_bg;
+mod webview_args;
 mod wmi_query;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -96,7 +95,7 @@ pub fn ensure_vertical_overlay<R: tauri::Runtime>(
         .title("NeoBox Vertical Overlay")
         // 与其它窗口保持一致的 WebView2 参数：禁用 Chromium 自动媒体会话，
         // 避免与 smtc.rs 注册的「新境盒」媒体会话重复（参数必须全窗口一致，否则 WebView2 环境冲突导致窗口创建失败）
-        .additional_browser_args("--disable-features=MediaSessionService,HardwareMediaKeyHandling,msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeAutofill,msEdgeShopping,msEdgeWallet,CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required --disable-background-networking --disable-client-side-phishing-detection --disable-component-update --disable-default-apps --disable-extensions --disable-sync --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling")
+        .additional_browser_args(crate::webview_args::BROWSER_ARGS)
         .inner_size(220.0, 400.0)
         .resizable(false)
         .decorations(false)
@@ -284,8 +283,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 载入用户配置的社区工具下载位置
-            community_tools::init_community_download_dir(app.handle());
             // 初始化音乐 API 和音频代理
             let app_handle_for_music = app.handle().clone();
             music_api::audio_proxy::set_app_handle(app_handle_for_music.clone());
@@ -743,34 +740,6 @@ pub fn run() {
         audio_eq::update_eq_preamp,
         audio_eq::update_eq_effects,
         audio_eq::get_eq_effects,
-        thirdparty_tools::get_thirdparty_tools,
-        thirdparty_tools::get_tool_install_path,
-        thirdparty_tools::get_tool_download_path,
-        thirdparty_tools::run_tool,
-        thirdparty_tools::run_external_exe,
-        thirdparty_tools::download_tool,
-        thirdparty_tools::open_tool_installer,
-        // === 社区工具（GitCode PR） ===
-        community_tools::get_community_tools,
-        community_tools::get_community_categories,
-        community_tools::search_community_tools,
-        community_tools::get_community_install_status,
-        community_tools::invalidate_community_cache,
-        community_tools::gitcode_login_start,
-        community_tools::get_gitcode_login_status,
-        community_tools::get_gitcode_avatar_data,
-        community_tools::gitcode_logout,
-        community_tools::submit_community_tool,
-        community_tools::delete_community_tool,
-        community_tools::get_community_download_dir,
-        community_tools::set_community_download_dir,
-        community_tools::pick_community_download_dir,
-        community_tools::install_community_tool,
-        community_tools::open_community_zip,
-        community_tools::run_community_tool,
-        community_tools::pick_community_package,
-        community_tools::list_zip_entry_exes,
-        community_tools::pick_community_icon,
         overlay_panel::start_overlay_panel,
         overlay_panel::stop_overlay_panel,
         overlay_panel::get_overlay_panel_status,
@@ -785,8 +754,6 @@ pub fn run() {
         pawnio_driver::check_pawnio_status,
         pawnio_driver::install_pawnio_driver,
         pawnio_driver::uninstall_pawnio_driver,
-        peripheral_drivers::get_peripheral_drivers,
-        peripheral_drivers::get_peripheral_driver_icon,
 
         vertical_overlay::start_vertical_overlay,
         vertical_overlay::stop_vertical_overlay,
@@ -956,8 +923,10 @@ pub fn run() {
         wallpaper::get_current_wallpaper,
         wallpaper::scan_wallpaper_folder,
         wallpaper::save_wallpaper_edit,
-        wallpaper::set_gif_wallpaper,
-        wallpaper::stop_gif_wallpaper,
+        wallpaper::set_dynamic_wallpaper,
+        wallpaper::stop_dynamic_wallpaper,
+        wallpaper::get_dynamic_wallpaper,
+        wallpaper::wallpaper_window_ready,
     ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -977,7 +946,13 @@ pub fn run() {
                     }
                 }
                 // 退出流程开始前隐藏所有窗口，避免 WebView2 销毁后闪现原生标题栏
-                for label in &["main", "desktop-lyrics", "vertical-overlay", "dynamic-island"] {
+                for label in &[
+                    "main",
+                    "desktop-lyrics",
+                    "vertical-overlay",
+                    "dynamic-island",
+                    "wallpaper-window",
+                ] {
                     if let Some(w) = app_handle.get_webview_window(label) {
                         let _ = w.hide();
                     }

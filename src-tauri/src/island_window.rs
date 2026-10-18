@@ -10,21 +10,14 @@
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
+use crate::webview_args::BROWSER_ARGS;
+
 /// 窗口标签，同时也是前端路由 `/dynamic-island`
 pub const ISLAND_WINDOW_LABEL: &str = "dynamic-island";
 
 /// 逻辑尺寸：需容纳展开态宽度 EXPANDED_WIDTH=320（+边框）与音乐岛展开高度 150（+顶部 4 偏移）
 const ISLAND_WIDTH: f64 = 348.0;
 const ISLAND_HEIGHT: f64 = 176.0;
-
-/// 与其它窗口逐字一致的 WebView2 参数。
-/// 参数不一致会让 WebView2 环境冲突，直接导致新窗口创建失败（全窗口必须一致）。
-/// 抗闪烁四件套（悬浮窗/透明窗必备）：
-///   CalculateNativeWinOcclusion —— Chromium 原生窗口遮挡计算，对 always-on-top
-///     透明小窗口有误判 bug：被误判"被遮挡"→ 渲染挂起 → 恢复 → 反复横跳，
-///     表现为岛体文字/圆圈无规律闪烁（rAF 驱动的动画在停摆/恢复间抽搐）；
-///   其余三个禁用后台渲染降频/timer 节流，保证失焦后心跳、轮询与动画帧率稳定。
-const BROWSER_ARGS: &str = "--disable-features=MediaSessionService,HardwareMediaKeyHandling,msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeAutofill,msEdgeShopping,msEdgeWallet,CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required --disable-background-networking --disable-client-side-phishing-detection --disable-component-update --disable-default-apps --disable-extensions --disable-sync --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
 
 /// 按需创建桌面灵动岛窗口（已存在则直接复用）。
 /// 创建即 visible(true)：空闲时整窗透明且鼠标穿透，视觉上等同于不存在。

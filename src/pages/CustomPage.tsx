@@ -70,9 +70,9 @@ function saveConfig(config: CustomDashboardConfig) {
   store.set(STORE_CONFIG_KEY, config).then(() => store.save());
 }
 
-/** 可添加到自定义页面的项：排除第三方工具 */
+/** 可添加到自定义页面的项 */
 function getAvailableItems(): SearchItem[] {
-  return searchIndex.filter((item) => item.category !== "thirdparty-tool");
+  return searchIndex;
 }
 
 /** 跑马灯文本：仅溢出时才滚动 */

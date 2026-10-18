@@ -11,7 +11,7 @@ if (-not $isAdmin) {
     exit
 }
 
-$WorkDir = "D:\NeoBox\msix"
+$WorkDir = $PSScriptRoot
 $PfxPath = "$WorkDir\NeoBoxTest.pfx"
 $CertPassword = "NeoBoxTest"
 $PublisherCN = "CN=30F199CB-855A-42F4-96A9-F43088B508BF"

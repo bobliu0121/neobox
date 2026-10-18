@@ -38,7 +38,7 @@ export function TitleBar() {
   useEffect(() => {
     (async () => {
       // neobox_search_bar_enabled
-      let sv = await store.get<boolean>("neobox_search_bar_enabled");
+      const sv = await store.get<boolean>("neobox_search_bar_enabled");
       if (sv !== null && sv !== undefined) {
         setSearchBarVisible(sv);
       } else {
@@ -46,7 +46,7 @@ export function TitleBar() {
         setSearchBarVisible(ls === null ? true : ls === "true");
       }
       // neobox_nav_position
-      let nv = await store.get<string>("neobox_nav_position");
+      const nv = await store.get<string>("neobox_nav_position");
       if (nv === "top" || nv === "left") {
         setNavPosition(nv);
       } else {

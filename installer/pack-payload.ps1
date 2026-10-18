@@ -1,118 +1,72 @@
-param()
+﻿param(
+    # 主工程根目录；默认取当前脚本上一级，可在 CI 中显式传入
+    [string]$MainProject = (Split-Path -Parent $PSScriptRoot)
+)
 
 $ErrorActionPreference = "Stop"
-$MainProject = "D:\NeoBox"
-$InstallerProject = "D:\NeoBox\installer"
-$UninstallerProject = "D:\NeoBox\uninstaller"
-$PayloadZip = "$InstallerProject\src-tauri\payload.zip"
-$TempDir = "$env:TEMP\neobox-payload"
+$InstallerProject = $PSScriptRoot
+$UninstallerProject = Join-Path $MainProject "uninstaller"
+$PayloadZip = Join-Path $InstallerProject "src-tauri\payload.zip"
+$TempDir = Join-Path $env:TEMP "neobox-payload"
 
 Write-Host "=== Creating payload archive ===" -ForegroundColor Cyan
 
-# Clean temp directory
 if (Test-Path $TempDir) {
     Remove-Item "$TempDir\*" -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
-# 1. Main exe
-$mainExe = "$MainProject\src-tauri\target\release\neobox.exe"
-if (Test-Path $mainExe) {
-    Copy-Item $mainExe $TempDir\
-    Write-Host "  [OK] neobox.exe"
-} else {
-    Write-Warning "  [WARN] neobox.exe not found (build main app first)"
-}
-
-# 2. Tauri runtime resources
-$appResources = "$MainProject\src-tauri\resources"
-if (Test-Path $appResources) {
-    New-Item -ItemType Directory -Path "$TempDir\resources" -Force | Out-Null
-    Copy-Item "$appResources\*" "$TempDir\resources\" -Recurse -Force
-    Write-Host "  [OK] resources/*"
-}
-
-# 3. Power plans
-$powerPlans = "$MainProject\power-plans"
-if (Test-Path $powerPlans) {
-    New-Item -ItemType Directory -Path "$TempDir\power-plans" -Force | Out-Null
-    Copy-Item "$powerPlans\*" "$TempDir\power-plans\" -Recurse -Force
-    Write-Host "  [OK] power-plans/*"
-}
-
-# 4. Monitor files
-$monitorDir = "$MainProject\monitor\bin\Release\net48"
-if (Test-Path $monitorDir) {
-    New-Item -ItemType Directory -Path "$TempDir\monitor" -Force | Out-Null
-    Copy-Item "$monitorDir\*" "$TempDir\monitor\" -Recurse -Force
-    Write-Host "  [OK] monitor/*"
-}
-
-# 5. AQ registry tweak files (apply)
-$aqRegistry = "$MainProject\aq_registry"
-if (Test-Path $aqRegistry) {
-    New-Item -ItemType Directory -Path "$TempDir\aq_registry" -Force | Out-Null
-    Copy-Item "$aqRegistry\*" "$TempDir\aq_registry\" -Recurse -Force
-    Write-Host "  [OK] aq_registry/*"
-}
-
-# 6. AQ registry tweak files (restore)
-$aqRegistryRestore = "$MainProject\aq_registry_restore"
-if (Test-Path $aqRegistryRestore) {
-    New-Item -ItemType Directory -Path "$TempDir\aq_registry_restore" -Force | Out-Null
-    Copy-Item "$aqRegistryRestore\*" "$TempDir\aq_registry_restore\" -Recurse -Force
-    Write-Host "  [OK] aq_registry_restore/*"
-}
-
-# 7. Flat root files
-$rootFiles = @(
-    "nvidiaProfileInspector.exe",
-    "nvidiaProfileInspector.exe.config",
-    "Reference.xml",
-    "PawnIO_setup.exe"
-)
-foreach ($file in $rootFiles) {
-    $src = "$MainProject\$file"
-    if (Test-Path $src) {
-        Copy-Item $src $TempDir\
-        Write-Host "  [OK] $file"
-    } else {
-        Write-Warning "  [WARN] $file not found (skipping)"
+function Copy-PayloadDir {
+    param([string]$Source, [string]$Target, [string]$Label)
+    if (-not (Test-Path $Source)) {
+        Write-Warning "  [WARN] $Label not found: $Source"
+        return
     }
+    New-Item -ItemType Directory -Path (Join-Path $TempDir $Target) -Force | Out-Null
+    Copy-Item (Join-Path $Source "*") (Join-Path $TempDir $Target) -Recurse -Force
+    Write-Host "  [OK] $Label"
 }
 
-# 8. NVAPI lib
-$nvapiDir = "$TempDir\R560-developer\amd64"
-New-Item -ItemType Directory -Path $nvapiDir -Force | Out-Null
-$nvapiLib = "$MainProject\R560-developer\amd64\nvapi64.lib"
-if (Test-Path $nvapiLib) {
-    Copy-Item $nvapiLib $nvapiDir\
-    Write-Host "  [OK] R560-developer/amd64/nvapi64.lib"
-} else {
-    Write-Warning "  [WARN] nvapi64.lib not found (skipping)"
+# 1. Main exe（必须先构建主程序）
+$targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $MainProject "src-tauri\target" }
+$mainExe = Join-Path $targetRoot "release\neobox.exe"
+if (-not (Test-Path $mainExe)) {
+    throw "未找到主程序：$mainExe；请先执行 npm run build:portable 或 cargo build --release"
 }
+Copy-Item $mainExe $TempDir
+Copy-Item (Join-Path $MainProject "WebView2Loader.dll") $TempDir
+Write-Host "  [OK] neobox.exe / WebView2Loader.dll"
 
-# 9. Uninstaller
-$uninstExe = "$UninstallerProject\src-tauri\target\release\uninstneobox.exe"
+# 2. Runtime resources
+Copy-PayloadDir (Join-Path $MainProject "src-tauri\resources") "resources" "resources/*"
+Copy-PayloadDir (Join-Path $MainProject "monitor\bin\Release\net48") "monitor" "monitor/*"
+Copy-PayloadDir (Join-Path $MainProject "power-plans") "power-plans" "power-plans/*"
+Copy-PayloadDir (Join-Path $MainProject "aq_registry") "aq_registry" "aq_registry/*"
+Copy-PayloadDir (Join-Path $MainProject "aq_registry_restore") "aq_registry_restore" "aq_registry_restore/*"
+
+# 3. Uninstaller
+$uninstTarget = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $UninstallerProject "src-tauri\target" }
+$uninstExe = Join-Path $uninstTarget "release\uninstneobox.exe"
 if (Test-Path $uninstExe) {
-    Copy-Item $uninstExe $TempDir\
-    Write-Host "  [OK] Uninstneobox.exe"
+    Copy-Item $uninstExe $TempDir
+    Write-Host "  [OK] uninstneobox.exe"
 } else {
-    Write-Warning "  [WARN] Uninstneobox.exe not found (build uninstaller first)"
+    Write-Warning "  [WARN] uninstneobox.exe not found; build uninstaller first"
 }
 
-# 10. Create ZIP
+# 4. Create ZIP
 Write-Host "`nCompressing payload..." -ForegroundColor Cyan
 if (Test-Path $PayloadZip) {
     Remove-Item $PayloadZip -Force
 }
+$payloadDir = Split-Path -Parent $PayloadZip
+New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory($TempDir, $PayloadZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
-$zipSize = (Get-ChildItem $PayloadZip).Length
+$zipSize = (Get-Item $PayloadZip).Length
 $fileCount = (Get-ChildItem $TempDir -Recurse -File | Measure-Object).Count
 Write-Host "  [DONE] $fileCount files -> payload.zip, $('{0:N1}' -f ($zipSize / 1MB)) MB" -ForegroundColor Green
 
-# Cleanup temp
 Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue

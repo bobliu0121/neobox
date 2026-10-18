@@ -19,6 +19,7 @@ import {
   Tag,
   TagLabel,
   TagCloseButton,
+  Badge,
   useColorModeValue,
   useToast,
 } from "@chakra-ui/react";
@@ -34,12 +35,23 @@ import {
   ListMusic,
   Trash2,
   Pencil,
+  Film,
+  FileCode2,
+  MonitorPlay,
+  Square,
 } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
-import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
-import { hexToRgba } from "@/lib/color-utils";
 import { store } from "@/lib/store";
+import {
+  DYNAMIC_WALLPAPER_STORE_KEY,
+  dynamicWallpaperKind,
+  getDynamicWallpaper,
+  setDynamicWallpaper,
+  stopDynamicWallpaper,
+  type DynamicWallpaperInfo,
+  type DynamicWallpaperKind,
+} from "@/lib/dynamic-wallpaper";
 import WallpaperEditor from "./WallpaperEditor";
 
 const WALLPAPER_HISTORY_KEY = "wallpaper_history";
@@ -67,11 +79,49 @@ function dedupe(paths: string[]): string[] {
   return Array.from(new Set(paths));
 }
 
+/** BETA 标记：GIF / HTML 动态壁纸仍是实验性功能。 */
+function BetaTag() {
+  return (
+    <Badge colorScheme="purple" variant="solid" fontSize="2xs" px={1.5} borderRadius="sm">
+      BETA
+    </Badge>
+  );
+}
+
+/** 壁纸缩略图：HTML 没有可预览的位图，用图标占位。 */
+function WallpaperThumb({ path }: { path: string }) {
+  if (dynamicWallpaperKind(path) === "html") {
+    return (
+      <Box
+        w="100%"
+        aspectRatio={16 / 9}
+        bg="purple.900"
+        display="flex"
+        alignItems="center"
+        justifyContent="center"
+        color="purple.200"
+      >
+        <FileCode2 size={26} />
+      </Box>
+    );
+  }
+  return (
+    <Image
+      src={convertFileSrc(path)}
+      alt=""
+      w="100%"
+      aspectRatio={16 / 9}
+      objectFit="cover"
+      fallback={<Box w="100%" aspectRatio={16 / 9} bg="gray.600" />}
+    />
+  );
+}
+
 export default function WallpaperPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const toast = useToast();
-  const { getActiveColor, config: themeConfig } = useThemeColor();
+  const { config: themeConfig } = useThemeColor();
   const themeColorHex = themeConfig.primaryColor;
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
@@ -90,6 +140,8 @@ export default function WallpaperPage() {
   const [tick, setTick] = useState(0);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [editingPath, setEditingPath] = useState<string | null>(null);
+  const [dynamic, setDynamic] = useState<DynamicWallpaperInfo | null>(null);
+  const [dynamicBusy, setDynamicBusy] = useState(false);
   const rotateIndexRef = useRef(0);
 
   // 读取持久化状态
@@ -126,16 +178,34 @@ export default function WallpaperPage() {
     })();
   }, []);
 
-  // 设置壁纸并记录历史（GIF 使用动态壁纸窗口，其他格式走系统 API）
+  // 读取当前动态壁纸（后端是唯一真源，重启后由 App 恢复）
+  useEffect(() => {
+    getDynamicWallpaper()
+      .then(setDynamic)
+      .catch(() => {
+        // 查询失败不影响页面其它功能
+      });
+  }, []);
+
+  // 动态壁纸选择状态需要持久化，供下次启动恢复
+  const persistDynamic = useCallback((info: DynamicWallpaperInfo | null) => {
+    store.set(DYNAMIC_WALLPAPER_STORE_KEY, info).then(() => store.save());
+  }, []);
+
+  // 设置壁纸并记录历史（GIF / HTML 走动态壁纸窗口，其他格式走系统 API）
   const applyWallpaper = useCallback(
     async (path: string, index: number, showToast = true) => {
       setSettingIndex(index);
       try {
-        const ext = path.split(".").pop()?.toLowerCase();
-        if (ext === "gif") {
-          await invoke("set_gif_wallpaper", { path });
+        const kind = dynamicWallpaperKind(path);
+        if (kind) {
+          const info = await setDynamicWallpaper(path);
+          setDynamic(info);
+          persistDynamic(info);
         } else {
-          await invoke("stop_gif_wallpaper");
+          await stopDynamicWallpaper();
+          setDynamic(null);
+          persistDynamic(null);
           await invoke("set_wallpaper", { path });
         }
         setHistory((prev) => {
@@ -152,8 +222,49 @@ export default function WallpaperPage() {
         setSettingIndex(null);
       }
     },
-    [t, toast],
+    [t, toast, persistDynamic],
   );
+
+  // 通过文件选择器直接挑一个 GIF / HTML 作为动态壁纸
+  const handlePickDynamic = useCallback(
+    async (kind: DynamicWallpaperKind) => {
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const selected = await open({
+          directory: false,
+          multiple: false,
+          title: t(kind === "gif" ? "wallpaper.dynamicGif" : "wallpaper.dynamicHtml"),
+          filters:
+            kind === "gif"
+              ? [{ name: "GIF", extensions: ["gif"] }]
+              : [{ name: "HTML", extensions: ["html", "htm"] }],
+        });
+        if (typeof selected !== "string") return;
+        setDynamicBusy(true);
+        const info = await setDynamicWallpaper(selected);
+        setDynamic(info);
+        persistDynamic(info);
+        toast({ title: t("wallpaper.dynamicApplied"), status: "success", duration: 2500 });
+      } catch (e) {
+        toast({ title: String(e), status: "error", duration: 3000 });
+      } finally {
+        setDynamicBusy(false);
+      }
+    },
+    [t, toast, persistDynamic],
+  );
+
+  // 停止动态壁纸（恢复系统壁纸）
+  const handleStopDynamic = useCallback(async () => {
+    try {
+      await stopDynamicWallpaper();
+      setDynamic(null);
+      persistDynamic(null);
+      toast({ title: t("wallpaper.dynamicStopped"), status: "info", duration: 2000 });
+    } catch (e) {
+      toast({ title: String(e), status: "error", duration: 3000 });
+    }
+  }, [t, toast, persistDynamic]);
 
   // 轮换定时器：优先使用循环播放列表（每项独立时长），否则按统一间隔轮换全部壁纸
   useEffect(() => {
@@ -382,6 +493,56 @@ export default function WallpaperPage() {
           </VStack>
         </LiquidGlassCard>
 
+        {/* 动态壁纸（BETA）：GIF 逐帧播放 / HTML 以完整网页渲染 */}
+        <LiquidGlassCard px={4} py={4}>
+          <VStack align="stretch" spacing={3}>
+            <HStack spacing={2} flexWrap="wrap">
+              <MonitorPlay size={18} color={themeColorHex} />
+              <Text fontSize="md" fontWeight="semibold" color={headingColor}>
+                {t("wallpaper.dynamicTitle")}
+              </Text>
+              <BetaTag />
+              {dynamic && (
+                <Badge colorScheme="green" variant="subtle" fontSize="xs">
+                  {t("wallpaper.dynamicActive")}
+                </Badge>
+              )}
+            </HStack>
+            <HStack spacing={2} flexWrap="wrap">
+              <Button
+                size="sm"
+                leftIcon={<Film />}
+                rightIcon={<BetaTag />}
+                colorScheme="purple"
+                variant="outline"
+                isLoading={dynamicBusy}
+                onClick={() => handlePickDynamic("gif")}
+              >
+                {t("wallpaper.dynamicGif")}
+              </Button>
+              <Button
+                size="sm"
+                leftIcon={<FileCode2 />}
+                rightIcon={<BetaTag />}
+                colorScheme="purple"
+                variant="outline"
+                isLoading={dynamicBusy}
+                onClick={() => handlePickDynamic("html")}
+              >
+                {t("wallpaper.dynamicHtml")}
+              </Button>
+              {dynamic && (
+                <Button size="sm" leftIcon={<Square />} colorScheme="red" variant="ghost" onClick={handleStopDynamic}>
+                  {t("wallpaper.dynamicStop")}
+                </Button>
+              )}
+            </HStack>
+            <Text fontSize="xs" color={subTextColor} isTruncated title={dynamic?.path}>
+              {dynamic ? `${dynamic.kind.toUpperCase()} · ${dynamic.path}` : t("wallpaper.dynamicHint")}
+            </Text>
+          </VStack>
+        </LiquidGlassCard>
+
         {/* 循环播放列表 */}
         {playlist.length > 0 && (
           <LiquidGlassCard px={4} py={4}>
@@ -394,14 +555,29 @@ export default function WallpaperPage() {
             <VStack spacing={2} align="stretch">
               {playlist.map((item) => (
                 <HStack key={item.path} spacing={3}>
-                  <Image
-                    src={convertFileSrc(item.path)}
-                    alt=""
-                    boxSize="48px"
-                    objectFit="cover"
-                    borderRadius="md"
-                    fallback={<Box boxSize="48px" bg="gray.600" borderRadius="md" />}
-                  />
+                  {dynamicWallpaperKind(item.path) === "html" ? (
+                    <Box
+                      boxSize="48px"
+                      bg="purple.900"
+                      borderRadius="md"
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      color="purple.200"
+                      flexShrink={0}
+                    >
+                      <FileCode2 size={20} />
+                    </Box>
+                  ) : (
+                    <Image
+                      src={convertFileSrc(item.path)}
+                      alt=""
+                      boxSize="48px"
+                      objectFit="cover"
+                      borderRadius="md"
+                      fallback={<Box boxSize="48px" bg="gray.600" borderRadius="md" />}
+                    />
+                  )}
                   <Text fontSize="xs" color={subTextColor} maxW="260px" isTruncated flex="1">
                     {item.path}
                   </Text>
@@ -465,14 +641,12 @@ export default function WallpaperPage() {
                   }}
                   _hover={{ borderColor: themeColorHex }}
                 >
-                  <Image
-                    src={convertFileSrc(path)}
-                    alt=""
-                    w="100%"
-                    aspectRatio={16 / 9}
-                    objectFit="cover"
-                    fallback={<Box w="100%" aspectRatio={16 / 9} bg="gray.600" />}
-                  />
+                  <WallpaperThumb path={path} />
+                  {dynamicWallpaperKind(path) === "gif" && (
+                    <Box position="absolute" top={1} right={1}>
+                      <BetaTag />
+                    </Box>
+                  )}
                   {settingIndex === index && (
                     <Box
                       position="absolute"
@@ -530,14 +704,7 @@ export default function WallpaperPage() {
                   }}
                   _hover={{ borderColor: themeColorHex }}
                 >
-                  <Image
-                    src={convertFileSrc(h.path)}
-                    alt=""
-                    w="100%"
-                    aspectRatio={16 / 9}
-                    objectFit="cover"
-                    fallback={<Box w="100%" aspectRatio={16 / 9} bg="gray.600" />}
-                  />
+                  <WallpaperThumb path={h.path} />
                 </Box>
               ))}
             </SimpleGrid>

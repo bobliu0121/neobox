@@ -27,6 +27,10 @@ jobs:
           node-version: "22"
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
       - run: npm ci
       - run: npm run build
-      - run: cargo check --manifest-path src-tauri/Cargo.toml
+      - run: dotnet build monitor/NeoBoxMonitor.csproj -c Release --nologo
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --features custom-protocol

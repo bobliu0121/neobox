@@ -322,7 +322,7 @@ export default function OverlayPanelPage() {
 
   useEffect(() => {
     (async () => {
-      let v = await store.get<boolean>("neobox_auto_overlay");
+      const v = await store.get<boolean>("neobox_auto_overlay");
       if (v !== null && v !== undefined) {
         setAutoApplyOnStartup(v);
       } else {

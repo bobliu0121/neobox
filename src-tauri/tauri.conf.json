@@ -59,9 +59,7 @@
       "../aq_registry_restore/*",
       "resources/binaries/fxvad/*",
       "resources/binaries/fxvad/presets/*",
-      "resources/binaries/icc-tools/*",
       "resources/binaries/PawnIO_setup.exe",
-      "resources/icc-presets/*",
       "resources/vive/*",
       "resources/qishui-auth/*"
     ],

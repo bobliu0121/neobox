@@ -17,27 +17,7 @@ type NvAPI_Status = i32;
 
 const NVAPI_OK: NvAPI_Status = 0;
 
-/// Opaque handle types (NV_DECLARE_HANDLE => opaque pointer)
-type NvDisplayHandle = *mut std::ffi::c_void;
-
-const NVAPI_UNICODE_STRING_MAX: usize = 2048;
 const NVAPI_SHORT_STRING_MAX: usize = 64;
-const NVDRS_BASE_PROFILE_LOCATION: NvU32 = 2;
-const NVDRS_DEFAULT_PROFILE_LOCATION: NvU32 = 3;
-
-
-#[repr(C)]
-struct NvDisplayDriverVersion {
-    version: NvU32,
-    drv_version: NvU32,
-    bld_change_list_num: NvU32,
-    sz_build_branch_string: [u8; NVAPI_SHORT_STRING_MAX],
-    sz_adapter_string: [u8; NVAPI_SHORT_STRING_MAX],
-}
-
-// Compile-time verification: sizeof(NV_DISPLAY_DRIVER_VERSION)
-// = 4 + 4 + 4 + 64 + 64 = 140
-const _: () = assert!(std::mem::size_of::<NvDisplayDriverVersion>() == 140);
 
 // ---------------------------------------------------------------------------
 // NVAPI DISP (Display Control) structures
@@ -210,8 +190,6 @@ struct NvApiDyn {
     initialize: libloading::Symbol<'static, unsafe extern "C" fn() -> NvAPI_Status>,
     unload: libloading::Symbol<'static, unsafe extern "C" fn() -> NvAPI_Status>,
     get_error_message: libloading::Symbol<'static, unsafe extern "C" fn(NvAPI_Status, *mut u8) -> NvAPI_Status>,
-    enum_nvidia_display_handle: libloading::Symbol<'static, unsafe extern "C" fn(index: NvU32, display: *mut NvDisplayHandle) -> NvAPI_Status>,
-    get_display_driver_version: libloading::Symbol<'static, unsafe extern "C" fn(display: NvDisplayHandle, version: *mut NvDisplayDriverVersion) -> NvAPI_Status>,
     get_display_config: libloading::Symbol<'static, unsafe extern "C" fn(path_info_count: *mut NvU32, path_info: *mut NvDisplayConfigPathInfo) -> NvAPI_Status>,
     set_display_config: libloading::Symbol<'static, unsafe extern "C" fn(path_info_count: NvU32, path_info: *const NvDisplayConfigPathInfo, flags: NvU32) -> NvAPI_Status>,
     get_display_id_by_display_name: libloading::Symbol<'static, unsafe extern "C" fn(display_name: *const u8, display_id: *mut NvU32) -> NvAPI_Status>,
@@ -235,8 +213,6 @@ fn load_nvapi_dyn() -> Option<&'static NvApiDyn> {
                 initialize: sym!(b"NvAPI_Initialize\0", unsafe extern "C" fn() -> NvAPI_Status),
                 unload: sym!(b"NvAPI_Unload\0", unsafe extern "C" fn() -> NvAPI_Status),
                 get_error_message: sym!(b"NvAPI_GetErrorMessage\0", unsafe extern "C" fn(NvAPI_Status, *mut u8) -> NvAPI_Status),
-                enum_nvidia_display_handle: sym!(b"NvAPI_EnumNvidiaDisplayHandle\0", unsafe extern "C" fn(index: NvU32, display: *mut NvDisplayHandle) -> NvAPI_Status),
-                get_display_driver_version: sym!(b"NvAPI_GetDisplayDriverVersion\0", unsafe extern "C" fn(display: NvDisplayHandle, version: *mut NvDisplayDriverVersion) -> NvAPI_Status),
                 get_display_config: sym!(b"NvAPI_DISP_GetDisplayConfig\0", unsafe extern "C" fn(path_info_count: *mut NvU32, path_info: *mut NvDisplayConfigPathInfo) -> NvAPI_Status),
                 set_display_config: sym!(b"NvAPI_DISP_SetDisplayConfig\0", unsafe extern "C" fn(path_info_count: NvU32, path_info: *const NvDisplayConfigPathInfo, flags: NvU32) -> NvAPI_Status),
                 get_display_id_by_display_name: sym!(b"NvAPI_DISP_GetDisplayIdByDisplayName\0", unsafe extern "C" fn(display_name: *const u8, display_id: *mut NvU32) -> NvAPI_Status),
@@ -263,11 +239,6 @@ static NVAPI: Mutex<Option<NvapiState>> = Mutex::new(None);
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn utf16_to_string(data: &[u16]) -> String {
-    let end = data.iter().position(|&c| c == 0).unwrap_or(data.len());
-    String::from_utf16_lossy(&data[..end])
-}
 
 fn cstr_to_string(data: &[u8]) -> String {
     let end = data.iter().position(|&c| c == 0).unwrap_or(data.len());

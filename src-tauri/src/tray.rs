@@ -317,7 +317,13 @@ fn spawn_memory_cleanup() {
 
 /// 退出应用：先隐藏所有窗口，避免退出时 WebView2 销毁后短暂露出原生标题栏。
 pub(crate) fn perform_exit(app: &tauri::AppHandle) {
-    for label in &["main", "desktop-lyrics", "vertical-overlay", "dynamic-island"] {
+    for label in &[
+        "main",
+        "desktop-lyrics",
+        "vertical-overlay",
+        "dynamic-island",
+        "wallpaper-window",
+    ] {
         if let Some(w) = app.get_webview_window(label) {
             let _ = w.hide();
         }

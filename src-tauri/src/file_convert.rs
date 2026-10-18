@@ -12,11 +12,10 @@ use windows::Win32::Media::MediaFoundation::{
     MFShutdown, MFStartup, MFCreateMediaType, MFCreateSinkWriterFromURL,
     MFCreateSourceReaderFromURL, MFAudioFormat_AAC, MFAudioFormat_MP3,
     MFAudioFormat_PCM, MFMediaType_Audio, MFSTARTUP_NOSOCKET,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FLAG,
+    MF_SOURCE_READERF_ENDOFSTREAM,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE,
-    MF_MT_SUBTYPE, MF_VERSION, IMFAttributes, IMFMediaType, IMFSample, IMFSinkWriter,
-    IMFSourceReader,
+    MF_MT_SUBTYPE, MF_VERSION, IMFAttributes, IMFSample,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
@@ -210,7 +209,7 @@ fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
             Ok(())
         })();
 
-        MFShutdown();
+        let _ = MFShutdown();
         CoUninitialize();
         result.map_err(|e| format!("音频转换失败: {e}"))
     }

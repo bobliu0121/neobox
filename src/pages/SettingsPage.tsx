@@ -201,7 +201,7 @@ function GeneralSettings() {
   const [navVisibility, setNavVisibility] = useState<Record<string, boolean>>({});
   const [navPosition, setNavPosition] = useState<"left" | "top">("left");
   const NAV_ORDER_KEY = "neobox_nav_order";
-  const defaultNavOrder = ["/hardware", "/tools", "/builtin-tools", "/optimization", "/music", "/custom"];
+  const defaultNavOrder = ["/hardware", "/builtin-tools", "/optimization", "/music", "/custom"];
   const [navOrder, setNavOrder] = useState<string[]>(defaultNavOrder);
   const navSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -336,7 +336,7 @@ function GeneralSettings() {
 
 
       // 标题用户名（空 = 使用系统用户名）
-      let uname = await store.get<string>("neobox_home_username");
+      const uname = await store.get<string>("neobox_home_username");
       if (uname !== null && uname !== undefined) {
         setHomeUsername(uname);
       } else {
@@ -354,7 +354,7 @@ function GeneralSettings() {
       }
 
       // 导航位置
-      let nv = await store.get<string>("neobox_nav_position");
+      const nv = await store.get<string>("neobox_nav_position");
       if (nv === "top" || nv === "left") {
         setNavPosition(nv);
       } else {
@@ -363,7 +363,7 @@ function GeneralSettings() {
       }
 
       // 关闭行为
-      let cb = await store.get<string>("neobox_close_behavior");
+      const cb = await store.get<string>("neobox_close_behavior");
       if (cb) {
         setCloseBehavior(cb);
       } else {
@@ -372,7 +372,7 @@ function GeneralSettings() {
       }
 
       // 启动 Logo
-      let logo = await store.get<string>("neobox_splash_logo");
+      const logo = await store.get<string>("neobox_splash_logo");
       if (logo) {
         setSplashLogo(logo);
       } else {
@@ -382,7 +382,7 @@ function GeneralSettings() {
 
       // 导航可见性
       const visibilityMap: Record<string, boolean> = {};
-      for (const p of ["/hardware", "/tools", "/builtin-tools", "/optimization", "/music", "/custom"]) {
+      for (const p of ["/hardware", "/builtin-tools", "/optimization", "/music", "/custom"]) {
         const key = `neobox_nav_visible_${p.replace(/\//g, "").replace(/-/g, "_")}`;
         let vis = await store.get<boolean>(key);
         if (vis === null || vis === undefined) {
@@ -397,10 +397,10 @@ function GeneralSettings() {
       setNavVisibility(visibilityMap);
 
       // 导航栏排序
-      let orderStr = await store.get<string>("neobox_nav_order");
+      const orderStr = await store.get<string>("neobox_nav_order");
       if (orderStr) {
         try {
-          const parsed = JSON.parse(orderStr) as string[];
+          const parsed = (JSON.parse(orderStr) as string[]).filter((p) => defaultNavOrder.includes(p));
           let changed = false;
           for (const p of defaultNavOrder) {
             if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -416,7 +416,7 @@ function GeneralSettings() {
         const ls = localStorage.getItem(NAV_ORDER_KEY);
         if (ls) {
           try {
-            const parsed = JSON.parse(ls) as string[];
+            const parsed = (JSON.parse(ls) as string[]).filter((p) => defaultNavOrder.includes(p));
             let changed = false;
             for (const p of defaultNavOrder) {
               if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -1136,9 +1136,6 @@ function GeneralSettings() {
                     "/builtin-tools": t("sidebar.builtinTools"),
                     "/optimization": t("sidebar.optimization"),
                     "/music": t("sidebar.music"),
-                    "/delta-force": t("sidebar.deltaForce"),
-                    "/steam": t("sidebar.steam"),
-                    "/epic-free": t("sidebar.epicFree"),
                     "/custom": t("sidebar.custom"),
                   };
                   return (

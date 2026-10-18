@@ -1,18 +1,10 @@
 # Dependencies
 node_modules/
 
-# Next.js
-.next/
-out/
-
 # Tauri / Rust
 src-tauri/target/
 installer/src-tauri/target/
 uninstaller/src-tauri/target/
-
-# C#（传感器服务位于 tools/ 根目录，与 csproj 同级）
-tools/bin/
-tools/obj/
 
 # Monitor C# 项目编译输出（net48，输出与源码同级）
 monitor/bin/
@@ -53,7 +45,6 @@ query
 Output/
 # 忽略构建产物 exe，但保留 src-tauri 资源目录下随包分发的工具 exe
 *.exe
-!src-tauri/resources/binaries/icc-tools/*.exe
 !src-tauri/resources/binaries/*.exe
 !src-tauri/resources/binaries/fxvad/*.exe
 *.zip
@@ -82,14 +73,6 @@ src-tauri/src-tauri.zip
 # Joycode
 .joycode/
 
-# Husky
-.husky/
-
-# Third-party executables
-nvidiaProfileInspector.exe
-Reference.xml
-nvidiaProfileInspector.exe.config
-
 # OpenCode
 .opencode/
 
@@ -114,24 +97,16 @@ NexBox-Android/FlClash-main/
 
 # Build output (frontend)
 dist/
+artifacts/
+
+# Tauri 生成的 capability schema（构建时自动重建，不入库）
+installer/src-tauri/gen/
+uninstaller/src-tauri/gen/
 
 # Resources（本地资源纳入版本库，防止误删丢失）
 
 # 排除的文件
-1.icc
 软件介绍.md
-社区滤镜A.icc
-原亮 冷色调.icc
-Delta Force.nip
-MCTier技术介绍.md
-
-# 三角洲行动ICC色彩配置文件（本地资源，不随仓库分发）
-三角洲推荐A.icc
-三角洲推荐B.icc
-三角洲推荐C.icc
-三角洲推荐D.icc
-三角洲推荐E.icc
-三角洲超级推荐.icc
 
 debug.log
 .temp_old_filter.rs
@@ -167,9 +142,6 @@ NotoSerifSC-900.woff2
 # 临时调试测试文件
 src-tauri/reg_test.pdb
 src-tauri/reg_test.rs
-
-# 社区工具插件独立仓库（单独推送到 gitcode.com/MuLiuSaMa/NexBox-Tools，不随主程序提交）
-NexBox-Tools/
 
 # FreeBuff 内部工具工作副本（含完整仓库嵌套，不随主程序提交）
 .freebuff/

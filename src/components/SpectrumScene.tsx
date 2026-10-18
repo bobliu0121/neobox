@@ -866,7 +866,7 @@ export default function SpectrumScene({ audioRef, isPlaying, coverColor, active 
     // active=false：释放 WebGL 场景（renderer.dispose + forceContextLoss）
     sceneCleanupRef.current?.();
     sceneCleanupRef.current = null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [active]);
 
   return (

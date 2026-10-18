@@ -52,30 +52,11 @@ interface OverlaySettings {
   vertical_position_y?: number | null;
 }
 
-interface ThirdPartyTool {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  tool_type: string;
-  download_url: string;
-  file_name: string;
-  website_url: string | null;
-  check_executable: string | null;
-}
-
-interface ToolWithStatus {
-  tool: ThirdPartyTool;
-  installed: boolean;
-}
-
 interface AppStartupContextType {
   isStartupComplete: boolean;
   startupProgress: number;
   startupMessage: string;
   hardwareInfo: HardwareInfo | null;
-  tools: ThirdPartyTool[];
-  initTools: () => Promise<void>;
   overlaySettings: OverlaySettings | null;
   saveOverlaySettings: (settings: OverlaySettings) => Promise<void>;
   overlayHotkey: string;
@@ -163,8 +144,6 @@ const AppStartupContext = createContext<AppStartupContextType>({
   startupProgress: 0,
   startupMessage: "正在启动...",
   hardwareInfo: null,
-  tools: [],
-  initTools: async () => {},
   overlaySettings: null,
   saveOverlaySettings: async () => {},
   overlayHotkey: DEFAULT_OVERLAY_HOTKEY,
@@ -202,7 +181,6 @@ export function AppStartupProvider({ children }: { children: ReactNode }) {
   const [startupProgress, setStartupProgress] = useState(0);
   const [startupMessage, setStartupMessage] = useState("正在启动...");
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
-  const [tools, setTools] = useState<ThirdPartyTool[]>([]);
   const [overlaySettings, setOverlaySettings] = useState<OverlaySettings | null>(null);
   const [overlayHotkey, setOverlayHotkey] = useState(DEFAULT_OVERLAY_HOTKEY);
   const [autoclickerHotkey, setAutoclickerHotkey] = useState(DEFAULT_AUTOCLICKER_HOTKEY);
@@ -237,15 +215,6 @@ export function AppStartupProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to load hardware info:", error);
       return false;
-    }
-  };
-
-  const initTools = async () => {
-    try {
-      const toolsData = await invoke<ThirdPartyTool[]>("get_thirdparty_tools");
-      setTools(toolsData);
-    } catch (error) {
-      console.error("Failed to load tools:", error);
     }
   };
 
@@ -817,7 +786,7 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
     runStartup();
 
     return () => {};
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   return (
@@ -827,8 +796,6 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
         startupProgress,
         startupMessage,
         hardwareInfo,
-        tools,
-        initTools,
         overlaySettings,
         saveOverlaySettings,
         overlayHotkey,

@@ -4138,7 +4138,7 @@ export default function MusicPage() {
     if (mvVideoRef.current) {
       mvVideoRef.current.volume = mvVolume;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [mvVolume]);
 
   const closeMvPlayer = useCallback(() => {

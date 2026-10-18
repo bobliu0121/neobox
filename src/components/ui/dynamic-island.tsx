@@ -166,7 +166,7 @@ function shortenMessage(text?: string): string | undefined {
   if (!text) return text;
   const t0 = text.trim();
   if (!t0) return t0;
-  let t = t0;
+  const t = t0;
 
   // 0) 盘符前缀：如 "C: 优化(TRIM)完成" → 保留盘符，精简剩余部分 → "C 已优化"
   //    （避免盘符冒号被当成句号截断，导致只显示 "C"）
@@ -1211,13 +1211,13 @@ function MusicIslandContent({ expanded, expandedVisible, foldVisible }: { expand
         )}
         {/* 行3：控制按钮 —— 整宽居中、纯图标（音乐页同套）；右下角另加「打开播放器」跳转按钮 */}
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 26, position: "relative" }}>
-          <ControlButton label="上一曲" onClick={(e) => { e.stopPropagation(); isExternal ? act().externalControl("prev") : act().prevTrack(); }}>
+          <ControlButton label="上一曲" onClick={(e) => { e.stopPropagation(); if (isExternal) act().externalControl("prev"); else act().prevTrack(); }}>
             <MSkipBackIcon size={20} color={titleColor} />
           </ControlButton>
-          <ControlButton label={playing ? "暂停" : "播放"} onClick={(e) => { e.stopPropagation(); isExternal ? act().externalControl("play-pause") : act().togglePlay(); }}>
+          <ControlButton label={playing ? "暂停" : "播放"} onClick={(e) => { e.stopPropagation(); if (isExternal) act().externalControl("play-pause"); else act().togglePlay(); }}>
             {playing ? <MPauseIcon size={22} color={titleColor} /> : <MPlayIcon size={22} color={titleColor} />}
           </ControlButton>
-          <ControlButton label="下一曲" onClick={(e) => { e.stopPropagation(); isExternal ? act().externalControl("next") : act().nextTrack(); }}>
+          <ControlButton label="下一曲" onClick={(e) => { e.stopPropagation(); if (isExternal) act().externalControl("next"); else act().nextTrack(); }}>
             <MSkipForwardIcon size={20} color={titleColor} />
           </ControlButton>
           {!isExternal && (

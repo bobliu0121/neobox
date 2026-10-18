@@ -1,6 +1,6 @@
 [package]
 name = "uninstneobox"
-version = "10.0.0"
+version = "10.2.1"
 description = "NeoBox Uninstaller"
 authors = ["MuLiu"]
 edition = "2021"

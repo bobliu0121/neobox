@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:store": "tsc && vite build --mode store",
+    "build:monitor": "dotnet build monitor/NeoBoxMonitor.csproj -c Release",
+    "build:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable.ps1",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -16,8 +18,7 @@
     "tauri:build": "tauri build",
     "tauri:build:store": "tauri build --config src-tauri/tauri.store.conf.json",
     "msix": "powershell -NoProfile -ExecutionPolicy Bypass -File msix/build-msix.ps1",
-    "msix:install": "powershell -NoProfile -ExecutionPolicy Bypass -File msix/install-msix.ps1",
-    "prepare": "husky"
+    "msix:install": "powershell -NoProfile -ExecutionPolicy Bypass -File msix/install-msix.ps1"
   },
   "dependencies": {
     "@chakra-ui/react": "^2.10.9",
@@ -49,18 +50,18 @@
   },
   "devDependencies": {
     "@emotion/babel-plugin": "^11.13.5",
-    "@eslint/eslintrc": "^3.3.0",
+    "@eslint/js": "^9.39.0",
     "@tauri-apps/cli": "^2.10.1",
     "@types/node": "^22.13.10",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.22.0",
-    "eslint-config-next": "^15.2.4",
-    "husky": "^9.1.7",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
     "prettier": "^3.5.3",
-    "sharp": "^0.35.4",
     "typescript": "^5.8.2",
+    "typescript-eslint": "^8.71.2",
     "vite": "^6.0.11"
   }
 }

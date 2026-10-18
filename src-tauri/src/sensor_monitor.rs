@@ -3,6 +3,7 @@
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::sensor::{read_lhm_sensors, SensorsResponse};
+use crate::webview_args::BROWSER_ARGS;
 
 /// 按需创建传感器监控窗口（不常驻，打开时创建、关闭时销毁）。
 /// 如果窗口已存在，直接返回。
@@ -17,7 +18,7 @@ pub fn ensure_sensor_monitor_window(
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("sensor-monitor".into()))
         .title("NeoBox 传感器监控")
         // 与其它窗口保持一致的 WebView2 参数（禁用 Chromium 自动媒体会话，避免与 smtc.rs 会话重复）
-        .additional_browser_args("--disable-features=MediaSessionService,HardwareMediaKeyHandling,msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeAutofill,msEdgeShopping,msEdgeWallet,CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required --disable-background-networking --disable-client-side-phishing-detection --disable-component-update --disable-default-apps --disable-extensions --disable-sync --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling")
+        .additional_browser_args(BROWSER_ARGS)
         .inner_size(1000.0, 700.0)
         .min_inner_size(600.0, 400.0)
         .resizable(true)

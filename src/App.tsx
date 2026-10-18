@@ -3,7 +3,6 @@ import { Box } from "@chakra-ui/react";
 import { MainLayout } from "./components/ui/main-layout";
 import HomePage from "./pages/HomePage";
 import HardwarePage from "./pages/HardwarePage";
-import ToolsPage from "./pages/ToolsPage";
 import OptimizePage from "./pages/OptimizePage";
 import MemoryLimitPage from "./pages/MemoryLimitPage";
 import MemoryCleanupPage from "./pages/MemoryCleanupPage";
@@ -39,6 +38,7 @@ import NvidiaRecordingPage from "./pages/NvidiaRecordingPage";
 import TimeSyncPage from "./pages/TimeSyncPage";
 import ScreenTestPage from "./pages/ScreenTestPage";
 import WallpaperPage from "./pages/WallpaperPage";
+import WallpaperWindowPage from "./pages/WallpaperWindowPage";
 import BsodLogPage from "./pages/BsodLogPage";
 import ImageConverterPage from "./pages/ImageConverterPage";
 import AudioConverterPage from "./pages/AudioConverterPage";
@@ -56,11 +56,60 @@ import { ImportantAnnouncementModal } from "./components/ImportantAnnouncementMo
 import { DynamicIslandHost } from "./components/ui/dynamic-island";
 import { AccelIslandBridge } from "./components/ui/accel-island-bridge";
 import { IslandRemoteBridge } from "./components/ui/island-remote-bridge";
+import { store } from "./lib/store";
+import {
+  DYNAMIC_WALLPAPER_STORE_KEY,
+  dynamicWallpaperKind,
+  setDynamicWallpaper,
+  type DynamicWallpaperInfo,
+} from "./lib/dynamic-wallpaper";
 
 /** 启动完成后展示一次开屏广告弹窗（ads 为空时不显示任何内容） */
 function StartupAdHost() {
   const { splash } = useAds();
   return <StartupAdModal ads={splash} />;
+}
+
+/**
+ * 仅主窗口需要执行的启动副作用。
+ *
+ * 放在独立组件里而不是 App 内部：App 对各个独立窗口有早返回，
+ * 主窗口专用的 Hook 如果写在早返回之后会违反 Hooks 调用顺序。
+ */
+function MainWindowEffects() {
+  // 开机自启(--autostart)模式：后端已离屏预热加载本窗口，前端初始化完成后隐藏到托盘，
+  // 复用 minimize_to_tray 正确更新后端可见性并触发 EcoQoS。
+  useEffect(() => {
+    (async () => {
+      try {
+        const autostart = await invoke<boolean>("is_autostart_mode");
+        if (autostart) await invoke("minimize_to_tray");
+      } catch (e) {
+        console.error("autostart hide check failed:", e);
+      }
+    })();
+  }, []);
+
+  // 恢复上次使用的动态壁纸（GIF / HTML）。延迟到启动流程稳定后再创建置底窗口，
+  // 避免与开屏动画/主窗口首帧抢 WebView2 资源。
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const saved = await store.get<DynamicWallpaperInfo>(DYNAMIC_WALLPAPER_STORE_KEY);
+        if (cancelled || !saved?.path || !dynamicWallpaperKind(saved.path)) return;
+        await setDynamicWallpaper(saved.path);
+      } catch (e) {
+        console.error("恢复动态壁纸失败:", e);
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  return null;
 }
 
 function App() {
@@ -89,35 +138,23 @@ function App() {
     return <SensorMonitorPage />;
   }
 
-  // 开机自启(--autostart)模式：后端已离屏预热加载本窗口，前端初始化完成后隐藏到托盘，
-  // 复用 minimize_to_tray 正确更新后端可见性并触发 EcoQoS。
-  useEffect(() => {
-    (async () => {
-      try {
-        const autostart = await invoke<boolean>("is_autostart_mode");
-        if (autostart) await invoke("minimize_to_tray");
-      } catch (e) {
-        console.error("autostart hide check failed:", e);
-      }
-    })();
-  }, []);
+  // Dynamic wallpaper window: standalone, transparent, no main layout
+  if (location.pathname === "/wallpaper-window") {
+    return <WallpaperWindowPage />;
+  }
 
   return (
     <MusicProvider>
       <>
+        <MainWindowEffects />
         {!isStartupComplete && <SplashScreen />}
         {isStartupComplete && <StartupAdHost />}
-        {/* <MiniMusicPlayer /> */}
         <MainLayout>
           {/* 主页常驻挂载：路由切换只隐藏、不卸载，避免每次回到主页重新加载硬件信息与快捷启动 */}
           <Box display={location.pathname === "/" ? "block" : "none"}>
             <HomePage />
           </Box>
-          {/* 工具页常驻挂载：路由切换只隐藏、不卸载，避免每次进入工具页时各栏目（官方/社区/第三方）重新加载 */}
-          <Box display={location.pathname === "/tools" ? "block" : "none"}>
-            <ToolsPage />
-          </Box>
-          {location.pathname !== "/" && location.pathname !== "/tools" && (
+          {location.pathname !== "/" && (
               <Routes location={location}>
                   <Route
                     path="/hardware"

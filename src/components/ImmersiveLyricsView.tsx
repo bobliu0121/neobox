@@ -2,7 +2,7 @@
  * 沉浸式歌词可视化视图（WAVE 动感波光）
  *
  * 歌词双层 DOM：
- * - 前景主歌词：完整当前句，亮色居中可读（字体 NotoSerifSC-900，字号跟随窗口）
+ * - 前景主歌词：完整当前句，亮色居中可读（宋体/衬线字体，字号跟随窗口）
  * - 背景重影层：前几个字放大、中性灰、居于前景正后方
  * 入场动画按文本长度分支（短词旋转+模糊变清晰；长词字间距收缩），
  * 出场只做高斯模糊拉高 + 透明度淡出；旧句退场与新句入场并行播放，
@@ -27,8 +27,8 @@ const ENTER_MS = 860;
 // 提前量（ms）：距下一句开始不足该值时提前入场，既保证演唱时歌词就位，
 // 又让入场动画的后半段在演唱开始时依然可见（不会在幕后悄悄完成）
 const LEAD_MS = 350;
-// 歌词字体（index.css 中注册）
-const LYRIC_FONT = "NotoSerifSC-900";
+// 歌词字体（index.css 中注册；系统缺少该字体时回退到宋体/衬线字体）
+const LYRIC_FONT = '"NotoSerifSC-900", "Songti SC", "SimSun", serif';
 
 type Phase = "enter" | "hold" | "exit";
 
@@ -88,7 +88,7 @@ function splitIntoLines(text: string): string[] {
   // 多句：贪心分两行，尽量均衡（第二行承接剩余所有句子）
   const totalLen = t.replace(/\s/g, "").length;
   const half = totalLen / 2;
-  let line1: string[] = [];
+  const line1: string[] = [];
   let acc = 0;
   for (const s of sentences) {
     const sz = s.replace(/\s/g, "").length;
@@ -258,7 +258,7 @@ function ImmersiveLyricsViewInner({
     }, EXIT_MS);
 
     startEnter(activeIndex);
-  }, [activeIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeIndex]);
 
   // ── 颜色与字号派生 ──
   const isLightText = coverColor.isLight;

@@ -19,13 +19,13 @@ param(
     [switch]$Diagnostic,
     # 诊断模式下额外保留的条目，逗号分隔字符串（如 "monitor,resources"），用于增量二分
     [string]$OnlyAdd = "",
-    # 通用剔除：从 staging 移除的相对路径，逗号分隔。默认剔除 icc-tools（触发微软商店审核/预处理不过）
-    [string]$RemoveFromStaging = "resources/binaries/icc-tools"
+    # 通用剔除：从 staging 移除的相对路径，逗号分隔；默认不剔除任何内容
+    [string]$RemoveFromStaging = ""
 )
 
 $ErrorActionPreference = "Stop"
-$Root = "D:\NeoBox"
-$WorkDir = "$Root\msix"
+$Root = Split-Path -Parent $PSScriptRoot
+$WorkDir = $PSScriptRoot
 $Staging = "$WorkDir\staging"
 $PayloadZip = "$Root\installer\src-tauri\payload.zip"
 $IconsDir = "$Root\src-tauri\icons"
@@ -68,7 +68,7 @@ if ($Diagnostic) {
     Remove-Item $tmpAll -Recurse -Force
     Write-Host "  [DIAG] 基线=neobox.exe, 额外保留: $($OnlyAdd -join ', ')"
 }
-# 通用剔除：从 staging 移除指定相对路径（正常/诊断模式均生效），如 icc-tools 等触发商店预处理 5001 的文件
+# 通用剔除：从 staging 移除指定相对路径（正常/诊断模式均生效），用于排查商店预处理问题
 foreach ($rm in ($RemoveFromStaging -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
     $rp = Join-Path $Staging $rm
     if (Test-Path $rp) { Remove-Item $rp -Recurse -Force; Write-Host "  [EXCLUDE] 已剔除: $rm" }

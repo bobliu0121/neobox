@@ -31,10 +31,13 @@
   font-display: swap;
 }
 
-/* 思源宋体 Heavy（沉浸式歌词专用） */
+/* 思源宋体 Heavy（沉浸式歌词专用）
+   仓库不内置该字体（单文件体积过大），优先使用系统已安装的同类字体；
+   未安装时由使用处的 font-family 回退列表接管。 */
 @font-face {
   font-family: "NotoSerifSC-900";
-  src: url("/fonts/NotoSerifSC-900.woff2") format("woff2");
+  src: local("Noto Serif CJK SC Black"), local("Noto Serif SC Black"),
+    local("Source Han Serif SC Heavy"), local("STSong");
   font-weight: 900;
   font-style: normal;
   font-display: swap;
@@ -333,3 +336,20 @@ input.lyrics-vol-slider::-webkit-slider-thumb {
   cursor: pointer;
 }
 
+/* ============================================================
+   动态壁纸窗口（GIF / HTML）
+   壁纸窗口是“透明置底窗口”：所有页面层级必须完全透明，
+   否则 :root 的 #242424 会被 WebView2 画成不透明黑底，看起来
+   就像动态壁纸渲染失败。也禁止滚动条/回弹影响整屏铺满。
+   ============================================================ */
+html.wallpaper-window,
+html.wallpaper-window body,
+html.wallpaper-window #root {
+  background: transparent !important;
+  color-scheme: normal;
+  overflow: hidden !important;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}

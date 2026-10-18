@@ -1,13 +1,11 @@
 import {
   Home,
   Cpu,
-  Wrench,
   List,
   Package,
   TrendingUp,
   Settings,
   Layout,
-  Zap,
   MousePointer2,
   MousePointerClick,
   Monitor,
@@ -22,16 +20,8 @@ import {
   Music,
   HardDrive,
   Settings2,
-  Thermometer,
-  Activity,
-  Eraser,
-  Search,
-  Scissors,
   Boxes,
   Braces,
-  PieChart,
-  Archive,
-  LineChart,
   ShieldCheck,
   FlaskConical,
   Clock,
@@ -39,9 +29,8 @@ import {
   ScrollText,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import { IS_STORE_BUILD } from "@/lib/build-flags";
 
-export type SearchCategory = "page" | "builtin-tool" | "optimization" | "thirdparty-tool";
+export type SearchCategory = "page" | "builtin-tool" | "optimization";
 
 export interface SearchItem {
   id: string;
@@ -51,8 +40,6 @@ export interface SearchItem {
   category: SearchCategory;
   keywords?: string[];
   customIcon?: string;
-  action?: "navigate" | "run-tool";
-  toolId?: string;
 }
 
 export const searchIndex: SearchItem[] = [
@@ -72,19 +59,6 @@ export const searchIndex: SearchItem[] = [
     category: "page",
     keywords: ["硬件", "信息", "hardware", "cpu", "gpu", "显卡", "处理器"],
   },
-  // 商店版不索引工具箱（其全部栏目均为第三方软件获取入口）
-  ...(IS_STORE_BUILD
-    ? []
-    : [
-        {
-          id: "tools",
-          nameKey: "sidebar.tools",
-          path: "/tools",
-          icon: Wrench,
-          category: "page" as const,
-          keywords: ["工具", "tools", "工具箱"],
-        },
-      ]),
   {
     id: "builtin-tools",
     nameKey: "sidebar.builtinTools",
@@ -327,43 +301,10 @@ export const searchIndex: SearchItem[] = [
   },
 ];
 
-export const thirdPartyToolIcons: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
-  "memreduct": Zap,
-  "windows-core-optimizer": Cpu,
-  "optimizer": TrendingUp,
-  "cpu-z": Cpu,
-  "gpu-z": Monitor,
-  "fxsound": Volume2,
-  "process-lasso": Cpu,
-  "hwinfo": Cpu,
-  "crystaldiskinfo": HardDrive,
-  "core-temp": Thermometer,
-  "aida64": Activity,
-  "ddu": Eraser,
-  "everything": Search,
-  "dismpp": Settings2,
-  "snipaste": Scissors,
-  "powertoys": Boxes,
-  "wiztree": PieChart,
-  "7zip": Archive,
-  "trafficmonitor": Gauge,
-  "rtss": LineChart,
-};
-
-export function getThirdPartyToolIcon(toolId: string): ComponentType<{ size?: number; strokeWidth?: number }> {
-  return thirdPartyToolIcons[toolId] || Wrench;
-}
-
 export const categoryLabels: Record<SearchCategory, string> = {
   "page": "search.categories.pages",
   "builtin-tool": "search.categories.builtinTools",
   "optimization": "search.categories.optimization",
-  "thirdparty-tool": "search.categories.thirdpartyTools",
 };
 
-export const categoryOrder: SearchCategory[] = [
-  "page",
-  "builtin-tool",
-  "optimization",
-  "thirdparty-tool",
-];
+export const categoryOrder: SearchCategory[] = ["page", "builtin-tool", "optimization"];

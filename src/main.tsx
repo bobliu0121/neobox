@@ -61,8 +61,6 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
           return "zh";
         case "get_hardware":
           return null;
-        case "get_thirdparty_tools":
-          return [];
         case "update_overlay_settings":
         case "set_overlay_hotkey":
         case "minimize_to_tray":
@@ -76,6 +74,17 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
           return;
         case "download_update":
           return "downloaded.exe";
+        case "get_current_wallpaper":
+        case "get_dynamic_wallpaper":
+          return null;
+        case "set_dynamic_wallpaper": {
+          const a = args as Record<string, unknown>;
+          return { kind: "gif", path: (a.path as string) ?? "" };
+        }
+        case "set_wallpaper":
+        case "stop_dynamic_wallpaper":
+        case "wallpaper_window_ready":
+          return;
         default:
           if (cmd.startsWith("plugin:")) return;
           console.warn("[Tauri Mock] Unhandled command:", cmd, args);

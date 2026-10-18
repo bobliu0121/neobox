@@ -11,7 +11,8 @@
     "migu-login",
     "desktop-lyrics",
     "vertical-overlay",
-    "dynamic-island"
+    "dynamic-island",
+    "wallpaper-window"
   ],
   "permissions": [
     "core:default",

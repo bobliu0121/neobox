@@ -117,7 +117,7 @@ function KaraokeLyricLineInner({
       audioRef.removeEventListener("play", onPlay);
       audioRef.removeEventListener("pause", onPause);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [isActive, line, nextLine, scrollNeeded, audioRef]);
 
   // ── 非当前行：简单显示 ──
