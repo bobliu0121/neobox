@@ -35,6 +35,8 @@ pub struct LocalSongInfo {
     pub cover_source: String,
     /// 是否存在同目录的同名歌词文件（.lrc 优先，回退 .txt）
     pub has_lyric: bool,
+    /// 实际用于播放的文件路径（MKA 会解封装为缓存音频；其它格式与 path 相同）
+    pub play_path: String,
 }
 
 /// 封面缓存目录：应用缓存目录下的 covers 子目录
@@ -45,6 +47,17 @@ fn cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("无法获取应用缓存目录: {e}"))?
         .join("covers");
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建封面缓存目录: {e}"))?;
+    Ok(dir)
+}
+
+/// 播放缓存目录：MKA 解封装出的音频放在这里（应用缓存目录下的 playback 子目录）
+fn play_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("无法获取应用缓存目录: {e}"))?
+        .join("playback");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建播放缓存目录: {e}"))?;
     Ok(dir)
 }
 
@@ -219,8 +232,8 @@ fn read_audio_metadata(
 }
 
 /// 支持的本地音频扩展名
-pub const SUPPORTED_AUDIO_EXTENSIONS: [&str; 11] = [
-    "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga",
+pub const SUPPORTED_AUDIO_EXTENSIONS: [&str; 12] = [
+    "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka",
 ];
 
 /// 检查某个扩展名是否受支持（传入时已去掉点号并小写）
@@ -372,11 +385,26 @@ pub async fn get_music_files() -> Result<Vec<MusicFile>, String> {
     Ok(files)
 }
 
+/// MKA 播放缓存键：路径 + 大小 + 修改时间，文件变化后自动失效。
+fn playback_cache_key(path: &Path, id: &str) -> String {
+    let size = std::fs::metadata(path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let mtime = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    format!("{:016x}", stable_hash(&format!("{id}|{size}|{mtime}|mka")))
+}
+
 /// 读取单个音频文件的元信息并组装成 LocalSongInfo（供并行导入使用）。
 fn build_local_song_info(
     raw_path: &str,
     folder_cover_cache: &mut HashMap<PathBuf, String>,
     cache_dir: Option<&Path>,
+    play_cache_dir: Option<&Path>,
 ) -> Option<LocalSongInfo> {
     let path = Path::new(raw_path);
     if !path.is_file() {
@@ -416,8 +444,64 @@ fn build_local_song_info(
     };
 
     // 读取内嵌元数据（标题/艺术家/专辑/时长/封面）
-    let (title, artist, album, duration_ms, cover_path, cover_source) =
+    let (title, artist, album, mut duration_ms, mut cover_path, mut cover_source) =
         read_audio_metadata(path, folder_cover_cache, cache_dir, &id);
+
+    // MKA：Matroska 容器无法被 WebView 直接播放，也不被 lofty 识别；
+    // 解封装出音轨写入缓存，播放时使用缓存文件。
+    let mut play_path = raw_path.to_string();
+    let mut has_lyric = find_local_lyric_path(path).is_some();
+    if extension == "mka" {
+        if let Some(play_dir) = play_cache_dir {
+            let cache_key = playback_cache_key(path, &id);
+            let mut cached = None;
+            for ext in ["m4a", "aac", "mp3", "flac", "wav"] {
+                let candidate = play_dir.join(format!("{cache_key}.{ext}"));
+                if candidate.is_file() {
+                    cached = Some(candidate.to_string_lossy().to_string());
+                    break;
+                }
+            }
+            match cached {
+                Some(cached_path) => {
+                    play_path = cached_path;
+                    if play_dir.join(format!("{cache_key}.lrc")).is_file() {
+                        has_lyric = true;
+                    }
+                    if cover_path.is_empty() {
+                        for ext in ["jpg", "png", "webp", "gif"] {
+                            let candidate = play_dir.join(format!("{cache_key}_cover.{ext}"));
+                            if candidate.is_file() {
+                                cover_path = candidate.to_string_lossy().to_string();
+                                cover_source = "embedded".to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                None => match crate::matroska::extract_playable_audio(raw_path, play_dir, &cache_key) {
+                    Ok((cached_path, mka_cover, mka_duration)) => {
+                        play_path = cached_path;
+                        if play_dir.join(format!("{cache_key}.lrc")).is_file() {
+                            has_lyric = true;
+                        }
+                        if duration_ms == 0 && mka_duration > 0 {
+                            duration_ms = mka_duration;
+                        }
+                        if cover_path.is_empty() {
+                            if let Some(mka_cover) = mka_cover {
+                                cover_path = mka_cover;
+                                cover_source = "embedded".to_string();
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("[Music] 解析 MKA 失败 {}: {error}", path.display());
+                    }
+                },
+            }
+        }
+    }
 
     Some(LocalSongInfo {
         id,
@@ -431,8 +515,9 @@ fn build_local_song_info(
         duration_ms,
         cover_path,
         cover_source,
-        // 是否存在同目录同名歌词文件（.lrc 优先，回退 .txt）
-        has_lyric: find_local_lyric_path(path).is_some(),
+        // 是否存在歌词：同目录 .lrc/.txt，或 MKA 内嵌字幕
+        has_lyric,
+        play_path,
     })
 }
 
@@ -449,6 +534,8 @@ pub async fn import_local_music(app: AppHandle, paths: Vec<String>) -> Result<Ve
 
     // 封面缓存目录；获取失败时降级为不提取封面（不阻塞导入主流程）
     let cache_dir = cover_cache_dir(&app).ok();
+    // MKA 播放缓存目录
+    let play_dir = play_cache_dir(&app).ok();
 
     // 共享的同目录封面缓存：目录 → 封面缓存文件路径
     let folder_cover_cache: Arc<Mutex<HashMap<PathBuf, String>>> =
@@ -470,11 +557,14 @@ pub async fn import_local_music(app: AppHandle, paths: Vec<String>) -> Result<Ve
             let tx = tx.clone();
             let folder_cover_cache = Arc::clone(&folder_cover_cache);
             let cache_dir = cache_dir.as_deref();
+            let play_dir = play_dir.as_deref();
             let done = &done;
             scope.spawn(move || {
                 let mut local_cache = HashMap::new();
                 for raw_path in chunk {
-                    if let Some(info) = build_local_song_info(&raw_path, &mut local_cache, cache_dir) {
+                    if let Some(info) =
+                        build_local_song_info(&raw_path, &mut local_cache, cache_dir, play_dir)
+                    {
                         let _ = tx.send(info);
                     }
                     let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -506,15 +596,18 @@ pub async fn import_local_music(app: AppHandle, paths: Vec<String>) -> Result<Ve
     Ok(infos)
 }
 
-/// 递归收集文件夹下所有受支持的音频文件路径
-fn collect_audio_files(dir: &std::path::Path, out: &mut Vec<String>) {
+/// 收集文件夹下受支持的音频文件路径。
+/// `recursive` 为 false 时只收集当前目录，不进入子文件夹。
+fn collect_audio_files(dir: &std::path::Path, out: &mut Vec<String>, recursive: bool) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_audio_files(&path, out);
+            if recursive {
+                collect_audio_files(&path, out, true);
+            }
         } else if path.is_file() {
             let ext = path
                 .extension()
@@ -528,11 +621,20 @@ fn collect_audio_files(dir: &std::path::Path, out: &mut Vec<String>) {
     }
 }
 
-/// 导入整个文件夹（递归）下的音频文件：收集文件后复用单文件导入逻辑
+/// 导入文件夹下的音频文件。
+/// `recursive` 缺省为 true（兼容旧调用）；false 时仅导入当前文件夹。
 #[tauri::command]
-pub async fn import_local_music_folder(app: AppHandle, folder: String) -> Result<Vec<LocalSongInfo>, String> {
+pub async fn import_local_music_folder(
+    app: AppHandle,
+    folder: String,
+    recursive: Option<bool>,
+) -> Result<Vec<LocalSongInfo>, String> {
     let mut paths = Vec::new();
-    collect_audio_files(Path::new(&folder), &mut paths);
+    collect_audio_files(
+        Path::new(&folder),
+        &mut paths,
+        recursive.unwrap_or(true),
+    );
     import_local_music(app, paths).await
 }
 
@@ -550,16 +652,43 @@ fn find_local_lyric_path(audio_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// 读取本地音频文件同目录的同名 .lrc 歌词文件。
-/// 优先级：同名 .lrc → 同名 .txt（文本歌词）。
+/// 读取本地音频文件的歌词。
+/// 优先级：同目录同名 .lrc → 同名 .txt → MKA 内嵌字幕（转换为 LRC）。
 /// 返回原始歌词文本，若不存在返回空字符串。
 #[tauri::command]
-pub async fn get_local_lyric(path: String) -> Result<String, String> {
+pub async fn get_local_lyric(app: AppHandle, path: String) -> Result<String, String> {
     let audio_path = std::path::Path::new(&path);
-    let Some(candidate) = find_local_lyric_path(audio_path) else {
+    if let Some(candidate) = find_local_lyric_path(audio_path) {
+        return Ok(std::fs::read_to_string(&candidate).unwrap_or_default());
+    }
+
+    let extension = audio_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if extension != "mka" {
         return Ok(String::new());
-    };
-    Ok(std::fs::read_to_string(&candidate).unwrap_or_default())
+    }
+
+    // MKA：优先读取导入时写好的字幕 LRC 缓存，避免每次切歌都解析整个容器
+    if let Ok(play_dir) = play_cache_dir(&app) {
+        let id = std::fs::canonicalize(audio_path)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.clone());
+        let cache_key = playback_cache_key(audio_path, &id);
+        let cached_lrc = play_dir.join(format!("{cache_key}.lrc"));
+        if cached_lrc.is_file() {
+            return Ok(std::fs::read_to_string(&cached_lrc).unwrap_or_default());
+        }
+        let lrc = crate::matroska::subtitle_lrc_from_path(&path)?;
+        if !lrc.is_empty() {
+            let _ = std::fs::write(&cached_lrc, &lrc);
+        }
+        return Ok(lrc);
+    }
+
+    crate::matroska::subtitle_lrc_from_path(&path)
 }
 
 /// 封面自愈检查请求项：id 为歌曲唯一标识（决定缓存文件名），path 为音频绝对路径，
@@ -670,9 +799,16 @@ pub async fn verify_local_covers(
 #[tauri::command]
 pub async fn delete_cover_cache_files(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
     let cache_dir = cover_cache_dir(&app)?;
+    // MKA 的封面写在播放缓存目录，同样允许清理
+    let playback_dir = play_cache_dir(&app).ok();
     for raw in paths {
         let path = Path::new(&raw);
-        if path.parent().map(|p| p == cache_dir).unwrap_or(false) && path.is_file() {
+        let allowed = path.parent().map(|p| p == cache_dir).unwrap_or(false)
+            || playback_dir
+                .as_deref()
+                .map(|dir| path.parent() == Some(dir))
+                .unwrap_or(false);
+        if allowed && path.is_file() {
             let _ = std::fs::remove_file(path);
         }
     }

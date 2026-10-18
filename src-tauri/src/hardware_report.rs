@@ -382,7 +382,7 @@ fn generate_html_report(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>新境盒硬件监控报告</title>
+<title>NeoBox 硬件监控报告</title>
 <style>
 :root {
     --bg-primary: #0a0a0a;

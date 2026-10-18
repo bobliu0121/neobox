@@ -35,6 +35,7 @@ import {
   Switch,
   SimpleGrid,
   Progress,
+  Badge,
   Drawer,
   DrawerOverlay,
   DrawerContent,
@@ -79,6 +80,7 @@ import {
   Trash2,
   FolderOpen,
   FolderPlus,
+  Folder,
   FileMusic,
   HeartPulse,
   ListPlus,
@@ -94,7 +96,7 @@ import {
 } from "lucide-react";
 import { useMusicStore, coverProxyUrl, stopTimeSync } from "@/stores/music-store";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
-import type { Song, Playlist, Artist, MusicComment, Album, Mv, MusicProvider, PlayHistoryEntry } from "@/types/music";
+import type { Song, Playlist, Artist, MusicComment, Album, Mv, MusicProvider, PlayHistoryEntry, LocalMusicFolder } from "@/types/music";
 import { MusicLoginSection } from "@/components/MusicLoginSection";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
@@ -3988,6 +3990,7 @@ export default function MusicPage() {
   const searchResults = useMusicStore((s) => s.searchResults);
   const userPlaylists = useMusicStore((s) => s.userPlaylists);
   const localSongs = useMusicStore((s) => s.localSongs);
+  const localFolders = useMusicStore((s) => s.localFolders);
   // 持久化播放历史（最近在前）：左侧「播放历史」入口卡片与列表共用
   const playHistoryList = useMusicStore((s) => s.playHistoryList);
   const importingLocal = useMusicStore((s) => s.importingLocal);
@@ -4074,6 +4077,9 @@ export default function MusicPage() {
   const [searchTab, setSearchTab] = useState<"songs" | "playlists" | "artists">("songs");
   const previousViewRef = useRef<typeof viewMode>("main");
   const [leftPanelView, setLeftPanelView] = useState<"playlists" | "tracks" | "local" | "history">("playlists");
+  // 本地音乐视图：当前选中的导入文件夹（null = 全部）+ 本地搜索关键词
+  const [localFolderId, setLocalFolderId] = useState<string | null>(null);
+  const [localKeyword, setLocalKeyword] = useState("");
   const [rightPanelView, setRightPanelView] = useState<"recommendations" | "tracks" | "daily">("recommendations");
   // 左侧「我的歌单」曲目视图的歌单内搜索关键词（空 = 不筛选）
   const [playlistKeyword, setPlaylistKeyword] = useState("");
@@ -4413,7 +4419,7 @@ setPlaylistKeyword("");
         filters: [
           {
             name: "音频文件",
-            extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga"],
+            extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka"],
           },
         ],
       });
@@ -4442,18 +4448,18 @@ setPlaylistKeyword("");
     }
   }, [storeActions, toast]);
 
-  // ── 导入本地歌曲文件夹（递归） ──
-  const handleImportLocalFolder = useCallback(async () => {
+  // ── 导入本地歌曲文件夹（recursive=false 仅当前文件夹，true 含子文件夹） ──
+  const handleImportLocalFolder = useCallback(async (recursive: boolean) => {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "导入本地歌曲文件夹",
+        title: recursive ? "导入文件夹及子文件夹中的音频" : "仅导入当前文件夹中的音频",
       });
       if (!selected) return;
       const folder = Array.isArray(selected) ? selected[0] : selected;
       if (!folder) return;
-      const result = await storeActions.importLocalFolder(folder);
+      const result = await storeActions.importLocalFolder(folder, recursive);
       if (result.count > 0) {
         const noCover = result.noCoverCount > 0
           ? `，${result.noCoverCount} 首未检测到封面`
@@ -4465,6 +4471,7 @@ setPlaylistKeyword("");
           duration: 3000,
           isClosable: true,
         });
+        setLocalFolderId(folder);
         setLeftPanelView("local");
       } else {
         toast({ title: "导入失败", description: "该文件夹下未找到支持的音频文件", status: "warning", duration: 2500, isClosable: true });
@@ -4474,6 +4481,33 @@ setPlaylistKeyword("");
       toast({ title: "导入失败", description: String(e) || "打开文件夹失败", status: "error", duration: 2500, isClosable: true });
     }
   }, [storeActions, toast]);
+
+  const handleRemoveLocalFolder = useCallback((folder: LocalMusicFolder) => {
+    storeActions.removeLocalFolder(folder.id);
+    setLocalFolderId((current) => (current === folder.id ? null : current));
+    toast({ title: "已移除文件夹", description: `${folder.name} 下的歌曲已从歌库移除`, status: "info", duration: 2200, isClosable: true });
+  }, [storeActions, toast]);
+
+  // 本地音乐视图：按文件夹 + 关键词筛选
+  const localViewSongs = useMemo(() => {
+    const keyword = localKeyword.trim().toLowerCase();
+    return localSongs.filter((song) => {
+      if (localFolderId && song._localFolderId !== localFolderId) return false;
+      if (!keyword) return true;
+      return `${song.name} ${song.artist} ${song.album}`.toLowerCase().includes(keyword);
+    });
+  }, [localSongs, localFolderId, localKeyword]);
+
+  const localFolderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const song of localSongs) {
+      if (!song._localFolderId) continue;
+      counts.set(song._localFolderId, (counts.get(song._localFolderId) ?? 0) + 1);
+    }
+    return counts;
+  }, [localSongs]);
+
+  const activeLocalFolder = localFolders.find((folder) => folder.id === localFolderId) ?? null;
 
   // ── 点击本地歌曲：播放 ──
   const handleLocalPlay = useCallback((song: Song) => {
@@ -6097,7 +6131,7 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
           ) : leftPanelView === "local" ? (
             <>
               {/* 本地歌曲视图 */}
-              <HStack spacing={2} mb={3} flexShrink={0}>
+              <HStack spacing={2} mb={2} flexShrink={0} flexWrap="wrap">
                 <Tooltip label="返回歌单列表">
                   <IconButton
                     aria-label="Back"
@@ -6109,11 +6143,16 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                   />
                 </Tooltip>
                 <Text fontSize="sm" fontWeight="bold" color={textColor} noOfLines={1}>
-                  本地音乐
+                  {activeLocalFolder ? activeLocalFolder.name : "本地音乐"}
                 </Text>
                 <Text color={subTextColor} fontSize="xs" flexShrink={0}>
-                  ({localSongs.length} 首)
+                  ({localViewSongs.length} 首)
                 </Text>
+                {activeLocalFolder && (
+                  <Badge fontSize="2xs" colorScheme="purple" variant="subtle" flexShrink={0}>
+                    {activeLocalFolder.recursive ? "含子文件夹" : "仅当前文件夹"}
+                  </Badge>
+                )}
                 <Box flex={1} />
                 <Button
                   size="xs"
@@ -6121,14 +6160,14 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                   variant="solid"
                   bg={activeColor}
                   color={contrastText}
-                  isDisabled={localSongs.length === 0}
+                  isDisabled={localViewSongs.length === 0}
                   _hover={{ opacity: 0.9 }}
                   _active={{ transform: "scale(0.97)" }}
-                  onClick={() => playAll(localSongs)}
+                  onClick={() => playAll(localViewSongs)}
                 >
                   播放全部
                 </Button>
-                <Tooltip label="导入本地歌曲">
+                <Tooltip label="导入本地音频文件">
                   <IconButton
                     aria-label="导入本地歌曲"
                     icon={importingLocal ? <Spinner size="xs" /> : <FolderOpen size={15} />}
@@ -6139,14 +6178,25 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                     sx={{ color: activeColor, _hover: { bg: hoverBg } }}
                   />
                 </Tooltip>
-                <Tooltip label="导入歌曲文件夹">
+                <Tooltip label="导入文件夹（仅当前文件夹）">
                   <IconButton
-                    aria-label="导入歌曲文件夹"
+                    aria-label="导入文件夹（仅当前文件夹）"
+                    icon={importingLocal ? <Spinner size="xs" /> : <Folder size={15} />}
+                    size="sm"
+                    variant="ghost"
+                    isDisabled={importingLocal}
+                    onClick={() => handleImportLocalFolder(false)}
+                    sx={{ color: activeColor, _hover: { bg: hoverBg } }}
+                  />
+                </Tooltip>
+                <Tooltip label="导入文件夹及子文件夹">
+                  <IconButton
+                    aria-label="导入文件夹及子文件夹"
                     icon={importingLocal ? <Spinner size="xs" /> : <FolderPlus size={15} />}
                     size="sm"
                     variant="ghost"
                     isDisabled={importingLocal}
-                    onClick={handleImportLocalFolder}
+                    onClick={() => handleImportLocalFolder(true)}
                     sx={{ color: activeColor, _hover: { bg: hoverBg } }}
                   />
                 </Tooltip>
@@ -6163,15 +6213,51 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                   </Tooltip>
                 )}
               </HStack>
+              {/* 本地音乐搜索：按标题 / 艺术家 / 专辑过滤 */}
+              <InputGroup size="sm" mb={2} flexShrink={0}>
+                <InputLeftElement pointerEvents="none">
+                  <Search size={14} style={{ color: subTextColor }} />
+                </InputLeftElement>
+                <Input
+                  placeholder="搜索本地音乐（标题 / 艺术家 / 专辑）"
+                  value={localKeyword}
+                  onChange={(e) => setLocalKeyword(e.target.value)}
+                  borderRadius="md"
+                  focusBorderColor={activeColor}
+                  sx={{
+                    bg: liquidGlassEnabled ? itemActiveBg : "transparent",
+                    borderColor: liquidGlassEnabled ? getBorderColor() : borderColor,
+                    fontSize: "sm",
+                  }}
+                />
+                {localKeyword !== "" && (
+                  <InputRightElement width="2rem">
+                    <IconButton
+                      aria-label="清除本地搜索"
+                      icon={<X size={14} />}
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => setLocalKeyword("")}
+                      sx={{ color: subTextColor, _hover: { bg: hoverBg } }}
+                    />
+                  </InputRightElement>
+                )}
+              </InputGroup>
               <VirtualList
-                items={localSongs}
+                items={localViewSongs}
                 itemHeight={60}
                 renderItem={renderLocalTrackItem}
                 getKey={(song, i) => `local-${song.id}-${i}`}
                 loading={false}
                 loadingText="加载中..."
-                emptyText="暂无本地歌曲，点击右上角导入"
-                resetKey="local"
+                emptyText={
+                  localKeyword.trim()
+                    ? "未找到匹配的本地歌曲"
+                    : activeLocalFolder
+                    ? "该文件夹下暂无已导入的歌曲"
+                    : "暂无本地歌曲，点击右上角导入"
+                }
+                resetKey={`local|${localFolderId ?? "all"}|${localKeyword}`}
                 scrollbarSx={memoScrollbarSx}
               />
             </>
@@ -6236,7 +6322,7 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
           ) : (
             <>
               {/* 顶部：我的音乐（本地导入入口 + 导入按钮，始终显示） */}
-              <HStack spacing={2} mb={2} flexShrink={0}>
+              <HStack spacing={2} mb={2} flexShrink={0} flexWrap="wrap">
                 <ListMusic size={16} color={activeColor} />
                 <Text fontSize="sm" fontWeight="bold" color={textColor} flex={1} noOfLines={1}>
                   我的音乐
@@ -6262,6 +6348,22 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                 </Button>
                 <Button
                   size="xs"
+                  leftIcon={importingLocal ? <Spinner size="xs" /> : <Folder size={14} />}
+                  variant="outline"
+                  flexShrink={0}
+                  borderColor={activeColor}
+                  color={activeColor}
+                  isLoading={importingLocal}
+                  loadingText="导入中..."
+                  isDisabled={importingLocal}
+                  _hover={{ opacity: 0.9 }}
+                  _active={{ transform: "scale(0.97)" }}
+                  onClick={() => handleImportLocalFolder(false)}
+                >
+                  仅当前文件夹
+                </Button>
+                <Button
+                  size="xs"
                   leftIcon={importingLocal ? <Spinner size="xs" /> : <FolderPlus size={14} />}
                   variant="outline"
                   flexShrink={0}
@@ -6272,18 +6374,21 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                   isDisabled={importingLocal}
                   _hover={{ opacity: 0.9 }}
                   _active={{ transform: "scale(0.97)" }}
-                  onClick={handleImportLocalFolder}
+                  onClick={() => handleImportLocalFolder(true)}
                 >
-                  导入文件夹
+                  含子文件夹
                 </Button>
               </HStack>
               <Box
                 p={2}
                 borderRadius="lg"
                 cursor="pointer"
-                mb={3}
+                mb={localFolders.length > 0 ? 1 : 3}
                 _hover={{ bg: liquidGlassEnabled ? hoverBg : itemHoverBg }}
-                onClick={() => setLeftPanelView("local")}
+                onClick={() => {
+                  setLocalFolderId(null);
+                  setLeftPanelView("local");
+                }}
                 transition="background 0.15s"
                 flexShrink={0}
               >
@@ -6305,12 +6410,61 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                       本地导入的歌单
                     </Text>
                     <Text color={subTextColor} fontSize="xs">
-                      {localSongs.length > 0 ? `${localSongs.length} 首歌曲` : "导入本地音频文件"}
+                      {localSongs.length > 0
+                        ? `${localSongs.length} 首歌曲${localFolders.length > 0 ? ` · ${localFolders.length} 个文件夹` : ""}`
+                        : "导入本地音频文件"}
                     </Text>
                   </VStack>
                   <ChevronRight size={16} color={subTextColor} />
                 </HStack>
               </Box>
+              {/* 导入的文件夹：作为「本地导入的歌单」下的子文件夹 */}
+              {localFolders.length > 0 && (
+                <VStack spacing={0.5} align="stretch" mb={3} pl={7} flexShrink={0}>
+                  {localFolders.map((folder) => (
+                    <HStack
+                      key={folder.id}
+                      spacing={2}
+                      py={1}
+                      px={2}
+                      borderRadius="md"
+                      cursor="pointer"
+                      role="group"
+                      _hover={{ bg: liquidGlassEnabled ? hoverBg : itemHoverBg }}
+                      onClick={() => {
+                        setLocalFolderId(folder.id);
+                        setLeftPanelView("local");
+                      }}
+                    >
+                      <Folder size={14} color={activeColor} />
+                      <Text fontSize="xs" color={textColor} noOfLines={1} flex={1} title={folder.path}>
+                        {folder.name}
+                      </Text>
+                      <Text fontSize="2xs" color={subTextColor} flexShrink={0}>
+                        {localFolderCounts.get(folder.id) ?? 0} 首
+                      </Text>
+                      <Badge fontSize="2xs" colorScheme={folder.recursive ? "purple" : "gray"} variant="subtle" flexShrink={0}>
+                        {folder.recursive ? "含子文件夹" : "单层"}
+                      </Badge>
+                      <Tooltip label="移除该文件夹及其中歌曲">
+                        <IconButton
+                          aria-label="移除文件夹"
+                          icon={<X size={12} />}
+                          size="xs"
+                          variant="ghost"
+                          opacity={0}
+                          _groupHover={{ opacity: 1 }}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleRemoveLocalFolder(folder);
+                          }}
+                          sx={{ color: subTextColor, _hover: { color: "#e53e3e", bg: hoverBg } }}
+                        />
+                      </Tooltip>
+                    </HStack>
+                  ))}
+                </VStack>
+              )}
 
               {/* 播放历史入口：不依赖登录，本地播放也会记 */}
               <Box

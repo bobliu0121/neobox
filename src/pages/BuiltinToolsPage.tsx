@@ -25,6 +25,8 @@ import {
   ScrollText,
   Image,
   FileAudio,
+  Clapperboard,
+  Layers,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -36,158 +38,36 @@ import { store } from "@/lib/store";
 import type { ViewItem } from "@/components/special/view-types";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
 
-const STORE_KEY = "neobox_builtin_tools_order";
-const LS_KEY = "neobox_builtin_tools_order";
+const STORE_KEY = "neobox_builtin_tools_order_v2";
+const LS_KEY = "neobox_builtin_tools_order_v2";
 
+/**
+ * 内置工具默认顺序：按使用场景分组——
+ * 视觉/显示 → 音频 → 视频 → 效率 → 网络 → 系统维护。
+ * 用户仍可在页面上拖动自定义。
+ */
 const defaultTools: ViewItem[] = [
-  {
-    id: "overlay-panel",
-    path: "/overlay-panel",
-    icon: Layout,
-    titleKey: "sidebar.overlayPanel",
-    descriptionKey: "builtinTools.overlayPanelDesc",
-    color: "#9B59B6",
-  },
-  {
-    id: "resolution-converter",
-    path: "/resolution-converter",
-    icon: Monitor,
-    titleKey: "sidebar.resolutionConverter",
-    descriptionKey: "builtinTools.resolutionConverterDesc",
-    color: "#4A90E2",
-  },
-  {
-    id: "disk-health",
-    path: "/disk-health",
-    icon: HardDrive,
-    titleKey: "sidebar.diskHealth",
-    descriptionKey: "builtinTools.diskHealthDesc",
-    color: "#00B4D8",
-  },
-  {
-    id: "audio-eq",
-    path: "/audio-eq",
-    icon: Volume2,
-    titleKey: "sidebar.audioEq",
-    descriptionKey: "builtinTools.audioEqDesc",
-    color: "#E74C3C",
-  },
-  {
-    id: "autoclicker",
-    path: "/autoclicker",
-    icon: MousePointerClick,
-    titleKey: "sidebar.autoclicker",
-    descriptionKey: "builtinTools.autoclickerDesc",
-    color: "#FF8C00",
-  },
-  {
-    id: "speedtest",
-    path: "/speedtest",
-    icon: Gauge,
-    titleKey: "sidebar.speedtest",
-    descriptionKey: "builtinTools.speedtestDesc",
-    color: "#00B4D8",
-  },
-  {
-    id: "runtime-repair",
-    path: "/runtime-repair",
-    icon: Braces,
-    titleKey: "sidebar.runtimeRepair",
-    descriptionKey: "builtinTools.runtimeRepairDesc",
-    color: "#4A90E2",
-  },
-  {
-    id: "vtx-virtualization",
-    path: "/vtx-virtualization",
-    icon: ShieldCheck,
-    titleKey: "sidebar.vtxVirtualization",
-    descriptionKey: "builtinTools.vtxVirtualizationDesc",
-    color: "#38A169",
-  },
-  {
-    id: "hidden-features",
-    path: "/hidden-features",
-    icon: FlaskConical,
-    titleKey: "sidebar.hiddenFeatures",
-    descriptionKey: "builtinTools.hiddenFeaturesDesc",
-    color: "#E67E22",
-    beta: true,
-  },
-  {
-    id: "context-menu",
-    path: "/context-menu",
-    icon: MousePointer2,
-    titleKey: "sidebar.contextMenu",
-    descriptionKey: "builtinTools.contextMenuDesc",
-    color: "#3B82F6",
-  },
-  {
-    id: "download-accelerator",
-    path: "/download-accelerator",
-    icon: DownloadCloud,
-    titleKey: "sidebar.downloadAccelerator",
-    descriptionKey: "builtinTools.downloadAcceleratorDesc",
-    color: "#00C896",
-  },
-  {
-    id: "nvidia-recording",
-    path: "/nvidia-recording",
-    icon: Video,
-    titleKey: "sidebar.nvidiaRecording",
-    descriptionKey: "builtinTools.nvidiaRecordingDesc",
-    color: "#76B900",
-  },
-  {
-    id: "app-manager",
-    path: "/app-manager",
-    icon: Boxes,
-    titleKey: "sidebar.appManager",
-    descriptionKey: "builtinTools.appManagerDesc",
-    color: "#4A90E2",
-  },
-  {
-    id: "time-sync",
-    path: "/time-sync",
-    icon: Clock,
-    titleKey: "sidebar.timeSync",
-    descriptionKey: "builtinTools.timeSyncDesc",
-    color: "#00B4D8",
-  },
-  {
-    id: "screen-test",
-    path: "/screen-test",
-    icon: ScanLine,
-    titleKey: "sidebar.screenTest",
-    descriptionKey: "builtinTools.screenTestDesc",
-    color: "#38B2AC",
-  },
-  {
-    id: "bsod-log",
-    path: "/bsod-log",
-    icon: ScrollText,
-    titleKey: "sidebar.bsodLog",
-    descriptionKey: "builtinTools.bsodLogDesc",
-    color: "#EF4444",
-    beta: true,
-  },
-  {
-    id: "image-converter",
-    path: "/image-converter",
-    icon: Image,
-    titleKey: "sidebar.imageConverter",
-    descriptionKey: "builtinTools.imageConverterDesc",
-    color: "#8B5CF6",
-  },
-  {
-    id: "audio-converter",
-    path: "/audio-converter",
-    icon: FileAudio,
-    titleKey: "sidebar.audioConverter",
-    descriptionKey: "builtinTools.audioConverterDesc",
-    color: "#F59E0B",
-  },
+  { id: "overlay-panel", path: "/overlay-panel", icon: Layout, titleKey: "sidebar.overlayPanel", descriptionKey: "builtinTools.overlayPanelDesc", color: "#9B59B6" },
+  { id: "resolution-converter", path: "/resolution-converter", icon: Monitor, titleKey: "sidebar.resolutionConverter", descriptionKey: "builtinTools.resolutionConverterDesc", color: "#4A90E2" },
+  { id: "screen-test", path: "/screen-test", icon: ScanLine, titleKey: "sidebar.screenTest", descriptionKey: "builtinTools.screenTestDesc", color: "#38B2AC" },
+  { id: "image-converter", path: "/image-converter", icon: Image, titleKey: "sidebar.imageConverter", descriptionKey: "builtinTools.imageConverterDesc", color: "#8B5CF6" },
+  { id: "video-converter", path: "/video-converter", icon: Clapperboard, titleKey: "sidebar.videoConverter", descriptionKey: "builtinTools.videoConverterDesc", color: "#EC4899" },
+  { id: "audio-eq", path: "/audio-eq", icon: Volume2, titleKey: "sidebar.audioEq", descriptionKey: "builtinTools.audioEqDesc", color: "#E74C3C" },
+  { id: "audio-converter", path: "/audio-converter", icon: FileAudio, titleKey: "sidebar.audioConverter", descriptionKey: "builtinTools.audioConverterDesc", color: "#F59E0B" },
+  { id: "mka-muxer", path: "/mka-muxer", icon: Layers, titleKey: "sidebar.mkaMuxer", descriptionKey: "builtinTools.mkaMuxerDesc", color: "#14B8A6", beta: true },
+  { id: "nvidia-recording", path: "/nvidia-recording", icon: Video, titleKey: "sidebar.nvidiaRecording", descriptionKey: "builtinTools.nvidiaRecordingDesc", color: "#76B900" },
+  { id: "autoclicker", path: "/autoclicker", icon: MousePointerClick, titleKey: "sidebar.autoclicker", descriptionKey: "builtinTools.autoclickerDesc", color: "#FF8C00" },
+  { id: "context-menu", path: "/context-menu", icon: MousePointer2, titleKey: "sidebar.contextMenu", descriptionKey: "builtinTools.contextMenuDesc", color: "#3B82F6" },
+  { id: "hidden-features", path: "/hidden-features", icon: FlaskConical, titleKey: "sidebar.hiddenFeatures", descriptionKey: "builtinTools.hiddenFeaturesDesc", color: "#E67E22", beta: true },
+  { id: "download-accelerator", path: "/download-accelerator", icon: DownloadCloud, titleKey: "sidebar.downloadAccelerator", descriptionKey: "builtinTools.downloadAcceleratorDesc", color: "#00C896" },
+  { id: "speedtest", path: "/speedtest", icon: Gauge, titleKey: "sidebar.speedtest", descriptionKey: "builtinTools.speedtestDesc", color: "#00B4D8" },
+  { id: "disk-health", path: "/disk-health", icon: HardDrive, titleKey: "sidebar.diskHealth", descriptionKey: "builtinTools.diskHealthDesc", color: "#00B4D8" },
+  { id: "runtime-repair", path: "/runtime-repair", icon: Braces, titleKey: "sidebar.runtimeRepair", descriptionKey: "builtinTools.runtimeRepairDesc", color: "#4A90E2" },
+  { id: "app-manager", path: "/app-manager", icon: Boxes, titleKey: "sidebar.appManager", descriptionKey: "builtinTools.appManagerDesc", color: "#4A90E2" },
+  { id: "time-sync", path: "/time-sync", icon: Clock, titleKey: "sidebar.timeSync", descriptionKey: "builtinTools.timeSyncDesc", color: "#00B4D8" },
+  { id: "vtx-virtualization", path: "/vtx-virtualization", icon: ShieldCheck, titleKey: "sidebar.vtxVirtualization", descriptionKey: "builtinTools.vtxVirtualizationDesc", color: "#38A169" },
+  { id: "bsod-log", path: "/bsod-log", icon: ScrollText, titleKey: "sidebar.bsodLog", descriptionKey: "builtinTools.bsodLogDesc", color: "#EF4444", beta: true },
 ];
-
 function loadOrder(): string[] | null {
   try {
     const raw = localStorage.getItem(LS_KEY);

@@ -20,6 +20,7 @@ import type {
   ExternalPlayback,
   SmtcState,
   PlayHistoryEntry,
+  LocalMusicFolder,
 } from "@/types/music";
 import { buildKaraokeLines } from "@/lib/karaoke-lyrics";
 import { store } from "@/lib/store";
@@ -108,6 +109,8 @@ interface MusicState {
 
   // 本地导入歌曲
   localSongs: Song[];
+  /** 本地导入的文件夹（显示为「本地导入的歌单」下的子文件夹） */
+  localFolders: LocalMusicFolder[];
   // 本地导入进行中（文件夹/多文件导入耗时长，用于 UI 反馈避免误以为卡死）
   importingLocal: boolean;
 
@@ -232,7 +235,11 @@ interface MusicState {
   // 本地导入歌曲 Actions
   loadLocalSongs: () => Promise<void>;
   importLocalSongs: (paths: string[]) => Promise<{ count: number; noCoverCount: number }>;
-  importLocalFolder: (folder: string) => Promise<{ count: number; noCoverCount: number }>;
+  importLocalFolder: (
+    folder: string,
+    recursive: boolean
+  ) => Promise<{ count: number; noCoverCount: number }>;
+  removeLocalFolder: (folderId: string) => Promise<void>;
   setImportingLocal: (importing: boolean) => void;
   removeLocalSong: (id: string) => Promise<void>;
   clearLocalSongs: () => Promise<void>;
@@ -391,6 +398,8 @@ function serializeLocalSong(song: Song): Record<string, unknown> {
     language: song.language ?? 0,
     hash: song.hash,
     _localPath: song._localPath,
+    _localPlayPath: song._localPlayPath,
+    _localFolderId: song._localFolderId,
     _localCoverPath: song._localCoverPath,
     _localHasLyric: song._localHasLyric,
   };
@@ -433,6 +442,8 @@ function serializeHistorySong(song: Song): Record<string, unknown> {
     qq_song_id: song.qq_song_id,
     content_id: song.content_id,
     _localPath: song._localPath,
+    _localPlayPath: song._localPlayPath,
+    _localFolderId: song._localFolderId,
     _localCoverPath: song._localCoverPath,
     _localHasLyric: song._localHasLyric,
   };
@@ -509,13 +520,17 @@ interface LocalSongInfoPayload {
   cover_source: string;
   /// 是否存在同目录的同名歌词文件
   has_lyric: boolean;
+  /// 实际播放路径（MKA 为解封装后的缓存文件；其它格式与 path 相同）
+  play_path: string;
 }
 
-/// 把后端返回的本地歌曲元信息合并进 localSongs 并持久化（供单文件/文件夹导入复用）
+/// 把后端返回的本地歌曲元信息合并进 localSongs 并持久化（供单文件/文件夹导入复用）。
+/// `folderId` 为空表示零散导入的单曲；同一首歌重复导入时保留原有分组。
 async function mergeLocalSongInfos(
   infos: LocalSongInfoPayload[],
   set: (partial: (state: unknown) => unknown) => void,
-  get: () => { localSongs: Song[] }
+  get: () => { localSongs: Song[] },
+  folderId?: string
 ): Promise<{ count: number; noCoverCount: number }> {
   if (infos.length === 0) return { count: 0, noCoverCount: 0 };
 
@@ -537,6 +552,10 @@ async function mergeLocalSongInfos(
     // 复用 hash 字段存放绝对路径，避免修改 Song 结构
     hash: info.path,
     _localPath: info.path,
+    // MKA 解封装后的实际播放路径（其它格式与 path 相同）
+    _localPlayPath: info.play_path && info.play_path !== info.path ? info.play_path : undefined,
+    // 所属本地文件夹（用于「本地导入的歌单」子文件夹分组）
+    _localFolderId: folderId,
     // 封面缓存文件绝对路径，用于持久化与重启后恢复封面
     _localCoverPath: info.cover_path || undefined,
     // 是否存在同目录歌词文件，播放器据此决定是否显示歌词面板
@@ -551,7 +570,10 @@ async function mergeLocalSongInfos(
       merged.set(song.id, song);
     }
     for (const song of newSongs) {
-      merged.set(song.id, song);
+      const previous = merged.get(song.id);
+      // 零散导入不覆盖已有文件夹归属
+      const keepFolder = folderId ?? previous?._localFolderId;
+      merged.set(song.id, keepFolder ? { ...song, _localFolderId: keepFolder } : song);
     }
     return { localSongs: Array.from(merged.values()) };
   });
@@ -563,6 +585,13 @@ async function mergeLocalSongInfos(
   await s.save();
 
   return { count: newSongs.length, noCoverCount: infos.filter((info) => !info.cover_path).length };
+}
+
+/// 持久化「本地导入的歌单」子文件夹列表
+async function persistLocalFolders(folders: LocalMusicFolder[]) {
+  const s = await getStore();
+  await s.set("localMusicFolders", folders);
+  await s.save();
 }
 
 // 桌面歌词时间同步定时器
@@ -732,7 +761,7 @@ async function repairLocalCovers(
 }
 
 // ── 内部播放器 SMTC（系统媒体传输控制）推送 ──────────────────────────
-// 把当前播放状态推给后端注册的「新境盒」媒体会话，供音量浮层/锁屏显示、
+// 把当前播放状态推给后端注册的「NeoBox」媒体会话，供音量浮层/锁屏显示、
 // 系统媒体键（播放/暂停/上一曲/下一曲）与浮层拖动进度控制内部播放器。
 let lastSmtcPush = 0;
 let smtcCleared = true;
@@ -888,6 +917,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   queuePanelOpen: false,
 
   localSongs: [],
+  localFolders: [],
   importingLocal: false,
 
   loginInfo: null,
@@ -1003,17 +1033,22 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     try {
       const s = await getStore();
       const stored = await s.get<Song[]>("localSongs");
+      const storedFolders = await s.get<LocalMusicFolder[]>("localMusicFolders");
       // 恢复封面：有缓存文件路径时用 asset 协议 URL，否则保留原 cover（兼容历史 data URI）
       const restored = (Array.isArray(stored) ? stored : []).map((song) =>
         song._localCoverPath
           ? { ...song, cover: convertFileSrc(song._localCoverPath) }
           : song
       );
-      set({ localSongs: restored });
+      const restoredFolders = (Array.isArray(storedFolders) ? storedFolders : []).filter(
+        (folder): folder is LocalMusicFolder =>
+          !!folder && typeof folder.id === "string" && typeof folder.path === "string"
+      );
+      set({ localSongs: restored, localFolders: restoredFolders });
       // 后台自愈：封面缓存文件可能已被清理，失效时从音频重新提取（不阻塞启动）
       void repairLocalCovers(set, get);
     } catch {
-      set({ localSongs: [] });
+      set({ localSongs: [], localFolders: [] });
     }
   },
 
@@ -1030,16 +1065,52 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     }
   },
 
-  importLocalFolder: async (folder) => {
+  importLocalFolder: async (folder, recursive) => {
     set({ importingLocal: true });
     try {
-      const infos = await invoke<LocalSongInfoPayload[]>("import_local_music_folder", { folder });
-      return await mergeLocalSongInfos(infos, set, get);
+      const infos = await invoke<LocalSongInfoPayload[]>("import_local_music_folder", {
+        folder,
+        recursive,
+      });
+      if (infos.length === 0) {
+        return { count: 0, noCoverCount: 0 };
+      }
+      // 每个文件夹作为一个子文件夹（以绝对路径为稳定 id）
+      const name = folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+      const existing = get().localFolders.find((item) => item.id === folder);
+      const nextFolders: LocalMusicFolder[] = [
+        ...get().localFolders.filter((item) => item.id !== folder),
+        {
+          id: folder,
+          name,
+          path: folder,
+          recursive,
+          importedAt: existing?.importedAt ?? Date.now(),
+        },
+      ];
+      set({ localFolders: nextFolders });
+      await persistLocalFolders(nextFolders);
+      return await mergeLocalSongInfos(infos, set, get, folder);
     } catch (e) {
       console.error("Import local music folder failed:", e);
       return { count: 0, noCoverCount: 0 };
     } finally {
       set({ importingLocal: false });
+    }
+  },
+
+  removeLocalFolder: async (folderId) => {
+    set((state) => ({
+      localSongs: state.localSongs.filter((song) => song._localFolderId !== folderId),
+      localFolders: state.localFolders.filter((folder) => folder.id !== folderId),
+    }));
+    try {
+      const s = await getStore();
+      await s.set("localSongs", get().localSongs.map(serializeLocalSong));
+      await s.set("localMusicFolders", get().localFolders);
+      await s.save();
+    } catch (e) {
+      console.error("Remove local folder failed:", e);
     }
   },
 
@@ -1072,10 +1143,11 @@ export const useMusicStore = create<MusicState>((set, get) => ({
           .filter(Boolean)
       )
     ) as string[];
-    set({ localSongs: [] });
+    set({ localSongs: [], localFolders: [] });
     try {
       const s = await getStore();
       await s.set("localSongs", []);
+      await s.set("localMusicFolders", []);
       await s.save();
       if (coverPaths.length > 0) {
         await invoke("delete_cover_cache_files", { paths: coverPaths }).catch(() => {});
@@ -1845,7 +1917,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     try {
       // ── 本地歌曲：直接播放本地文件，无需获取网络 URL ──
       if (song.provider === "local") {
-        const localPath = song._localPath || song.hash;
+        const localPath = song._localPlayPath || song._localPath || song.hash;
         if (!localPath) {
           set({ isPlaying: false });
           return;
@@ -2091,7 +2163,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
           const savedTime = audioRef.currentTime;
           // 本地歌曲：直接重设 src 重试
           if (song.provider === "local") {
-            const localPath = song._localPath || song.hash;
+            const localPath = song._localPlayPath || song._localPath || song.hash;
             if (localPath) {
               audioRef.src = convertFileSrc(localPath);
               audioRef.currentTime = savedTime;

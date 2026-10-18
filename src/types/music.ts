@@ -27,8 +27,23 @@ export interface Song {
   // === 本地导入扩展字段 ===
   _localPath?: string;
   _localCoverPath?: string;
+  /** MKA 等需要解封装的格式：实际用于播放的缓存文件路径 */
+  _localPlayPath?: string;
+  /** 所属的本地导入文件夹（对应 LocalMusicFolder.id）；未分组时为空 */
+  _localFolderId?: string;
   /** 是否存在同目录的歌词文件（.lrc/.txt），决定播放器是否显示歌词面板 */
   _localHasLyric?: boolean;
+}
+
+/** 本地导入的文件夹（「本地导入的歌单」下的子文件夹） */
+export interface LocalMusicFolder {
+  /** 以文件夹绝对路径作为稳定 id */
+  id: string;
+  name: string;
+  path: string;
+  /** 导入时是否包含子文件夹 */
+  recursive: boolean;
+  importedAt: number;
 }
 
 /** 持久化播放历史条目：一次成功播放记一条，列表按 playedAt 倒序（最近在前） */

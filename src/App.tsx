@@ -43,6 +43,8 @@ import WallpaperWindowPage from "./pages/WallpaperWindowPage";
 import BsodLogPage from "./pages/BsodLogPage";
 import ImageConverterPage from "./pages/ImageConverterPage";
 import AudioConverterPage from "./pages/AudioConverterPage";
+import VideoConverterPage from "./pages/VideoConverterPage";
+import MkaMuxerPage from "./pages/MkaMuxerPage";
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -53,7 +55,7 @@ import { useAds } from "./hooks/use-ads";
 import { useAppStartup } from "./contexts/app-startup-context";
 import { MusicProvider } from "./contexts/music-context";
 import MusicPage from "./pages/MusicPage";
-import { ImportantAnnouncementModal } from "./components/ImportantAnnouncementModal";
+
 import { DynamicIslandHost } from "./components/ui/dynamic-island";
 import { AccelIslandBridge } from "./components/ui/accel-island-bridge";
 import { IslandRemoteBridge } from "./components/ui/island-remote-bridge";
@@ -392,12 +394,23 @@ function App() {
                       <AudioConverterPage />
                     }
                   />
+                  <Route
+                    path="/video-converter"
+                    element={
+                      <VideoConverterPage />
+                    }
+                  />
+                  <Route
+                    path="/mka-muxer"
+                    element={
+                      <MkaMuxerPage />
+                    }
+                  />
                 </Routes>
           )}
         </MainLayout>
 
         <UpdateModal />
-        <ImportantAnnouncementModal />
         <DynamicIslandHost />
         <AccelIslandBridge />
         <IslandRemoteBridge />

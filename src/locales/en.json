@@ -64,7 +64,9 @@
     "audioConverter": "Audio Converter",
     "autoclicker": "Auto Clicker",
     "resolutionConverter": "Resolution Converter",
-    "wallpaper": "Wallpapers"
+    "wallpaper": "Wallpapers",
+    "videoConverter": "Video Converter",
+    "mkaMuxer": "MKA Muxer"
   },
   "customPage": {
     "title": "Custom Dashboard",
@@ -700,8 +702,8 @@
     "selectTools": "Select Quick Tools",
     "todayPopularity": "Today's Popularity",
     "randomQuote": "Random Quote",
-    "announcement": "Announcement",
-    "announcementList": "Announcements",
+    "announcement": "Releases",
+    "announcementList": "Release History",
     "loading": "Loading...",
     "noAnnouncement": "No announcements",
     "important": "Important",
@@ -731,7 +733,10 @@
     "feedbackCard": {
       "title": "Feedback",
       "subtitle": "Report issues on the official website"
-    }
+    },
+    "releaseHistory": "Release History",
+    "releaseNoNotes": "No release notes for this version.",
+    "viewOnGitHub": "View on GitHub"
   },
   "hardware": {
     "title": "Hardware Info",
@@ -933,7 +938,9 @@
     "resolutionApplied": "Resolution applied",
     "resolutionManagement": "Resolution Management",
     "selectDisplay": "Select display",
-    "selectResolution": "Select resolution"
+    "selectResolution": "Select resolution",
+    "videoConverterDesc": "Convert video to GIF, a still frame, or extract audio",
+    "mkaMuxerDesc": "Combine audio, subtitles and cover art into an MKA file"
   },
   "contextMenu": {
     "title": "Context Menu & This PC",
@@ -1295,8 +1302,8 @@
       "homeUsernameReset": "Reset to default",
       "todayPopularityLabel": "Today's Popularity",
       "todayPopularityDesc": "Show today's popularity random number on homepage",
-      "announcementLabel": "Announcement",
-      "announcementDesc": "Show announcement card on homepage",
+      "announcementLabel": "Release History",
+      "announcementDesc": "Show GitHub release history on the homepage",
       "randomQuoteLabel": "Random Quote",
       "randomQuoteDesc": "Show random quote card on homepage",
       "homeHardwareModelLabel": "Hardware Model",
@@ -1399,7 +1406,7 @@
       "customBackground": "Custom Background",
       "customBackgroundLabel": "Enable Custom Background",
       "imageUrlPlaceholder": "Enter image URL or click to upload",
-      "maxImagesReached": "Maximum of 3 background images allowed",
+      "maxImagesReached": "Maximum of 12 background images allowed",
       "presetBackground": "Preset Background",
       "carouselLabel": "Auto Carousel",
       "carouselDesc": "Auto-switch presets every 10 seconds",
@@ -2680,8 +2687,8 @@
   },
   "wallpaper": {
     "title": "Wallpaper Manager",
-    "selectFolderTitle": "Select wallpaper folder",
-    "importFolder": "Import Wallpaper Folder",
+    "selectFolderTitle": "Select wallpaper folder (current level)",
+    "importFolder": "Import Folder (current level)",
     "noImages": "No supported images in this folder",
     "loadedCount": "Loaded {{count}} wallpapers",
     "applied": "Wallpaper applied",
@@ -2717,12 +2724,16 @@
     "editorCancel": "Cancel",
     "editorLoadFailed": "Failed to load image",
     "editorSaved": "Saved (original overwritten)",
-    "editorSavedAs": "Saved as new PNG file"
+    "editorSavedAs": "Saved as new PNG file",
+    "importFolderRecursive": "Import Folder (with subfolders)",
+    "selectFolderRecursive": "Select wallpaper folder (include subfolders)",
+    "recursiveBadge": "Recursive",
+    "singleBadge": "Single level"
   },
   "fileSearch": {
     "title": "File Search",
-    "subtitle": "Find local files instantly, Everything-style. Type to search, double-click to open.",
-    "placeholder": "Type a file name or keyword…",
+    "subtitle": "Find files as fast as Everything: type to search, leave empty to browse, double-click to open.",
+    "placeholder": "Type to filter, leave empty to browse all…",
     "clear": "Clear",
     "scope": "Scope",
     "allDrives": "All drives",
@@ -2730,7 +2741,12 @@
     "chooseFolder": "Choose a folder to search",
     "formatLabel": "Format",
     "sortLabel": "Sort",
-    "sort": {"name": "Name", "modified": "Date modified", "type": "Type", "size": "Size"},
+    "sort": {
+      "name": "Name",
+      "modified": "Date modified",
+      "type": "Type",
+      "size": "Size"
+    },
     "sortAsc": "Ascending",
     "sortDesc": "Descending",
     "format": {
@@ -2756,7 +2772,7 @@
     "searching": "Searching…",
     "truncated": "Showing first {{count}}",
     "took": "{{ms}} ms",
-    "emptyHint": "Type a keyword to start searching",
+    "emptyHint": "Leave empty to browse everything in the selected format",
     "emptyTip": "The index lives in local memory only; no file information is uploaded.",
     "noResults": "No matching files",
     "noIndex": "Index not built yet",
@@ -2777,5 +2793,59 @@
     "hintOpen": "Enter open",
     "hintReveal": "Ctrl+Enter reveal",
     "scopeAll": "All drives"
+  },
+  "videoConverter": {
+    "title": "Video Converter",
+    "selectInput": "Select Video",
+    "inputHint": "MP4 / MKV / MOV / AVI / WebM and more; audio files are also accepted",
+    "outputFormat": "Output Format",
+    "fps": "Frame Rate",
+    "width": "Width",
+    "start": "Start (s)",
+    "duration": "Duration (s)",
+    "selectOutput": "Choose Output",
+    "autoSaveHint": "Saved next to the source file when not specified",
+    "convert": "Convert",
+    "converting": "Converting...",
+    "convertingHint": "GIF decoding processes every frame; shorten the clip for long videos",
+    "success": "Conversion completed",
+    "failed": "Conversion failed",
+    "noInput": "Please select a video file first",
+    "samePath": "Output path must differ from the source file",
+    "resultTitle": "Result",
+    "done": "Done",
+    "frames": "{{count}} frames",
+    "hint": "Decoded with Windows Media Foundation, no ffmpeg required. For GIF, 10–20 seconds at 480px wide is recommended."
+  },
+  "mkaMuxer": {
+    "title": "MKA Muxer",
+    "audio": "Audio (required)",
+    "subtitle": "Subtitles (optional)",
+    "cover": "Cover Image (optional)",
+    "selectAudio": "Select Audio",
+    "selectSubtitle": "Select Subtitles",
+    "selectCover": "Select Cover",
+    "audioFilter": "Audio files",
+    "subtitleFilter": "Subtitle files",
+    "coverFilter": "Image files",
+    "allFiles": "All files",
+    "titleField": "Title (optional)",
+    "titlePlaceholder": "Uses the file name when empty",
+    "output": "Output File",
+    "selectOutput": "Choose Output",
+    "autoSaveHint": "Saved next to the audio file when not specified",
+    "mux": "Mux",
+    "muxing": "Muxing...",
+    "success": "Mux completed",
+    "failed": "Mux failed",
+    "noAudio": "Please select an audio file first",
+    "resultTitle": "Result",
+    "done": "Done",
+    "audioCodec": "Audio codec",
+    "subtitleCodec": "Subtitle codec",
+    "duration": "Duration",
+    "coverIncluded": "Cover included",
+    "clear": "Clear",
+    "hint": "Audio is transcoded to AAC; subtitles support SRT / VTT / ASS / SSA; cover art is stored as an attachment. The resulting MKA can be opened directly in the Music module."
   }
 }

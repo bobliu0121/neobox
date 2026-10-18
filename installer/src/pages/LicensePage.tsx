@@ -16,8 +16,8 @@ export default function LicensePage({ onAgreed }: { onAgreed: (v: boolean) => vo
       <p className="page-subtitle">{t("license_desc")}</p>
 
       <div className="license-scroll">
-        <p style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>新境盒（NeoBox）最终用户许可协议</p>
-        <p style={{ color: "rgba(255, 255, 255, 0.5)", marginBottom: 6 }}>新境盒最新版本 · 最后更新日期：2026年7月</p>
+        <p style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>NeoBox 最终用户许可协议</p>
+        <p style={{ color: "rgba(255, 255, 255, 0.5)", marginBottom: 6 }}>NeoBox 最新版本 · 最后更新日期：2026年7月</p>
         <hr style={{ border: "none", borderTop: "1px solid rgba(255, 255, 255, 0.15)", margin: "12px 0" }} />
 
         <p style={{ fontWeight: 600, marginTop: 10 }}>重要提示</p>

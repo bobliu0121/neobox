@@ -1,7 +1,7 @@
 {
   "common": {
     "appName": "NeoBox",
-    "appFullName": "新境盒",
+    "appFullName": "NeoBox",
     "description": "跨平台性能監控（Tauri + Next.js + 傳感器服務）",
     "close": "關閉",
     "success": "操作成功",
@@ -13,7 +13,7 @@
     "list": "列表視圖"
   },
   "onboarding": {
-    "title": "歡迎使用新境盒",
+    "title": "歡迎使用 NeoBox",
     "subtitle": "讓我們一起開始",
     "step": "步驟",
     "steps": {
@@ -29,7 +29,7 @@
       },
       "complete": {
         "title": "一切就緒！",
-        "description": "您已經完成了所有設定，現在開始使用新境盒吧！",
+        "description": "您已經完成了所有設定，現在開始使用 NeoBox 吧！",
         "button": "開始使用"
       }
     }
@@ -64,7 +64,9 @@
     "vtxVirtualization": "VT-X 虛擬化修復",
     "contextMenu": "右鍵選單管理",
     "screenTest": "螢幕檢測",
-    "wallpaper": "桌布管理"
+    "wallpaper": "桌布管理",
+    "videoConverter": "影片轉換",
+    "mkaMuxer": "MKA 合成"
   },
   "customPage": {
     "title": "自訂頁面",
@@ -621,8 +623,8 @@
         "saveRuleBtn": "儲存規則",
         "ruleNameRequired": "請輸入規則名稱",
         "ruleNamePlaceholder": "輸入名稱",
-        "autoApply": "啟動新境盒自動應用",
-        "autoApplyHint": "勾選後啟動新境盒時自動套用此隔離規則",
+        "autoApply": "啟動 NeoBox 自動應用",
+        "autoApplyHint": "勾選後啟動 NeoBox 時自動套用此隔離規則",
         "autoApplyBadge": "自動",
         "restoreRule": "恢復",
         "activeBadge": "生效中",
@@ -635,13 +637,13 @@
     }
   },
   "home": {
-    "title": "歡迎使用新境盒",
+    "title": "歡迎使用 NeoBox",
     "welcome": "歡迎",
     "selectTools": "選擇快捷工具",
     "todayPopularity": "今日人氣",
     "randomQuote": "隨機一言",
-    "announcement": "公告",
-    "announcementList": "公告列表",
+    "announcement": "發佈",
+    "announcementList": "發佈歷史",
     "loading": "載入中...",
     "noAnnouncement": "暫無公告",
     "important": "重要",
@@ -671,7 +673,10 @@
     "feedbackCard": {
       "title": "問題反饋",
       "subtitle": "跳轉到官網反饋問題"
-    }
+    },
+    "releaseHistory": "發佈歷史",
+    "releaseNoNotes": "該版本沒有填寫發佈說明。",
+    "viewOnGitHub": "在 GitHub 檢視"
   },
   "hardware": {
     "title": "硬體資訊",
@@ -873,7 +878,9 @@
     "selectResolution": "選擇解析度",
     "applyResolution": "應用解析度",
     "resolutionApplied": "解析度已應用",
-    "screenTestDesc": "檢測顯示器壞點、響應時間、重新整理率與畫面均勻性"
+    "screenTestDesc": "檢測顯示器壞點、響應時間、重新整理率與畫面均勻性",
+    "videoConverterDesc": "影片轉 GIF 動圖、首幀圖片，或擷取音訊",
+    "mkaMuxerDesc": "音訊 + 字幕 + 封面合成為 MKA 檔案"
   },
   "timeSync": {
     "title": "時間校正",
@@ -1001,7 +1008,7 @@
       "clearDataConfirm": "將清除全部資料並重置所有設定，此操作不可撤銷。確認重置？",
       "confirmReset": "確認重置",
       "mediaKeysTitle": "鍵盤媒體鍵控制音樂（SMTC）",
-      "mediaKeysDesc": "關閉後同時停用系統媒體會話（SMTC）：音量浮層/鎖屏不再顯示新境盒，媒體鍵交還給其他軟體",
+      "mediaKeysDesc": "關閉後同時停用系統媒體會話（SMTC）：音量浮層/鎖屏不再顯示 NeoBox，媒體鍵交還給其他軟體",
       "islandExternalTitle": "靈動島顯示在桌面上",
       "islandExternalDesc": "開啟後提示與播放島移出主視窗，固定顯示在螢幕頂部中央；主視窗隱藏到托盤後仍然可見，游標不在島體上時自動滑鼠穿透",
       "builtinCount": "內建 {{count}} 款",
@@ -1027,8 +1034,8 @@
       "homeUsernameReset": "恢復預設",
       "todayPopularityLabel": "今日人氣",
       "todayPopularityDesc": "在首頁顯示今日人氣隨機數",
-      "announcementLabel": "公告",
-      "announcementDesc": "在首頁顯示公告卡片",
+      "announcementLabel": "發佈歷史",
+      "announcementDesc": "在首頁顯示 GitHub Release 歷史卡片",
       "randomQuoteLabel": "隨機一言",
       "randomQuoteDesc": "在首頁顯示隨機一言卡片",
       "feedbackLabel": "圖片輪播",
@@ -1131,7 +1138,7 @@
       "customBackground": "自訂背景",
       "customBackgroundLabel": "啟用自訂背景",
       "imageUrlPlaceholder": "輸入圖片URL或點擊上傳",
-      "maxImagesReached": "最多只能新增3張背景圖片",
+      "maxImagesReached": "最多可新增 12 張背景圖片",
       "presetBackground": "預設背景",
       "imageBackground": "圖片背景",
       "dynamicBackground": "動態背景",
@@ -2620,8 +2627,8 @@
   },
   "wallpaper": {
     "title": "桌布管理",
-    "selectFolderTitle": "選擇桌布資料夾",
-    "importFolder": "匯入桌布資料夾",
+    "selectFolderTitle": "選擇桌布資料夾（僅目前層）",
+    "importFolder": "匯入資料夾（僅目前層）",
     "noImages": "該資料夾沒有支援的圖片",
     "loadedCount": "已載入 {{count}} 張桌布",
     "applied": "桌布已設定",
@@ -2657,12 +2664,16 @@
     "editorCancel": "取消",
     "editorLoadFailed": "圖片載入失敗",
     "editorSaved": "已儲存（覆蓋原檔案）",
-    "editorSavedAs": "已另存為新 PNG 檔案"
+    "editorSavedAs": "已另存為新 PNG 檔案",
+    "importFolderRecursive": "匯入資料夾（含子資料夾）",
+    "selectFolderRecursive": "選擇桌布資料夾（包含子資料夾）",
+    "recursiveBadge": "含子資料夾",
+    "singleBadge": "單層"
   },
   "fileSearch": {
     "title": "檔案搜尋",
-    "subtitle": "像 Everything 一樣快速尋找本機檔案：輸入即搜，雙擊開啟。",
-    "placeholder": "輸入檔名或關鍵字…",
+    "subtitle": "像 Everything 一樣快速尋找本機檔案：輸入即搜，留空瀏覽全部，雙擊開啟。",
+    "placeholder": "輸入關鍵字篩選，留空瀏覽全部…",
     "clear": "清除",
     "scope": "範圍",
     "allDrives": "所有磁碟",
@@ -2670,7 +2681,12 @@
     "chooseFolder": "選擇要搜尋的目錄",
     "formatLabel": "格式",
     "sortLabel": "排序",
-    "sort": {"name": "名稱", "modified": "修改日期", "type": "格式", "size": "大小"},
+    "sort": {
+      "name": "名稱",
+      "modified": "修改日期",
+      "type": "格式",
+      "size": "大小"
+    },
     "sortAsc": "正序",
     "sortDesc": "倒序",
     "format": {
@@ -2696,7 +2712,7 @@
     "searching": "搜尋中…",
     "truncated": "僅顯示前 {{count}} 個",
     "took": "{{ms}} ms",
-    "emptyHint": "輸入關鍵字開始搜尋",
+    "emptyHint": "留空即可瀏覽目前格式下的全部項目",
     "emptyTip": "索引只儲存在本機記憶體中，不會上傳任何檔案資訊。",
     "noResults": "沒有找到符合的檔案",
     "noIndex": "尚未建立索引",
@@ -2717,5 +2733,59 @@
     "hintOpen": "Enter 開啟",
     "hintReveal": "Ctrl+Enter 定位",
     "scopeAll": "所有磁碟"
+  },
+  "videoConverter": {
+    "title": "影片格式轉換",
+    "selectInput": "選擇影片",
+    "inputHint": "支援 MP4 / MKV / MOV / AVI / WebM 等，也可直接選擇音訊檔案",
+    "outputFormat": "輸出格式",
+    "fps": "影格率",
+    "width": "寬度",
+    "start": "開始（秒）",
+    "duration": "時長（秒）",
+    "selectOutput": "選擇輸出路徑",
+    "autoSaveHint": "未選擇時自動儲存到來源檔案同目錄",
+    "convert": "開始轉換",
+    "converting": "轉換中...",
+    "convertingHint": "GIF 需要逐格解碼，長影片請縮短截取時長",
+    "success": "轉換完成",
+    "failed": "轉換失敗",
+    "noInput": "請先選擇影片檔案",
+    "samePath": "輸出路徑不能與來源檔案相同",
+    "resultTitle": "轉換結果",
+    "done": "完成",
+    "frames": "{{count}} 格",
+    "hint": "使用系統 Media Foundation 解碼，無需安裝 ffmpeg。GIF 建議截取 10–20 秒、寬度 480px 以控制大小。"
+  },
+  "mkaMuxer": {
+    "title": "MKA 合成",
+    "audio": "音訊（必選）",
+    "subtitle": "字幕（可選）",
+    "cover": "封面圖片（可選）",
+    "selectAudio": "選擇音訊",
+    "selectSubtitle": "選擇字幕",
+    "selectCover": "選擇封面",
+    "audioFilter": "音訊檔案",
+    "subtitleFilter": "字幕檔案",
+    "coverFilter": "圖片檔案",
+    "allFiles": "所有檔案",
+    "titleField": "標題（可選）",
+    "titlePlaceholder": "留空則使用檔案名稱",
+    "output": "輸出檔案",
+    "selectOutput": "選擇輸出路徑",
+    "autoSaveHint": "未選擇時儲存到音訊同目錄",
+    "mux": "開始合成",
+    "muxing": "合成中...",
+    "success": "合成完成",
+    "failed": "合成失敗",
+    "noAudio": "請先選擇音訊檔案",
+    "resultTitle": "合成結果",
+    "done": "完成",
+    "audioCodec": "音訊編碼",
+    "subtitleCodec": "字幕編碼",
+    "duration": "時長",
+    "coverIncluded": "含封面",
+    "clear": "清除",
+    "hint": "音訊會轉碼為 AAC 寫入 MKA；字幕支援 SRT / VTT / ASS / SSA；封面作為附件儲存。合成後的 MKA 可以在音樂模組直接開啟。"
   }
 }

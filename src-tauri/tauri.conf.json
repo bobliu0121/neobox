@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "新境盒",
+        "title": "NeoBox",
         "width": 1230,
         "height": 771,
         "minWidth": 1140,

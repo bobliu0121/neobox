@@ -4,6 +4,20 @@
 import { mockIPC, mockWindows, mockConvertFileSrc } from "@tauri-apps/api/mocks";
 
 const NOW = Math.floor(Date.now() / 1000);
+
+// 本地音乐示例：用于浏览器预览「本地导入的歌单」子文件夹与本地搜索
+const mockLocalFolders = [
+  { id: "C:\\Music\\周杰伦", name: "周杰伦", path: "C:\\Music\\周杰伦", recursive: true, importedAt: NOW - 86_400 },
+  { id: "C:\\Music\\OST", name: "OST", path: "C:\\Music\\OST", recursive: false, importedAt: NOW - 172_800 },
+];
+const mockLocalSongs = [
+  { provider: "local", id: "C:\\Music\\周杰伦\\晴天.flac", name: "晴天", artist: "周杰伦", artists: [{ name: "周杰伦" }], album: "叶惠美", cover: "", duration: 269_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\周杰伦\\晴天.flac", _localPath: "C:\\Music\\周杰伦\\晴天.flac", _localFolderId: mockLocalFolders[0].id, _localHasLyric: true },
+  { provider: "local", id: "C:\\Music\\周杰伦\\七里香.flac", name: "七里香", artist: "周杰伦", artists: [{ name: "周杰伦" }], album: "七里香", cover: "", duration: 299_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\周杰伦\\七里香.flac", _localPath: "C:\\Music\\周杰伦\\七里香.flac", _localFolderId: mockLocalFolders[0].id, _localHasLyric: true },
+  { provider: "local", id: "C:\\Music\\周杰伦\\夜曲.flac", name: "夜曲", artist: "周杰伦", artists: [{ name: "周杰伦" }], album: "十一月的萧邦", cover: "", duration: 226_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\周杰伦\\夜曲.flac", _localPath: "C:\\Music\\周杰伦\\夜曲.flac", _localFolderId: mockLocalFolders[0].id, _localHasLyric: false },
+  { provider: "local", id: "C:\\Music\\OST\\Main Theme.mka", name: "Main Theme", artist: "Local OST", artists: [], album: "Game OST", cover: "", duration: 185_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\OST\\Main Theme.mka", _localPath: "C:\\Music\\OST\\Main Theme.mka", _localPlayPath: "C:\\Users\\Bobliu\\AppData\\Local\\NeoBox\\cache\\playback\\abc.m4a", _localFolderId: mockLocalFolders[1].id, _localHasLyric: false },
+  { provider: "local", id: "C:\\Music\\OST\\Battle.mka", name: "Battle", artist: "Local OST", artists: [], album: "Game OST", cover: "", duration: 205_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\OST\\Battle.mka", _localPath: "C:\\Music\\OST\\Battle.mka", _localPlayPath: "C:\\Users\\Bobliu\\AppData\\Local\\NeoBox\\cache\\playback\\def.m4a", _localFolderId: mockLocalFolders[1].id, _localHasLyric: false },
+  { provider: "local", id: "C:\\Music\\single.mp3", name: "单曲导入示例", artist: "本地音乐", artists: [], album: "", cover: "", duration: 180_000, fee: 0, playable: true, language: 0, hash: "C:\\Music\\single.mp3", _localPath: "C:\\Music\\single.mp3", _localHasLyric: false },
+];
 const mockSearchItems = [
   { name: "README.md", path: "C:\\Users\\Bobliu\\Desktop\\Git\\neobox\\README.md", isDir: false, size: 4210, modified: NOW - 1800, extension: "md", hidden: false },
   { name: "package.json", path: "C:\\Users\\Bobliu\\Desktop\\Git\\neobox\\package.json", isDir: false, size: 2104, modified: NOW - 7200, extension: "json", hidden: false },
@@ -36,7 +50,21 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
           return 1;
         case "plugin:store|get": {
           const a = args as Record<string, unknown>;
-          const v = npmMockStore.get(a.key as string);
+          const key = a.key as string;
+          if (!npmMockStore.has(key)) {
+            if (key === "localSongs") return [mockLocalSongs, true];
+            if (key === "localMusicFolders") return [mockLocalFolders, true];
+            if (key === "wallpaper_folders") {
+              return [
+                [
+                  { path: "C:\\Users\\Bobliu\\Pictures\\Wallpapers", recursive: true },
+                  { path: "C:\\Users\\Bobliu\\Pictures\\Anime", recursive: false },
+                ],
+                true,
+              ];
+            }
+          }
+          const v = npmMockStore.get(key);
           return [v !== undefined ? v : null, v !== undefined];
         }
         case "plugin:store|set": {
@@ -155,6 +183,52 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
         case "stop_dynamic_wallpaper":
         case "wallpaper_window_ready":
           return;
+        case "scan_wallpaper_folder": {
+          const a = args as { dir?: string; recursive?: boolean };
+          const root = (a.dir ?? "C:\\Pictures").replace(/[\\/]+$/, "");
+          const base = `${root}\\sample`;
+          return [
+            `${base}\\wallpaper-1.jpg`,
+            `${base}\\wallpaper-2.png`,
+            `${base}\\wallpaper-3.webp`,
+          ];
+        }
+        case "get_release_history":
+          return [
+            {
+              tag: "v1.0.0",
+              name: "NeoBox 1.0.0",
+              body: "## 首个正式版本\n\n- 全新的文件搜索（类 Everything）\n- 音乐 / 壁纸 / 内置工具多项改进\n- 修复若干稳定性问题",
+              published_at: "2026-10-18T08:00:00Z",
+              html_url: "https://github.com/bobliu0121/neobox/releases/tag/v1.0.0",
+              prerelease: false,
+            },
+            {
+              tag: "v0.9.0",
+              name: "NeoBox 0.9.0 (Beta)",
+              body: "- 重写动态壁纸渲染\n- 支持 HTML 壁纸\n- 搜索支持按名称/日期/大小排序",
+              published_at: "2026-10-01T08:00:00Z",
+              html_url: "https://github.com/bobliu0121/neobox/releases/tag/v0.9.0",
+              prerelease: true,
+            },
+          ];
+        case "convert_video":
+          return {
+            output_path: "C:\\Videos\\demo_converted.gif",
+            frames: 120,
+            width: 480,
+            height: 270,
+            duration_ms: 10_000,
+          };
+        case "mux_mka":
+          return {
+            output_path: "C:\\Music\\demo.mka",
+            audio_codec: "A_AAC",
+            subtitle_codec: "S_TEXT/UTF8",
+            has_cover: true,
+            duration_ms: 215_000,
+            size: 8_560_000,
+          };
         default:
           if (cmd.startsWith("plugin:")) return;
           console.warn("[Tauri Mock] Unhandled command:", cmd, args);

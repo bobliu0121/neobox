@@ -26,7 +26,7 @@
 | 目录 | 职责 |
 | --- | --- |
 | `src/main.tsx` | 挂载 React、Provider 组合、浏览器开发模式下的 Tauri mock |
-| `src/App.tsx` | 路由表、多窗口独立页面分支、启动屏/更新/公告/灵动岛宿主 |
+| `src/App.tsx` | 路由表、多窗口独立页面分支、启动屏/更新/Release 历史/灵动岛宿主 |
 | `src/pages/` | 每个功能页一个文件；路由页面默认导出组件 |
 | `src/components/` | 可复用 UI；`ui/` 为布局与全局组件，`special/` 为视觉组件 |
 | `src/contexts/` | 跨页面状态（主题、字体、背景、音乐、启动流程、更新） |

@@ -414,7 +414,7 @@ export default function AdvancedPage() {
               {t("settings.advanced.mediaKeysTitle", "键盘媒体键控制音乐（SMTC）")}
             </Text>
             <Text fontSize="xs" color={subLabelColor}>
-              {t("settings.advanced.mediaKeysDesc", "关闭后同时停用系统媒体会话（SMTC）：音量浮层/锁屏不再显示新境盒，媒体键交还给其他软件")}
+              {t("settings.advanced.mediaKeysDesc", "关闭后同时停用系统媒体会话（SMTC）：音量浮层/锁屏不再显示 NeoBox，媒体键交还给其他软件")}
             </Text>
           </VStack>
           <ThemeSwitch

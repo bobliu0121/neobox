@@ -9,10 +9,12 @@ use std::path::Path;
 
 use windows::core::{GUID, PCWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    MFShutdown, MFStartup, MFCreateMediaType, MFCreateSinkWriterFromURL,
+    MFShutdown, MFStartup, MFCreateAttributes, MFCreateMediaType, MFCreateSinkWriterFromURL,
     MFCreateSourceReaderFromURL, MFAudioFormat_AAC, MFAudioFormat_MP3,
     MFAudioFormat_PCM, MFMediaType_Audio, MFSTARTUP_NOSOCKET,
-    MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MFTranscodeContainerType_ADTS,
+    MF_TRANSCODE_CONTAINERTYPE,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE,
     MF_MT_SUBTYPE, MF_VERSION, IMFAttributes, IMFSample,
@@ -58,7 +60,8 @@ pub async fn convert_image(
     .map_err(|e| format!("转换任务异常: {e}"))?
 }
 
-/// 音频格式转换：输出格式由 output_path 扩展名决定（wav/mp3/m4a）
+/// 音频格式转换：输出格式由 output_path 扩展名决定（wav/mp3/m4a）。
+/// 源文件也可以是视频（自动选取其中的音轨）。
 #[tauri::command]
 pub async fn convert_audio(input_path: String, output_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || convert_audio_impl(&input_path, &output_path))
@@ -66,12 +69,17 @@ pub async fn convert_audio(input_path: String, output_path: String) -> Result<()
         .map_err(|e| format!("转换任务异常: {e}"))?
 }
 
-fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
+pub(crate) fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
     let ext = Path::new(output)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .ok_or("无法识别输出格式")?;
+    // WAV 直接写 PCM 文件：不依赖系统 PCM 编码器（部分精简版 Windows 缺少
+    // Media Foundation 的 WAV/MP3 编码器，SinkWriter 会报 0xC00D5212）。
+    if ext == "wav" {
+        return decode_audio_to_wav(input, output);
+    }
     let subtype: GUID = match ext.as_str() {
         "wav" => MFAudioFormat_PCM,
         "mp3" => MFAudioFormat_MP3,
@@ -93,6 +101,14 @@ fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
             let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
                 .map_err(|e| format!("打开输入音频失败: {e}"))?;
 
+            // 视频文件也能转音频：关闭其它轨道，只选第一条音轨
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+
             // 2. 让源读取器输出 PCM（自动解码 mp3/aac 等压缩格式）
             let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
             pcm_req
@@ -102,12 +118,16 @@ fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
                 .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
                 .map_err(|e| format!("设置媒体类型失败: {e}"))?;
             reader
-                .SetCurrentMediaType(0, None, &pcm_req)
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                    None,
+                    &pcm_req,
+                )
                 .map_err(|e| format!("设置音频解码失败: {e}"))?;
 
             // 3. 读取解码后的 PCM 参数（采样率/声道/位深）
             let pcm_out = reader
-                .GetCurrentMediaType(0)
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
                 .map_err(|e| format!("读取音频参数失败: {e}"))?;
             let sample_rate = pcm_out
                 .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
@@ -176,7 +196,7 @@ fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
                 let mut sample: Option<IMFSample> = None;
                 reader
                     .ReadSample(
-                        0,
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
                         0,
                         None,
                         Some(&mut flags),
@@ -217,4 +237,295 @@ fn convert_audio_impl(input: &str, output: &str) -> Result<(), String> {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+
+/// 把任意音频（或视频中的音轨）转码为 ADTS AAC，供 MKA 封装使用。
+pub(crate) fn transcode_to_adts(input: &str, output: &str) -> Result<(), String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("COM 初始化失败: {e:?}"))?;
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET).map_err(|e| format!("MF 初始化失败: {e}"))?;
+
+        let result = (|| -> Result<(), String> {
+            let mut attributes: Option<IMFAttributes> = None;
+            MFCreateAttributes(&mut attributes, 1)
+                .map_err(|e| format!("创建转码属性失败: {e}"))?;
+            let attributes = attributes.ok_or_else(|| "创建转码属性失败".to_string())?;
+            attributes
+                .SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_ADTS)
+                .map_err(|e| format!("设置 ADTS 容器失败: {e}"))?;
+
+            let output_w = wide(output);
+            let writer = MFCreateSinkWriterFromURL(
+                PCWSTR(output_w.as_ptr()),
+                None::<&windows::Win32::Media::MediaFoundation::IMFByteStream>,
+                Some(&attributes),
+            )
+            .map_err(|e| format!("创建 ADTS 写入器失败: {e}"))?;
+
+            let input_w = wide(input);
+            let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
+                .map_err(|e| format!("打开输入音频失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+
+            let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                    None,
+                    &pcm_req,
+                )
+                .map_err(|e| format!("设置音频解码失败: {e}"))?;
+
+            let pcm_out = reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
+                .map_err(|e| format!("读取音频参数失败: {e}"))?;
+            let sample_rate = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                .unwrap_or(44100);
+            let channels = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                .unwrap_or(2);
+            if sample_rate == 0 {
+                return Err("无法读取音频采样率".to_string());
+            }
+
+            let out_type = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            out_type
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            out_type
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            out_type
+                .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, sample_rate)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            out_type
+                .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            out_type
+                .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 192_000 / 8)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+
+            let stream_index = writer
+                .AddStream(&out_type)
+                .map_err(|e| format!("添加输出流失败: {e}"))?;
+            writer
+                .SetInputMediaType(stream_index, &pcm_out, None::<&IMFAttributes>)
+                .map_err(|e| format!("设置输入流失败: {e}"))?;
+            writer
+                .BeginWriting()
+                .map_err(|e| format!("开始写入失败: {e}"))?;
+
+            loop {
+                let mut flags: u32 = 0;
+                let mut timestamp: i64 = 0;
+                let mut sample: Option<IMFSample> = None;
+                reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("读取音频数据失败: {e}"))?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                if let Some(sample) = sample {
+                    let duration = sample.GetSampleDuration().unwrap_or(0);
+                    sample
+                        .SetSampleTime(timestamp)
+                        .map_err(|e| format!("设置时间戳失败: {e}"))?;
+                    if duration > 0 {
+                        sample
+                            .SetSampleDuration(duration)
+                            .map_err(|e| format!("设置样本时长失败: {e}"))?;
+                    }
+                    writer
+                        .WriteSample(stream_index, &sample)
+                        .map_err(|e| format!("写入音频数据失败: {e}"))?;
+                }
+            }
+
+            writer.Finalize().map_err(|e| format!("完成写入失败: {e}"))?;
+            Ok(())
+        })();
+
+        let _ = MFShutdown();
+        CoUninitialize();
+        result.map_err(|e| format!("音频转码失败: {e}"))
+    }
+}
+
+/// 解码任意音频/视频音轨为 PCM 并写出标准 WAV（不经过 SinkWriter 编码器）。
+fn decode_audio_to_wav(input: &str, output: &str) -> Result<(), String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("COM 初始化失败: {e:?}"))?;
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET).map_err(|e| format!("MF 初始化失败: {e}"))?;
+        let result = (|| -> Result<(), String> {
+            let input_w = wide(input);
+            let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
+                .map_err(|e| format!("打开输入音频失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+            let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                    None,
+                    &pcm_req,
+                )
+                .map_err(|e| format!("设置音频解码失败: {e}"))?;
+            let pcm_out = reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
+                .map_err(|e| format!("读取音频参数失败: {e}"))?;
+            let sample_rate = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                .unwrap_or(44100);
+            let channels = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                .unwrap_or(2)
+                .max(1);
+            let bits = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+                .unwrap_or(16)
+                .max(8);
+            if sample_rate == 0 {
+                return Err("无法读取音频采样率".to_string());
+            }
+
+            let mut pcm: Vec<u8> = Vec::new();
+            loop {
+                let mut flags: u32 = 0;
+                let mut timestamp: i64 = 0;
+                let mut sample: Option<IMFSample> = None;
+                reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("读取音频数据失败: {e}"))?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                let Some(sample) = sample else { continue };
+                let Ok(buffer) = sample.ConvertToContiguousBuffer() else {
+                    continue;
+                };
+                let mut data: *mut u8 = std::ptr::null_mut();
+                let mut max_len: u32 = 0;
+                let mut current_len: u32 = 0;
+                buffer
+                    .Lock(&mut data, Some(&mut max_len), Some(&mut current_len))
+                    .map_err(|e| format!("读取音频缓冲区失败: {e}"))?;
+                if !data.is_null() && current_len > 0 {
+                    pcm.extend_from_slice(std::slice::from_raw_parts(data, current_len as usize));
+                }
+                let _ = buffer.Unlock();
+            }
+
+            let block_align = (channels as u16) * (bits as u16 / 8);
+            let byte_rate = sample_rate * block_align as u32;
+            let data_len = pcm.len() as u32;
+            let mut out = Vec::with_capacity(44 + pcm.len());
+            out.extend_from_slice(b"RIFF");
+            out.extend_from_slice(&(36 + data_len).to_le_bytes());
+            out.extend_from_slice(b"WAVEfmt ");
+            out.extend_from_slice(&16u32.to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&(channels as u16).to_le_bytes());
+            out.extend_from_slice(&sample_rate.to_le_bytes());
+            out.extend_from_slice(&byte_rate.to_le_bytes());
+            out.extend_from_slice(&block_align.to_le_bytes());
+            out.extend_from_slice(&(bits as u16).to_le_bytes());
+            out.extend_from_slice(b"data");
+            out.extend_from_slice(&data_len.to_le_bytes());
+            out.extend_from_slice(&pcm);
+            std::fs::write(output, out).map_err(|e| format!("写入 WAV 失败: {e}"))?;
+            Ok(())
+        })();
+        let _ = MFShutdown();
+        CoUninitialize();
+        result
+    }
+}
+
+/// 视频转换命令：GIF / 静态图片 / 音频提取
+#[tauri::command]
+pub async fn convert_video(
+    input_path: String,
+    output_path: String,
+    format: String,
+    fps: Option<u32>,
+    width: Option<u32>,
+    start_seconds: Option<f64>,
+    duration_seconds: Option<f64>,
+) -> Result<crate::video_convert::VideoConvertResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::video_convert::convert_video(
+            &input_path,
+            &output_path,
+            &format,
+            fps.unwrap_or(12),
+            width.unwrap_or(480),
+            start_seconds.unwrap_or(0.0),
+            duration_seconds.unwrap_or(0.0),
+        )
+    })
+    .await
+    .map_err(|e| format!("转换任务异常: {e}"))?
+}
+
+/// 把音频 + 可选字幕 + 可选封面合成为 MKA
+#[tauri::command]
+pub async fn mux_mka(
+    audio_path: String,
+    subtitle_path: Option<String>,
+    cover_path: Option<String>,
+    output_path: String,
+    title: Option<String>,
+) -> Result<crate::matroska::MuxResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::matroska::mux_mka(&crate::matroska::MuxOptions {
+            audio_path,
+            subtitle_path,
+            cover_path,
+            output_path,
+            title,
+        })
+    })
+    .await
+    .map_err(|e| format!("合成任务异常: {e}"))?
 }

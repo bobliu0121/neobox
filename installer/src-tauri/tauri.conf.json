@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "NeoBox安装程序",
+  "productName": "NeoBox 安装程序",
   "version": "10.2.1",
   "identifier": "com.neobox.installer",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "新境盒 安装程序",
+        "title": "NeoBox 安装程序",
         "width": 720,
         "height": 450,
         "minWidth": 720,

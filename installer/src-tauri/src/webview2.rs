@@ -85,7 +85,7 @@ pub fn ensure_runtime_or_exit() {
     let (text, caption) = if is_system_language_chinese() {
         (
             "检测到系统缺少 Microsoft Edge WebView2 运行时，安装程序无法显示界面。\n\n点击“是”前往官网下载并安装 WebView2，安装完成后请重新运行本安装程序。\n点击“否”退出。",
-            "新境盒 安装程序",
+            "NeoBox 安装程序",
         )
     } else {
         (

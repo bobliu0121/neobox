@@ -1,6 +1,6 @@
 {
-  "app_title": "新境盒 安装程序",
-  "app_name": "新境盒",
+  "app_title": "NeoBox 安装程序",
+  "app_name": "NeoBox",
   "app_description": "为现代玩家打造的游戏工具箱",
 
   "quick_install": "快速安装",
@@ -16,8 +16,8 @@
   "step_install": "安装中",
   "step_finish": "完成",
 
-  "welcome_title": "欢迎安装 新境盒",
-  "welcome_desc": "本安装程序将引导您完成新境盒的安装过程。新境盒是一款专为游戏玩家打造的系统优化工具箱。",
+  "welcome_title": "欢迎安装 NeoBox",
+  "welcome_desc": "本安装程序将引导您完成 NeoBox 的安装过程。NeoBox 是一款专为游戏玩家打造的系统优化工具箱。",
 
   "license_title": "许可协议",
   "license_desc": "请在安装前阅读以下许可协议。",
@@ -25,21 +25,21 @@
   "license_required": "请先阅读并接受许可协议",
 
   "dir_title": "选择安装位置",
-  "dir_desc": "选择新境盒的安装目录。",
+  "dir_desc": "选择 NeoBox 的安装目录。",
   "dir_browse": "浏览",
   "dir_space": "可用空间",
   "dir_required": "所需空间",
 
   "install_title": "正在安装",
-  "install_desc": "正在安装新境盒，请稍候...",
+  "install_desc": "正在安装 NeoBox，请稍候...",
   "install_copying": "正在复制文件...",
   "install_shortcuts": "正在创建快捷方式...",
   "install_register": "正在注册系统信息...",
   "install_done": "安装完成！",
 
   "finish_title": "安装完成",
-  "finish_desc": "新境盒已成功安装到您的计算机。",
-  "finish_launch": "运行 新境盒",
+  "finish_desc": "NeoBox 已成功安装到您的计算机。",
+  "finish_launch": "运行 NeoBox",
   "finish_desktop": "创建桌面快捷方式",
   "finish_done": "完成",
 

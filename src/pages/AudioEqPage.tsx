@@ -1595,7 +1595,7 @@ ${bandsStr}`;
                     _hover={{ bg: `${activeColor}10`, borderColor: activeColor }} leftIcon={<Download size={14} />}
                     onClick={async () => {
                       try {
-                        const exportName = "新境盒-EQ调音";
+                        const exportName = "NeoBox-EQ调音";
                         const content = buildFacContent(exportName);
                         const { save } = await import("@tauri-apps/plugin-dialog");
                         const path = await save({ defaultPath: `${exportName}.fac`, filters: [{ name: "FxSound 预设", extensions: ["fac"] }] });

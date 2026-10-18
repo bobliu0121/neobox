@@ -36,7 +36,7 @@ try {
     Add-AppxPackage -Path $msix.FullName
     Write-Host ""
     Write-Host "=== 安装成功：$($msix.Name) ===" -ForegroundColor Green
-    Write-Host "开始菜单搜索『新境盒』启动；卸载：设置 > 应用"
+    Write-Host "开始菜单搜索『NeoBox』启动；卸载：设置 > 应用"
 } catch {
     Write-Host ""
     Write-Host "=== 安装失败 ===" -ForegroundColor Red

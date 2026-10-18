@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "新境盒 卸载程序",
+        "title": "NeoBox 卸载程序",
         "width": 720,
         "height": 450,
         "minWidth": 720,

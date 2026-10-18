@@ -735,7 +735,7 @@ export default function OverlayPanelPage() {
               flexShrink={0}
             >
               <Text color={subTextColor} fontSize="xs" fontWeight="500">
-                启动新境盒时自动启用悬浮框
+                启动 NeoBox 时自动启用悬浮框
               </Text>
               <ThemeSwitch
                 isChecked={autoApplyOnStartup}

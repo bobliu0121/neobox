@@ -98,7 +98,7 @@ pub fn get_install_info() -> Result<UninstallInfo, String> {
 
     Ok(UninstallInfo {
         install_dir: install_dir.display().to_string(),
-        app_name: "新境盒".to_string(),
+        app_name: "NeoBox".to_string(),
     })
 }
 
@@ -112,11 +112,11 @@ pub fn start_uninstall() -> Result<UninstallProgress, String> {
     delete_directory_contents(&install_dir, &exe_path)?;
 
     // 2. Delete Start Menu shortcut
-    delete_shortcut("新境盒", "StartMenu")
+    delete_shortcut("NeoBox", "StartMenu")
         .map_err(|e| eprintln!("删除开始菜单快捷方式失败: {}", e)).ok();
 
     // 3. Delete Desktop shortcut
-    delete_shortcut("新境盒", "Desktop")
+    delete_shortcut("NeoBox", "Desktop")
         .map_err(|e| eprintln!("删除桌面快捷方式失败: {}", e)).ok();
 
     // 4. Delete registry entry
@@ -298,7 +298,7 @@ fn cleanup_old_innosetup_registry() {
                         uninstall_key.open_subkey_with_flags(key_name, KEY_READ)
                     {
                         if let Ok(name) = subkey.get_value::<String, _>("DisplayName") {
-                            return name.contains("新境盒")
+                            return name.contains("NeoBox")
                                 || name.to_lowercase().contains("neobox");
                         }
                     }

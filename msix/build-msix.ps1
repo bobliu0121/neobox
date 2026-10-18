@@ -131,7 +131,7 @@ $manifest = @"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
   <Identity Name="$IdentityName" Publisher="$Publisher" Version="$Version" ProcessorArchitecture="x64" />
   <Properties>
-    <DisplayName>新境盒</DisplayName>
+    <DisplayName>NeoBox</DisplayName>
     <PublisherDisplayName>$PublisherDisplayName</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -144,7 +144,7 @@ $manifest = @"
   </Resources>
   <Applications>
     <Application Id="NeoBox" Executable="neobox.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="新境盒" Description="NeoBox 全能系统工具箱" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+      <uap:VisualElements DisplayName="NeoBox" Description="NeoBox 全能系统工具箱" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
     </Application>
   </Applications>
 $capsBlock

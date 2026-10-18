@@ -560,16 +560,17 @@ pub fn save_wallpaper_edit(path: String, data_url: String) -> Result<(), String>
     Ok(())
 }
 
-/// 扫描壁纸文件夹，返回支持的图片/网页文件绝对路径
+/// 扫描壁纸文件夹，返回支持的图片/网页文件绝对路径。
+/// `recursive` 为 true 时递归包含子文件夹。
 #[tauri::command]
-pub fn scan_wallpaper_folder(dir: String) -> Result<Vec<String>, String> {
+pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取文件夹失败: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
+    let root = Path::new(&dir);
+    if !root.is_dir() {
+        return Err("文件夹不存在".to_string());
+    }
+
+    let mut visit = |path: &Path| {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
             if WALLPAPER_EXTS.contains(&ext_lower.as_str()) {
@@ -578,7 +579,28 @@ pub fn scan_wallpaper_folder(dir: String) -> Result<Vec<String>, String> {
                 }
             }
         }
+    };
+
+    if recursive.unwrap_or(false) {
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+        {
+            if entry.file_type().is_file() {
+                visit(entry.path());
+            }
+        }
+    } else {
+        let entries = std::fs::read_dir(root).map_err(|e| format!("读取文件夹失败: {e}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                visit(&path);
+            }
+        }
     }
+
     out.sort();
     Ok(out)
 }

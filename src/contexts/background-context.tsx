@@ -13,11 +13,16 @@ interface PresetBackground {
 }
 
 const PRESET_BACKGROUNDS: PresetBackground[] = [
-  { id: 1, name: "预设1", path: "/backgrounds/preset1.webp" },
-  { id: 2, name: "预设2", path: "/backgrounds/preset2.webp" },
-  { id: 3, name: "预设3", path: "/backgrounds/preset3.webp" },
-  { id: 4, name: "预设4", path: "/backgrounds/preset4.webp" },
+  { id: 1, name: "高山湖泊山村", path: "/backgrounds/preset1.webp" },
+  { id: 2, name: "日落运河村庄", path: "/backgrounds/preset2.webp" },
+  { id: 3, name: "宁静森林湖", path: "/backgrounds/preset3.webp" },
+  { id: 4, name: "阳光森林树冠", path: "/backgrounds/preset4.webp" },
+  { id: 5, name: "极光雪山", path: "/backgrounds/preset5.webp" },
+  { id: 6, name: "森林湖畔", path: "/backgrounds/preset6.webp" },
 ];
+
+/** 自定义背景图片上限（原为 3 张，现已放宽） */
+export const MAX_CUSTOM_BG_IMAGES = 12;
 
 type LiquidGlassMode = "normal" | "real";
 
@@ -103,7 +108,7 @@ export function useBackground() {
 }
 
 
-const MAX_BG_IMAGES = 3;
+const MAX_BG_IMAGES = MAX_CUSTOM_BG_IMAGES;
 
 export function BackgroundProvider({ children }: { children: ReactNode }) {
   const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>("none");

@@ -8,8 +8,8 @@
 //!     同时注册本应用 SMTC 媒体会话（音量浮层/锁屏显示）。
 //!   - 开关关闭：热键保持注册（继续抢占物理媒体键，WebView2 无从插手），
 //!     但 WM_HOTKEY 改为直接命令系统当前的任意媒体会话
-//!     （TryTogglePlayPauseAsync 等，不受音乐白名单限制）——「仅新境盒不响应」；
-//!     同时停用本应用 SMTC 会话（smtc_clear），音量浮层/锁屏不再显示新境盒。
+//!     （TryTogglePlayPauseAsync 等，不受音乐白名单限制）——「仅 NeoBox 不响应」；
+//!     同时停用本应用 SMTC 会话（smtc_clear），音量浮层/锁屏不再显示 NeoBox。
 //!
 //! 若个别播放器抢注了同一批热键导致本应用注册失败，按键会走系统原生流程直达该
 //! 播放器——效果同样正确（原生流程在后台本就可用，前台则因热键被对方持有而直达）。
@@ -286,7 +286,7 @@ mod imp {
 
     /// RegisterHotKey 的消息窗口过程：
     /// - 开启：WM_HOTKEY → 转发前端控制内置播放器
-    /// - 关闭：WM_HOTKEY → 直接命令系统当前的任意媒体会话（仅新境盒不响应）
+    /// - 关闭：WM_HOTKEY → 直接命令系统当前的任意媒体会话（仅 NeoBox 不响应）
     unsafe extern "system" fn hotkey_wnd_proc(
         _hwnd: windows_sys::Win32::Foundation::HWND,
         msg: u32,
@@ -373,7 +373,7 @@ pub fn set_media_keys_enabled(app: tauri::AppHandle, enabled: bool) {
         imp::apply(app, enabled);
         if !enabled {
             // 同步停用本应用的 SMTC 媒体会话：否则系统仍会把媒体控制路由给
-            // 「新境盒」的会话（前端又因开关关闭不响应）
+            // 「NeoBox」的会话（前端又因开关关闭不响应）
             crate::smtc::smtc_clear();
         }
     }

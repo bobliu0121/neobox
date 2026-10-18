@@ -97,7 +97,7 @@ jwalk = "0.8"
 glob = "0.3"
 
 # 启动项图标：从 exe 提取图标并编码为 PNG；图片格式转换（png/jpg/jpeg/webp/bmp 互转）
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "webp", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "webp", "bmp", "gif"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -7,9 +7,9 @@ import { useThemeColor } from "@/contexts/theme-color-context";
 import { getBorderGlowStyle } from "@/hooks/use-glow-effect";
 import { useLiquidGlassRefraction } from "@/components/special/liquid-glass-svg-filter";
 import { store } from "@/lib/store";
+import { DEFAULT_NAV_ORDER, HIDEABLE_NAV_PATHS, normalizeNavOrder } from "@/config/nav-order";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 
-const HIDEABLE_NAV_PATHS = ["/hardware", "/search", "/builtin-tools", "/wallpaper", "/optimization", "/system-optimizer", "/music", "/custom"];
 const getNavStorageKey = (path: string) => `neobox_nav_visible_${path.replace(/\//g, "").replace(/-/g, "_")}`;
 
 // 同步从 localStorage 预填充导航可见性：store 的读取是异步的，若首帧用空对象初始化，
@@ -20,8 +20,8 @@ function readInitialNavVisibility(): Record<string, boolean> {
   const initial: Record<string, boolean> = {};
   for (const path of HIDEABLE_NAV_PATHS) {
     const raw = localStorage.getItem(getNavStorageKey(path));
-    // /custom 默认隐藏（仅显式 "true" 才显示），其余默认显示（仅显式 "false" 才隐藏）
-    initial[path] = path === "/custom" ? raw === "true" : raw !== "false";
+    // 全部导航项默认显示；仅显式 "false" 才隐藏
+    initial[path] = raw !== "false";
   }
   return initial;
 }
@@ -275,47 +275,33 @@ export function Sidebar() {
         const key = getNavStorageKey(path);
         let vis = await store.get<boolean>(key);
         if (vis === null || vis === undefined) {
-          if (path === "/custom") {
-            vis = localStorage.getItem(key) === "true";
-          } else {
-            vis = localStorage.getItem(key) !== "false";
-          }
+          vis = localStorage.getItem(key) !== "false";
         }
         initial[path] = vis;
       }
       setNavVisibility(initial);
 
-      // 读取导航栏排序
+      // 读取导航栏排序：旧版本只保存中间项，normalizeNavOrder 会补全
+      // 主页 / 设置 / 壁纸 / 系统优化，并使用新的默认顺序。
       const orderStr = await store.get<string>("neobox_nav_order");
       if (orderStr) {
         try {
-          const parsed = JSON.parse(orderStr) as string[];
-          const allPaths = ["/hardware", "/search", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
-          let changed = false;
-          for (const p of allPaths) {
-            if (!parsed.includes(p)) { parsed.push(p); changed = true; }
-          }
-          if (changed) {
-            parsed.sort((a: string, b: string) => allPaths.indexOf(a) - allPaths.indexOf(b));
-            await store.set("neobox_nav_order", JSON.stringify(parsed));
+          const parsed = normalizeNavOrder(JSON.parse(orderStr));
+          const normalized = JSON.stringify(parsed);
+          if (normalized !== orderStr) {
+            await store.set("neobox_nav_order", normalized);
             await store.save();
           }
           setNavOrder(parsed);
-        } catch { setNavOrder(null); }
+        } catch {
+          setNavOrder(null);
+        }
       } else {
         try {
           const saved = localStorage.getItem(NAV_ORDER_KEY);
           if (saved) {
-            const parsed = JSON.parse(saved) as string[];
-            const allPaths = ["/hardware", "/search", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
-            let changed = false;
-            for (const p of allPaths) {
-              if (!parsed.includes(p)) { parsed.push(p); changed = true; }
-            }
-            if (changed) {
-              parsed.sort((a: string, b: string) => allPaths.indexOf(a) - allPaths.indexOf(b));
-              localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(parsed));
-            }
+            const parsed = normalizeNavOrder(JSON.parse(saved));
+            localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(parsed));
             setNavOrder(parsed);
           }
         } catch {}
@@ -329,10 +315,10 @@ export function Sidebar() {
       try {
         const saved = await store.get<string>("neobox_nav_order");
         if (saved) {
-          setNavOrder(JSON.parse(saved));
+          setNavOrder(normalizeNavOrder(JSON.parse(saved)));
         } else {
           const ls = localStorage.getItem(NAV_ORDER_KEY);
-          setNavOrder(ls ? JSON.parse(ls) : null);
+          setNavOrder(ls ? normalizeNavOrder(JSON.parse(ls)) : null);
         }
       } catch { setNavOrder(null); }
     };
@@ -386,41 +372,32 @@ export function Sidebar() {
   const hoverBg = getHoverColor(true);
   const activeIconColor = getContrastTextColor();
 
-  const navItems: NavItem[] = [
+  const navItems: NavItem[] = useMemo(() => [
     { path: "/", icon: Home, ariaLabel: t("sidebar.home") },
-    { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
-    { path: "/search", icon: Search, ariaLabel: t("sidebar.search") },
     { path: "/builtin-tools", icon: Package, ariaLabel: t("sidebar.builtinTools") },
     { path: "/wallpaper", icon: Images, ariaLabel: t("sidebar.wallpaper") },
+    { path: "/music", icon: Music, ariaLabel: t("sidebar.music") },
+    { path: "/search", icon: Search, ariaLabel: t("sidebar.search") },
+    { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
     { path: "/optimization", icon: TrendingUp, ariaLabel: t("sidebar.optimization") },
     { path: "/system-optimizer", icon: Settings2, ariaLabel: t("sidebar.systemOptimizer") },
-    { path: "/music", icon: Music, ariaLabel: t("sidebar.music") },
-    { path: "/custom", icon: LayoutGrid, ariaLabel: t("sidebar.custom") },
     { path: "/settings", icon: Settings, ariaLabel: t("sidebar.settings") },
-  ];
+    { path: "/custom", icon: LayoutGrid, ariaLabel: t("sidebar.custom") },
+  ], [t]);
 
-  // 根据保存的顺序排序 navItems（首页和设置固定首尾）
+  // 根据保存的顺序排序 navItems（主页与设置可调位置，但始终显示）
   const sortedNavItems = useMemo(() => {
-    if (!navOrder) return navItems;
     const map = new Map(navItems.map(i => [i.path, i]));
     const ordered: NavItem[] = [];
-    // 首页始终在最前
-    const home = map.get("/");
-    if (home) ordered.push(home);
-    // 按 navOrder 排序中间项
-    for (const p of navOrder) {
-      if (p === "/" || p === "/settings") continue;
+    for (const p of normalizeNavOrder(navOrder ?? DEFAULT_NAV_ORDER)) {
       const item = map.get(p);
-      if (item) ordered.push(item);
+      if (item) {
+        ordered.push(item);
+        map.delete(p);
+      }
     }
     // 追加未在 order 中的新项
-    navItems.forEach(item => {
-      if (item.path === "/" || item.path === "/settings") return;
-      if (!ordered.find(i => i.path === item.path)) ordered.push(item);
-    });
-    // 设置始终在最后
-    const settings = map.get("/settings");
-    if (settings) ordered.push(settings);
+    for (const item of map.values()) ordered.push(item);
     return ordered;
   }, [navItems, navOrder]);
 

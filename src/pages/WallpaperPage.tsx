@@ -30,6 +30,7 @@ import {
   ArrowLeft,
   Images,
   FolderOpen,
+  FolderPlus,
   RefreshCw,
   Play,
   ListMusic,
@@ -58,6 +59,14 @@ const WALLPAPER_HISTORY_KEY = "wallpaper_history";
 const WALLPAPER_ROTATE_KEY = "wallpaper_rotate_enabled";
 const WALLPAPER_INTERVAL_KEY = "wallpaper_rotate_interval_minutes";
 const WALLPAPER_PLAYLIST_KEY = "wallpaper_playlist";
+/** 已导入的壁纸文件夹（持久化，重启后自动重新扫描） */
+const WALLPAPER_FOLDERS_KEY = "wallpaper_folders";
+
+interface WallpaperFolder {
+  path: string;
+  /** true = 同时导入子文件夹；false = 仅当前文件夹 */
+  recursive: boolean;
+}
 
 interface HistoryItem {
   path: string;
@@ -128,7 +137,7 @@ export default function WallpaperPage() {
   const menuBg = useColorModeValue("white", "gray.800");
   const menuBorder = useColorModeValue("gray.200", "gray.600");
 
-  const [folders, setFolders] = useState<string[]>([]);
+  const [folders, setFolders] = useState<WallpaperFolder[]>([]);
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -144,19 +153,50 @@ export default function WallpaperPage() {
   const [dynamicBusy, setDynamicBusy] = useState(false);
   const rotateIndexRef = useRef(0);
 
-  // 读取持久化状态
+  // 读取持久化状态：已导入的壁纸文件夹会重新扫描，避免重启后列表丢失
   useEffect(() => {
     (async () => {
-      const [hist, rot, interval, pl] = await Promise.all([
+      const [hist, rot, interval, pl, storedFolders] = await Promise.all([
         store.get<HistoryItem[]>(WALLPAPER_HISTORY_KEY),
         store.get<boolean>(WALLPAPER_ROTATE_KEY),
         store.get<number>(WALLPAPER_INTERVAL_KEY),
         store.get<PlaylistItem[]>(WALLPAPER_PLAYLIST_KEY),
+        store.get<Array<WallpaperFolder | string>>(WALLPAPER_FOLDERS_KEY),
       ]);
       if (Array.isArray(hist)) setHistory(hist);
       if (typeof rot === "boolean") setRotateEnabled(rot);
       if (typeof interval === "number" && interval > 0) setRotateInterval(interval);
       if (Array.isArray(pl)) setPlaylist(pl);
+      // 兼容旧版本只存路径字符串的数据
+      const normalized: WallpaperFolder[] = (Array.isArray(storedFolders) ? storedFolders : [])
+        .map((item) =>
+          typeof item === "string"
+            ? { path: item, recursive: false }
+            : item && typeof item === "object" && typeof item.path === "string"
+            ? { path: item.path, recursive: !!item.recursive }
+            : null
+        )
+        .filter((item): item is WallpaperFolder => item !== null);
+      if (normalized.length > 0) {
+        setFolders(normalized);
+        setLoading(true);
+        try {
+          let merged: string[] = [];
+          for (const folder of normalized) {
+            const files = await invoke<string[]>("scan_wallpaper_folder", {
+              dir: folder.path,
+              recursive: folder.recursive,
+            });
+            merged = dedupe([...merged, ...files]);
+          }
+          setWallpapers(merged);
+          rotateIndexRef.current = 0;
+        } catch (e) {
+          console.error("恢复壁纸文件夹失败:", e);
+        } finally {
+          setLoading(false);
+        }
+      }
     })();
   }, []);
 
@@ -312,23 +352,31 @@ export default function WallpaperPage() {
     [persistRotate, rotateEnabled],
   );
 
-  // 导入壁纸文件夹（可多次导入，合并结果）
-  const handleImportFolder = useCallback(async () => {
+  const persistFolders = useCallback((next: WallpaperFolder[]) => {
+    setFolders(next);
+    store.set(WALLPAPER_FOLDERS_KEY, next).then(() => store.save());
+  }, []);
+
+  // 导入壁纸文件夹：recursive=false 仅当前文件夹，true 含子文件夹；结果持久化
+  const handleImportFolder = useCallback(async (recursive: boolean) => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({
         directory: true,
         multiple: false,
-        title: t("wallpaper.selectFolderTitle"),
+        title: recursive ? t("wallpaper.selectFolderRecursive") : t("wallpaper.selectFolderTitle"),
       });
       if (typeof selected !== "string") return;
-      if (folders.includes(selected)) {
+      if (folders.some((folder) => folder.path === selected)) {
         toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
         return;
       }
       setLoading(true);
-      const files = await invoke<string[]>("scan_wallpaper_folder", { dir: selected });
-      setFolders((prev) => [...prev, selected]);
+      const files = await invoke<string[]>("scan_wallpaper_folder", {
+        dir: selected,
+        recursive,
+      });
+      persistFolders([...folders, { path: selected, recursive }]);
       setWallpapers((prev) => dedupe([...prev, ...files]));
       rotateIndexRef.current = 0;
       if (files.length === 0) {
@@ -341,18 +389,21 @@ export default function WallpaperPage() {
     } finally {
       setLoading(false);
     }
-  }, [t, toast, folders]);
+  }, [t, toast, folders, persistFolders]);
 
   // 移除已导入文件夹并重扫剩余文件夹
   const handleRemoveFolder = useCallback(
-    async (folder: string) => {
-      const rest = folders.filter((f) => f !== folder);
-      setFolders(rest);
+    async (folder: WallpaperFolder) => {
+      const rest = folders.filter((f) => f.path !== folder.path);
+      persistFolders(rest);
       setLoading(true);
       try {
         let merged: string[] = [];
         for (const f of rest) {
-          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f });
+          const files = await invoke<string[]>("scan_wallpaper_folder", {
+            dir: f.path,
+            recursive: f.recursive,
+          });
           merged = dedupe([...merged, ...files]);
         }
         setWallpapers(merged);
@@ -363,8 +414,34 @@ export default function WallpaperPage() {
         setLoading(false);
       }
     },
-    [folders, toast],
+    [folders, toast, persistFolders],
   );
+
+  // 重新扫描全部已导入文件夹（文件可能在应用外被增删）
+  const refreshFolders = useCallback(async () => {
+    if (folders.length === 0) {
+      rotateIndexRef.current = 0;
+      setWallpapers((prev) => [...prev]);
+      return;
+    }
+    setLoading(true);
+    try {
+      let merged: string[] = [];
+      for (const folder of folders) {
+        const files = await invoke<string[]>("scan_wallpaper_folder", {
+          dir: folder.path,
+          recursive: folder.recursive,
+        });
+        merged = dedupe([...merged, ...files]);
+      }
+      setWallpapers(merged);
+      rotateIndexRef.current = 0;
+    } catch (e) {
+      toast({ title: String(e), status: "error", duration: 3000 });
+    } finally {
+      setLoading(false);
+    }
+  }, [folders, toast]);
 
   // 右键：添加到循环播放列表
   const addToPlaylist = useCallback(
@@ -448,10 +525,20 @@ export default function WallpaperPage() {
                 leftIcon={<FolderOpen />}
                 colorScheme="blue"
                 size="sm"
-                onClick={handleImportFolder}
+                onClick={() => handleImportFolder(false)}
                 isLoading={loading}
               >
                 {t("wallpaper.importFolder")}
+              </Button>
+              <Button
+                leftIcon={<FolderPlus />}
+                colorScheme="blue"
+                variant="outline"
+                size="sm"
+                onClick={() => handleImportFolder(true)}
+                isLoading={loading}
+              >
+                {t("wallpaper.importFolderRecursive")}
               </Button>
               <HStack ml="auto" spacing={2}>
                 <Text fontSize="sm" color={subTextColor}>
@@ -481,10 +568,13 @@ export default function WallpaperPage() {
             {folders.length > 0 && (
               <HStack flexWrap="wrap" spacing={2}>
                 {folders.map((f) => (
-                  <Tag key={f} size="md" colorScheme="blue" variant="subtle">
-                    <TagLabel maxW="240px" isTruncated>
-                      {f}
+                  <Tag key={f.path} size="md" colorScheme="blue" variant="subtle">
+                    <TagLabel maxW="240px" isTruncated title={f.path}>
+                      {f.path}
                     </TagLabel>
+                    <Badge fontSize="2xs" colorScheme={f.recursive ? "purple" : "gray"} ml={1}>
+                      {f.recursive ? t("wallpaper.recursiveBadge") : t("wallpaper.singleBadge")}
+                    </Badge>
                     <TagCloseButton onClick={() => handleRemoveFolder(f)} />
                   </Tag>
                 ))}
@@ -668,8 +758,7 @@ export default function WallpaperPage() {
               leftIcon={<RefreshCw />}
               variant="outline"
               onClick={() => {
-                rotateIndexRef.current = 0;
-                setWallpapers([...wallpapers]);
+                void refreshFolders();
               }}
             >
               {t("wallpaper.refresh")}

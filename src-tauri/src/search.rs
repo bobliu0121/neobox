@@ -168,15 +168,8 @@ impl SearchIndex {
         let mut matches: Vec<MatchRef> = Vec::new();
         let mut total = 0usize;
 
-        if query.is_empty() {
-            return SearchResponse {
-                total: 0,
-                items: Vec::new(),
-                took_ms: 0,
-                truncated: false,
-                index_entries: self.dirs.len() + self.files.len(),
-            };
-        }
+        // 空关键词表示「浏览当前格式筛选下的全部条目」，而不是返回空结果。
+        // total 统计完整命中数，items 仍受 max_results / COLLECT_CAP 限制。
 
         if include_dirs {
             for (i, dir) in self.dirs.iter().enumerate().skip(1) {

@@ -56,7 +56,7 @@ import {
 } from "react-icons/lu";
 import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useBackground } from "@/contexts/background-context";
+import { MAX_CUSTOM_BG_IMAGES, useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useThemeMode } from "@/contexts/theme-mode-context";
 
@@ -98,6 +98,8 @@ import { GripVertical } from "lucide-react";
 import AdvancedPage from "@/pages/AdvancedPage";
 import { store } from "@/lib/store";
 import { getLanguagePreference, setLanguagePreference } from "@/lib/i18n";
+import { DEFAULT_NAV_ORDER, HIDEABLE_NAV_PATHS, isFixedNavPath, normalizeNavOrder } from "@/config/nav-order";
+import { renderMarkdownLite } from "@/lib/markdown-lite";
 
 /** 限制导航栏拖拽只能沿竖直方向移动，禁止左右（向右）拖动 */
 const restrictToVerticalAxis: Modifier = ({ transform }) => ({
@@ -122,6 +124,7 @@ function SortableNavItem({
   dragHandleColor,
   labelColor,
   dragBg,
+  toggleDisabled = false,
 }: {
   id: string;
   label: string;
@@ -130,6 +133,7 @@ function SortableNavItem({
   dragHandleColor: string;
   labelColor: string;
   dragBg: string;
+  toggleDisabled?: boolean;
 }) {
   const {
     attributes,
@@ -174,6 +178,7 @@ function SortableNavItem({
           size="md"
           isChecked={visible}
           onChange={onToggle}
+          isDisabled={toggleDisabled}
         />
       </HStack>
     </Box>
@@ -205,7 +210,7 @@ function GeneralSettings() {
   const [navVisibility, setNavVisibility] = useState<Record<string, boolean>>({});
   const [navPosition, setNavPosition] = useState<"left" | "top">("left");
   const NAV_ORDER_KEY = "neobox_nav_order";
-  const defaultNavOrder = ["/hardware", "/search", "/builtin-tools", "/optimization", "/music", "/custom"];
+  const defaultNavOrder = [...DEFAULT_NAV_ORDER];
   const [navOrder, setNavOrder] = useState<string[]>(defaultNavOrder);
   const navSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -386,15 +391,11 @@ function GeneralSettings() {
 
       // 导航可见性
       const visibilityMap: Record<string, boolean> = {};
-      for (const p of ["/hardware", "/search", "/builtin-tools", "/optimization", "/music", "/custom"]) {
+      for (const p of HIDEABLE_NAV_PATHS) {
         const key = `neobox_nav_visible_${p.replace(/\//g, "").replace(/-/g, "_")}`;
         let vis = await store.get<boolean>(key);
         if (vis === null || vis === undefined) {
-          if (p === "/custom") {
-            vis = localStorage.getItem(key) === "true";
-          } else {
-            vis = localStorage.getItem(key) !== "false";
-          }
+          vis = localStorage.getItem(key) !== "false";
         }
         visibilityMap[p] = vis;
       }
@@ -404,14 +405,10 @@ function GeneralSettings() {
       const orderStr = await store.get<string>("neobox_nav_order");
       if (orderStr) {
         try {
-          const parsed = (JSON.parse(orderStr) as string[]).filter((p) => defaultNavOrder.includes(p));
-          let changed = false;
-          for (const p of defaultNavOrder) {
-            if (!parsed.includes(p)) { parsed.push(p); changed = true; }
-          }
-          if (changed) {
-            parsed.sort((a, b) => defaultNavOrder.indexOf(a) - defaultNavOrder.indexOf(b));
-            await store.set("neobox_nav_order", JSON.stringify(parsed));
+          const parsed = normalizeNavOrder(JSON.parse(orderStr));
+          const normalized = JSON.stringify(parsed);
+          if (normalized !== orderStr) {
+            await store.set("neobox_nav_order", normalized);
             await store.save();
           }
           setNavOrder(parsed);
@@ -420,15 +417,8 @@ function GeneralSettings() {
         const ls = localStorage.getItem(NAV_ORDER_KEY);
         if (ls) {
           try {
-            const parsed = (JSON.parse(ls) as string[]).filter((p) => defaultNavOrder.includes(p));
-            let changed = false;
-            for (const p of defaultNavOrder) {
-              if (!parsed.includes(p)) { parsed.push(p); changed = true; }
-            }
-            if (changed) {
-              parsed.sort((a, b) => defaultNavOrder.indexOf(a) - defaultNavOrder.indexOf(b));
-              localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(parsed));
-            }
+            const parsed = normalizeNavOrder(JSON.parse(ls));
+            localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(parsed));
             setNavOrder(parsed);
           } catch {}
         }
@@ -575,6 +565,7 @@ function GeneralSettings() {
   };
 
   const handleNavItemToggle = (path: string) => {
+    if (isFixedNavPath(path)) return;
     const key = `neobox_nav_visible_${path.replace(/\//g, "").replace(/-/g, "_")}`;
     const newValue = !navVisibility[path];
     setNavVisibility(prev => ({ ...prev, [path]: newValue }));
@@ -1136,11 +1127,15 @@ function GeneralSettings() {
               <SortableContext items={navOrder} strategy={verticalListSortingStrategy}>
                 {navOrder.map((path) => {
                   const labelMap: Record<string, string> = {
-                    "/hardware": t("sidebar.hardware"),
-                    "/search": t("sidebar.search"),
+                    "/": t("sidebar.home"),
                     "/builtin-tools": t("sidebar.builtinTools"),
-                    "/optimization": t("sidebar.optimization"),
+                    "/wallpaper": t("sidebar.wallpaper"),
                     "/music": t("sidebar.music"),
+                    "/search": t("sidebar.search"),
+                    "/hardware": t("sidebar.hardware"),
+                    "/optimization": t("sidebar.optimization"),
+                    "/system-optimizer": t("sidebar.systemOptimizer"),
+                    "/settings": t("sidebar.settings"),
                     "/custom": t("sidebar.custom"),
                   };
                   return (
@@ -1148,7 +1143,8 @@ function GeneralSettings() {
                       key={path}
                       id={path}
                       label={labelMap[path] || path}
-                      visible={navVisibility[path] !== false}
+                      visible={isFixedNavPath(path) || navVisibility[path] !== false}
+                      toggleDisabled={isFixedNavPath(path)}
                       onToggle={() => handleNavItemToggle(path)}
                       dragHandleColor={dragHandleColor}
                       labelColor={labelColor}
@@ -1316,23 +1312,57 @@ function AppearanceSettings() {
     setThemeMode(value as "system" | "light" | "dark");
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** 上传前压缩：避免多张 4K 图片以 data URL 形式撑爆设置存储 */
+  const compressBackgroundImage = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
+      reader.onload = () => {
+        const image = new window.Image();
+        image.onerror = () => reject(new Error("解析图片失败"));
+        image.onload = () => {
+          const maxSide = 1920;
+          const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+          const width = Math.max(1, Math.round(image.width * scale));
+          const height = Math.max(1, Math.round(image.height * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          if (!context) {
+            reject(new Error("无法创建画布"));
+            return;
+          }
+          context.drawImage(image, 0, 0, width, height);
+          resolve(canvas.toDataURL("image/jpeg", 0.86));
+        };
+        image.src = reader.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
+      try {
+        const result = await compressBackgroundImage(file);
         const success = addCustomBgImage(result);
         if (!success) {
           toast({
-            title: t("settings.appearanceSettings.maxImagesReached") || "最多只能添加3张背景图片",
+            title: t("settings.appearanceSettings.maxImagesReached") || "已达到背景图片数量上限",
             status: "warning",
             duration: 2000,
             isClosable: true,
           });
         }
-      };
-      reader.readAsDataURL(file);
+      } catch (error) {
+        toast({
+          title: String(error) || "图片处理失败",
+          status: "error",
+          duration: 2500,
+          isClosable: true,
+        });
+      }
     }
     e.target.value = "";
   };
@@ -1360,9 +1390,9 @@ function AppearanceSettings() {
   };
 
   const handleAddClick = () => {
-    if (customBgImages.length >= 3) {
+    if (customBgImages.length >= MAX_CUSTOM_BG_IMAGES) {
       toast({
-        title: t("settings.appearanceSettings.maxImagesReached") || "最多只能添加3张背景图片",
+        title: t("settings.appearanceSettings.maxImagesReached") || "已达到背景图片数量上限",
         status: "warning",
         duration: 2000,
         isClosable: true,
@@ -1835,13 +1865,13 @@ function AppearanceSettings() {
                         onChange={() => setCarouselEnabled(!carouselEnabled)}
                       />
                     </HStack>
-                    <HStack spacing={2} justify="flex-end">
+                    <HStack spacing={2} justify="flex-end" flexWrap="wrap">
                       {presetBackgrounds.map((preset, index) => (
                         <Box
                           key={preset.id}
                           position="relative"
-                          w="160px"
-                          h="90px"
+                          w="130px"
+                          h="73px"
                           borderRadius="lg"
                           overflow="hidden"
                           border="2px solid"
@@ -1881,8 +1911,16 @@ function AppearanceSettings() {
                 )}
 
                 {backgroundMode === "image" && (
-                  <HStack spacing={2} justify="flex-end">
-                    {[0, 1, 2].map((index) => (
+                  <HStack spacing={2} justify="flex-end" flexWrap="wrap">
+                    {Array.from(
+                      {
+                        length: Math.max(
+                          3,
+                          Math.min(MAX_CUSTOM_BG_IMAGES, customBgImages.length + 1)
+                        ),
+                      },
+                      (_, index) => (
+
                       <Box
                         key={index}
                         position="relative"
@@ -2439,131 +2477,6 @@ function NetworkSettings() {
   );
  }
 
-function renderChangelogInline(text: string): ReactNode[] {
-  const parts = text
-    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g)
-    .filter(Boolean);
-  return parts.map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return (
-        <strong key={index} style={{ fontWeight: 700 }}>
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return (
-        <code
-          key={index}
-          style={{
-            fontFamily: "Consolas, monospace",
-            background: "rgba(127,127,127,0.18)",
-            padding: "1px 4px",
-            borderRadius: 4,
-          }}
-        >
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
-    if (link) {
-      return <span key={index}>{link[1]}</span>;
-    }
-    return <span key={index}>{part}</span>;
-  });
-}
-
-/** 轻量 Markdown 渲染：仅处理标题、列表、代码块、粗体/行内代码，避免为更新日志引入额外依赖 */
-function renderChangelog(
-  body: string,
-  textColor: string,
-  bulletColor: string,
-): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const codeLines: string[] = [];
-  let inCode = false;
-
-  const flushCode = () => {
-    if (!codeLines.length) return;
-    nodes.push(
-      <Box
-        key={`code-${nodes.length}`}
-        mt={1}
-        mb={2}
-        p={3}
-        borderRadius="md"
-        bg="rgba(127,127,127,0.12)"
-        overflowX="auto"
-      >
-        <Text as="pre" fontSize="xs" fontFamily="Consolas, monospace" color={textColor} m={0}>
-          {codeLines.join("\n")}
-        </Text>
-      </Box>,
-    );
-    codeLines.length = 0;
-  };
-
-  body.split(/\r?\n/).forEach((line, index) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("```")) {
-      if (inCode) {
-        flushCode();
-        inCode = false;
-      } else {
-        inCode = true;
-      }
-      return;
-    }
-    if (inCode) {
-      codeLines.push(line);
-      return;
-    }
-    if (!trimmed) {
-      nodes.push(<Box key={`sp-${index}`} h="6px" />);
-      return;
-    }
-    const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
-    if (heading) {
-      nodes.push(
-        <Text
-          key={index}
-          fontWeight="bold"
-          fontSize={heading[1].length <= 2 ? "md" : "sm"}
-          color={textColor}
-          mt={index === 0 ? 0 : 3}
-          mb={1}
-        >
-          {renderChangelogInline(heading[2])}
-        </Text>,
-      );
-      return;
-    }
-    const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
-    if (bullet) {
-      nodes.push(
-        <HStack key={index} align="start" spacing={2} mb={1}>
-          <Text color={bulletColor} fontSize="sm" lineHeight="1.6">
-            •
-          </Text>
-          <Text color={textColor} fontSize="sm" lineHeight="1.6" flex={1}>
-            {renderChangelogInline(bullet[1])}
-          </Text>
-        </HStack>,
-      );
-      return;
-    }
-    nodes.push(
-      <Text key={index} color={textColor} fontSize="sm" lineHeight="1.6" whiteSpace="pre-wrap">
-        {renderChangelogInline(trimmed)}
-      </Text>,
-    );
-  });
-
-  if (inCode) flushCode();
-  return nodes;
-}
-
 function AboutSettings() {
   const { t } = useTranslation();
   const { getActiveColor } = useThemeColor();
@@ -2681,6 +2594,27 @@ function AboutSettings() {
       <Text fontSize="lg" fontWeight="bold" mb={6} color={titleColor}>
         {t("settings.aboutSettings.title")}
       </Text>
+
+      {/* 品牌展示：关于页顶部的图标 + 字标 */}
+      <LiquidGlassCard p={4} boxShadow="sm" mb={4}>
+        <HStack spacing={5} justify="center" align="center" flexWrap="wrap">
+          <Image
+            src="/about/about1.webp"
+            alt="NeoBox"
+            boxSize={{ base: "84px", md: "104px" }}
+            objectFit="contain"
+            draggable={false}
+          />
+          <Image
+            src="/about/about2.webp"
+            alt="NeoBox"
+            h={{ base: "42px", md: "58px" }}
+            maxW="340px"
+            objectFit="contain"
+            draggable={false}
+          />
+        </HStack>
+      </LiquidGlassCard>
 
       {/* 作者信息 */}
       <LiquidGlassCard p={5} boxShadow="sm" mb={4}>
@@ -2928,7 +2862,7 @@ function AboutSettings() {
               "&::-webkit-scrollbar-thumb:hover": { background: changelogScrollColor },
             }}
           >
-            {renderChangelog(currentRelease.body, labelColor, subLabelColor)}
+            {renderMarkdownLite(currentRelease.body, labelColor, subLabelColor)}
           </Box>
         ) : (
           <Box p={4} textAlign="center">
@@ -3265,4 +3199,3 @@ export default function SettingsPage() {
     </Flex>
   );
 }
-

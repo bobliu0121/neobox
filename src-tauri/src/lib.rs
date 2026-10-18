@@ -27,6 +27,7 @@ mod jedec;
 mod feature_flags;
 mod hotkey;
 mod main_window;
+mod matroska;
 mod media_keys;
 mod music;
 mod network_optimize;
@@ -64,6 +65,7 @@ mod tray;
 mod uapi;
 mod utils;
 mod video_bg;
+mod video_convert;
 mod webview_args;
 mod wmi_query;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,7 +97,7 @@ pub fn ensure_vertical_overlay<R: tauri::Runtime>(
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(label.into()))
         .title("NeoBox Vertical Overlay")
         // 与其它窗口保持一致的 WebView2 参数：禁用 Chromium 自动媒体会话，
-        // 避免与 smtc.rs 注册的「新境盒」媒体会话重复（参数必须全窗口一致，否则 WebView2 环境冲突导致窗口创建失败）
+        // 避免与 smtc.rs 注册的「NeoBox」媒体会话重复（参数必须全窗口一致，否则 WebView2 环境冲突导致窗口创建失败）
         .additional_browser_args(crate::webview_args::BROWSER_ARGS)
         .inner_size(220.0, 400.0)
         .resizable(false)
@@ -456,7 +458,7 @@ pub fn run() {
             // 启动外部客户端播放的后台系统媒体会话轮询
             external_player::start(app.handle().clone());
 
-            // 注册本应用内置播放器的 SMTC 媒体会话（音量浮层/锁屏显示「新境盒」并支持媒体键控制）
+            // 注册本应用内置播放器的 SMTC 媒体会话（音量浮层/锁屏显示「NeoBox」并支持媒体键控制）
             smtc::start(app.handle().clone());
 
             // 键盘物理媒体键统一捕获（前台聚焦时 WebView2 会抢键，必须用低层钩子在 WebView2 之前接管）
@@ -465,8 +467,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-        announcement::get_announcements,
-        announcement::get_important_announcements,
+        announcement::get_release_history,
         auto_start::set_neobox_auto_start,
         auto_start::check_neobox_auto_start,
         hardware::get_hardware,
@@ -918,6 +919,8 @@ pub fn run() {
         // === 文件格式转换（图片/音频） ===
         file_convert::convert_image,
         file_convert::convert_audio,
+        file_convert::convert_video,
+        file_convert::mux_mka,
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,

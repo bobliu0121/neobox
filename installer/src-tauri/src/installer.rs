@@ -261,17 +261,17 @@ pub fn install(
         .map_err(|e| format!("无法注册卸载信息: {}", e))?;
 
     // Remove any existing shortcuts to avoid duplicates from old version
-    delete_existing_shortcuts("新境盒");
+    delete_existing_shortcuts("NeoBox");
 
     // Create Start Menu shortcut (non-fatal — installation succeeds regardless)
     let exe_path = target.join("neobox.exe");
-    if let Err(e) = create_lnk_shortcut("新境盒", &exe_path, "StartMenu") {
+    if let Err(e) = create_lnk_shortcut("NeoBox", &exe_path, "StartMenu") {
         eprintln!("创建开始菜单快捷方式失败 (非致命): {}", e);
     }
 
     // Create Desktop shortcut if requested (non-fatal)
     if create_desktop_shortcut {
-        if let Err(e) = create_lnk_shortcut("新境盒", &exe_path, "Desktop") {
+        if let Err(e) = create_lnk_shortcut("NeoBox", &exe_path, "Desktop") {
             eprintln!("创建桌面快捷方式失败 (非致命): {}", e);
         }
     }
@@ -410,7 +410,7 @@ fn register_uninstall(install_dir: &str, version: &str) -> Result<(), String> {
     let icon_path = format!("{}\\neobox.exe", install_dir);
     let uninstaller_path = format!("{}\\Uninstneobox.exe", install_dir);
 
-    key.set_value("DisplayName", &"新境盒")
+    key.set_value("DisplayName", &"NeoBox")
         .map_err(|e| format!("写入注册表失败: {}", e))?;
     key.set_value("DisplayVersion", &version)
         .map_err(|e| format!("写入注册表失败: {}", e))?;
@@ -475,7 +475,7 @@ fn cleanup_old_innosetup_registry() {
                         uninstall_key.open_subkey_with_flags(key_name, KEY_READ)
                     {
                         if let Ok(name) = subkey.get_value::<String, _>("DisplayName") {
-                            return name.contains("新境盒")
+                            return name.contains("NeoBox")
                                 || name.to_lowercase().contains("neobox");
                         }
                     }

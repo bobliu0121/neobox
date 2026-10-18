@@ -1,7 +1,7 @@
 {
   "common": {
     "appName": "NeoBox",
-    "appFullName": "新境盒",
+    "appFullName": "NeoBox",
     "description": "跨平台性能监控（Tauri + Next.js + 传感器服务）",
     "close": "关闭",
     "cancel": "取消",
@@ -13,7 +13,7 @@
     "list": "列表视图"
   },
   "onboarding": {
-    "title": "欢迎使用新境盒",
+    "title": "欢迎使用 NeoBox",
     "subtitle": "让我们一起开始",
     "step": "步骤",
     "steps": {
@@ -29,7 +29,7 @@
       },
       "complete": {
         "title": "一切就绪！",
-        "description": "您已经完成了所有设置，现在开始使用新境盒吧！",
+        "description": "您已经完成了所有设置，现在开始使用 NeoBox 吧！",
         "button": "开始使用"
       }
     }
@@ -64,7 +64,9 @@
     "bsodLog": "蓝屏日志",
     "imageConverter": "图片转换",
     "audioConverter": "音频转换",
-    "wallpaper": "壁纸管理"
+    "wallpaper": "壁纸管理",
+    "videoConverter": "视频转换",
+    "mkaMuxer": "MKA 合成"
   },
   "customPage": {
     "title": "自定义页面",
@@ -483,8 +485,8 @@
         "saveRuleBtn": "保存规则",
         "ruleNameRequired": "请输入规则名称",
         "ruleNamePlaceholder": "输入名称",
-        "autoApply": "启动新境盒自动应用",
-        "autoApplyHint": "勾选后启动新境盒时自动应用此隔离规则",
+        "autoApply": "启动 NeoBox 自动应用",
+        "autoApplyHint": "勾选后启动 NeoBox 时自动应用此隔离规则",
         "autoApplyBadge": "自动",
         "restoreRule": "恢复",
         "activeBadge": "生效中",
@@ -497,13 +499,13 @@
     }
   },
   "home": {
-    "title": "欢迎使用新境盒",
+    "title": "欢迎使用 NeoBox",
     "welcome": "欢迎",
     "selectTools": "选择快捷工具",
     "todayPopularity": "今日人气",
     "randomQuote": "随机一言",
-    "announcement": "公告",
-    "announcementList": "公告列表",
+    "announcement": "发布",
+    "announcementList": "发布历史",
     "loading": "加载中...",
     "noAnnouncement": "暂无公告",
     "important": "重要",
@@ -533,7 +535,10 @@
     "feedbackCard": {
       "title": "问题反馈",
       "subtitle": "跳转到官网反馈问题"
-    }
+    },
+    "releaseHistory": "发布历史",
+    "releaseNoNotes": "该版本没有填写发布说明。",
+    "viewOnGitHub": "在 GitHub 查看"
   },
   "hardware": {
     "title": "硬件信息",
@@ -735,7 +740,9 @@
     "screenTestDesc": "检测显示器坏点、响应时间、刷新率与画面均匀性",
     "bsodLogDesc": "分析蓝屏崩溃事件与转储文件，定位问题驱动与硬件",
     "imageConverterDesc": "图片格式（PNG/JPG/JPEG/WebP/BMP）相互转换",
-    "audioConverterDesc": "音频格式（WAV/MP3/M4A）相互转换"
+    "audioConverterDesc": "音频格式（WAV/MP3/M4A）相互转换",
+    "videoConverterDesc": "视频转 GIF 动图、首帧图片，或提取音频",
+    "mkaMuxerDesc": "音频 + 字幕 + 封面合成为 MKA 文件"
   },
   "contextMenu": {
     "title": "右键菜单 & 此电脑",
@@ -1091,7 +1098,7 @@
       "clearDataConfirm": "将清除全部数据并重置所有设置，此操作不可撤销。确认重置？",
       "confirmReset": "确认重置",
       "mediaKeysTitle": "键盘媒体键控制音乐（SMTC）",
-      "mediaKeysDesc": "关闭后同时停用系统媒体会话（SMTC）：音量浮层/锁屏不再显示新境盒，媒体键交还给其他软件",
+      "mediaKeysDesc": "关闭后同时停用系统媒体会话（SMTC）：音量浮层/锁屏不再显示 NeoBox，媒体键交还给其他软件",
       "islandExternalTitle": "灵动岛显示在桌面上",
       "islandExternalDesc": "开启后提示与播放岛移出主窗口，固定显示在屏幕顶部中央；主窗口隐藏到托盘后仍然可见，光标不在岛体上时自动鼠标穿透",
       "builtinCount": "内置 {{count}} 款",
@@ -1121,8 +1128,8 @@
       "homeUsernameReset": "恢复默认",
       "todayPopularityLabel": "今日人气",
       "todayPopularityDesc": "在主页显示今日人气随机数",
-      "announcementLabel": "公告",
-      "announcementDesc": "在主页显示公告卡片",
+      "announcementLabel": "发布历史",
+      "announcementDesc": "在主页显示 GitHub Release 历史卡片",
       "randomQuoteLabel": "随机一言",
       "randomQuoteDesc": "在主页显示随机一言卡片",
       "homeHardwareModelLabel": "硬件型号",
@@ -1225,7 +1232,7 @@
       "customBackground": "自定义背景",
       "customBackgroundLabel": "启用自定义背景",
       "imageUrlPlaceholder": "输入图片URL或点击上传",
-      "maxImagesReached": "最多只能添加3张背景图片",
+      "maxImagesReached": "最多可添加 12 张背景图片",
       "presetBackground": "预设背景",
       "carouselLabel": "自动轮播",
       "carouselDesc": "每10秒自动切换预设壁纸",
@@ -2482,8 +2489,8 @@
   },
   "wallpaper": {
     "title": "壁纸管理",
-    "selectFolderTitle": "选择壁纸文件夹",
-    "importFolder": "导入壁纸文件夹",
+    "selectFolderTitle": "选择壁纸文件夹（仅当前层）",
+    "importFolder": "导入文件夹（仅当前层）",
     "noImages": "该文件夹没有支持的图片",
     "loadedCount": "已加载 {{count}} 张壁纸",
     "applied": "壁纸已设置",
@@ -2519,12 +2526,16 @@
     "editorCancel": "取消",
     "editorLoadFailed": "图片加载失败",
     "editorSaved": "已保存（覆盖原文件）",
-    "editorSavedAs": "已另存为新 PNG 文件"
+    "editorSavedAs": "已另存为新 PNG 文件",
+    "importFolderRecursive": "导入文件夹（含子文件夹）",
+    "selectFolderRecursive": "选择壁纸文件夹（包含子文件夹）",
+    "recursiveBadge": "含子文件夹",
+    "singleBadge": "单层"
   },
   "fileSearch": {
     "title": "文件搜索",
-    "subtitle": "像 Everything 一样快速查找本机文件：输入即搜，双击打开。",
-    "placeholder": "输入文件名或关键词…",
+    "subtitle": "像 Everything 一样快速查找本机文件：输入即搜，留空浏览全部，双击打开。",
+    "placeholder": "输入关键词筛选，留空浏览全部…",
     "clear": "清空",
     "scope": "范围",
     "allDrives": "所有磁盘",
@@ -2532,7 +2543,12 @@
     "chooseFolder": "选择要搜索的目录",
     "formatLabel": "格式",
     "sortLabel": "排序",
-    "sort": {"name": "名称", "modified": "修改日期", "type": "格式", "size": "大小"},
+    "sort": {
+      "name": "名称",
+      "modified": "修改日期",
+      "type": "格式",
+      "size": "大小"
+    },
     "sortAsc": "正序",
     "sortDesc": "倒序",
     "format": {
@@ -2558,7 +2574,7 @@
     "searching": "搜索中…",
     "truncated": "仅显示前 {{count}} 个",
     "took": "{{ms}} ms",
-    "emptyHint": "输入关键词开始搜索",
+    "emptyHint": "留空即可浏览当前格式下的全部条目",
     "emptyTip": "索引只保存在本机内存中，不会上传任何文件信息。",
     "noResults": "没有找到匹配的文件",
     "noIndex": "尚未建立索引",
@@ -2579,5 +2595,59 @@
     "hintOpen": "Enter 打开",
     "hintReveal": "Ctrl+Enter 定位",
     "scopeAll": "所有磁盘"
+  },
+  "videoConverter": {
+    "title": "视频格式转换",
+    "selectInput": "选择视频",
+    "inputHint": "支持 MP4 / MKV / MOV / AVI / WebM 等，也可以直接选择音频文件",
+    "outputFormat": "输出格式",
+    "fps": "帧率",
+    "width": "宽度",
+    "start": "开始（秒）",
+    "duration": "时长（秒）",
+    "selectOutput": "选择输出位置",
+    "autoSaveHint": "未选择时自动保存到源文件同目录",
+    "convert": "开始转换",
+    "converting": "转换中...",
+    "convertingHint": "GIF 需要逐帧解码，长视频请缩短截取时长",
+    "success": "转换完成",
+    "failed": "转换失败",
+    "noInput": "请先选择视频文件",
+    "samePath": "输出路径不能与源文件相同",
+    "resultTitle": "转换结果",
+    "done": "完成",
+    "frames": "{{count}} 帧",
+    "hint": "使用系统 Media Foundation 解码，无需安装 ffmpeg。GIF 建议截取 10–20 秒、宽度 480px 以控制体积。"
+  },
+  "mkaMuxer": {
+    "title": "MKA 合成",
+    "audio": "音频（必选）",
+    "subtitle": "字幕（可选）",
+    "cover": "封面图片（可选）",
+    "selectAudio": "选择音频",
+    "selectSubtitle": "选择字幕",
+    "selectCover": "选择封面",
+    "audioFilter": "音频文件",
+    "subtitleFilter": "字幕文件",
+    "coverFilter": "图片文件",
+    "allFiles": "所有文件",
+    "titleField": "标题（可选）",
+    "titlePlaceholder": "留空则使用文件名",
+    "output": "输出文件",
+    "selectOutput": "选择输出位置",
+    "autoSaveHint": "未选择时保存到音频同目录",
+    "mux": "开始合成",
+    "muxing": "合成中...",
+    "success": "合成完成",
+    "failed": "合成失败",
+    "noAudio": "请先选择音频文件",
+    "resultTitle": "合成结果",
+    "done": "完成",
+    "audioCodec": "音频编码",
+    "subtitleCodec": "字幕编码",
+    "duration": "时长",
+    "coverIncluded": "含封面",
+    "clear": "清除",
+    "hint": "音频会转码为 AAC 写入 MKA；字幕支持 SRT / VTT / ASS / SSA；封面作为附件保存。合成后的 MKA 可以在音乐模块直接打开。"
   }
 }

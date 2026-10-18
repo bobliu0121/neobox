@@ -337,15 +337,10 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // 执行搜索
+  // 执行搜索（空关键词 = 浏览当前格式筛选下的全部条目）
   useEffect(() => {
     if (!indexReady) return;
     const keyword = debounced.trim();
-    if (!keyword) {
-      setResponse(null);
-      setSearching(false);
-      return;
-    }
     const preset = getSearchFilter(filterKey);
     const extensions =
       filterKey === "custom" ? parseCustomExtensions(customExt) : preset.extensions;
@@ -542,7 +537,7 @@ export default function SearchPage() {
     scope.mode === "all"
       ? `${t("fileSearch.scopeAll")}${drives.length ? ` (${drives.map((d) => d.letter).join(" ")})` : ""}`
       : shortenPath(scope.path, 40);
-  const isEmpty = indexReady && debounced.trim().length > 0 && !searching && items.length === 0;
+  const isEmpty = indexReady && !searching && items.length === 0;
 
   return (
     <Flex direction="column" gap={3} pb={2}>
@@ -838,16 +833,6 @@ export default function SearchPage() {
                 <FolderSearch size={15} />
                 {t("fileSearch.buildIndex")}
               </HStack>
-            </Flex>
-          ) : !debounced.trim() ? (
-            <Flex direction="column" align="center" justify="center" h="100%" minH="240px" gap={3}>
-              <Search size={38} color={subColor} opacity={0.7} />
-              <Text fontSize="sm" color={bodyColor}>
-                {t("fileSearch.emptyHint")}
-              </Text>
-              <Text fontSize="xs" color={subColor} maxW="520px" textAlign="center">
-                {t("fileSearch.emptyTip")}
-              </Text>
             </Flex>
           ) : isEmpty ? (
             <Flex direction="column" align="center" justify="center" h="100%" minH="240px" gap={2}>

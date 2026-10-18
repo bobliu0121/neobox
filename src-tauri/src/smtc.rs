@@ -1,7 +1,7 @@
 //! 内部播放器 SMTC（System Media Transport Controls）集成
 //!
 //! 把 NeoBox 内置音乐播放器的播放信息注册到 Windows 系统媒体传输控制：
-//! - 音量浮层 / 锁屏显示「新境盒」+ 封面 + 歌名 + 歌手 + 进度条
+//! - 音量浮层 / 锁屏显示「NeoBox」+ 封面 + 歌名 + 歌手 + 进度条
 //! - 系统媒体键（播放/暂停/上一曲/下一曲）与浮层拖动进度控制内部播放器
 //!
 //! 与 external_player.rs（读取外部客户端会话）相反，本模块是注册**本应用自己**
@@ -12,7 +12,7 @@
 //! 注意：WebView2(Chromium) 会为 <audio> 播放自动注册系统媒体会话（显示「未知应用」），
 //! 与本站点会话重复。因此所有窗口统一配置 additionalBrowserArgs
 //! `--disable-features=MediaSessionService,HardwareMediaKeyHandling` 禁用它，
-//! 只保留本会话（显示名「新境盒」）。参数必须全窗口一致，否则 WebView2 环境冲突。
+//! 只保留本会话（显示名「NeoBox」）。参数必须全窗口一致，否则 WebView2 环境冲突。
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
@@ -100,9 +100,9 @@ mod imp {
 
     /// 启动时注册本应用媒体会话（在 Tauri setup 中调用一次）
     pub fn start(app: AppHandle) {
-        // SMTC 浮层顶部显示的应用名取自绑定窗口的标题，统一改为中文品牌名「新境盒」
+        // SMTC 浮层顶部显示的应用名取自绑定窗口的标题，统一改为中文品牌名「NeoBox」
         if let Some(win) = app.get_webview_window("main") {
-            let _ = win.set_title("新境盒");
+            let _ = win.set_title("NeoBox");
         }
         let _ = APP.set(app.clone());
 
@@ -509,7 +509,7 @@ pub fn start(app: tauri::AppHandle) {
 #[tauri::command]
 pub fn smtc_update_state(state: SmtcState) {
     // 「设置 → 高级 → 键盘媒体键控制」关闭时：不向系统推送/启用本应用媒体会话。
-    // 启用中的 SMTC 会话会让系统把物理媒体键路由给新境盒（前端又因开关不响应），
+    // 启用中的 SMTC 会话会让系统把物理媒体键路由给 NeoBox（前端又因开关不响应），
     // 导致其他音乐软件收不到媒体键；此处直接忽略推送，保持会话禁用。
     if !crate::media_keys::control_enabled() {
         return;
