@@ -2669,6 +2669,10 @@
     "pickFolder": "指定目錄…",
     "chooseFolder": "選擇要搜尋的目錄",
     "formatLabel": "格式",
+    "sortLabel": "排序",
+    "sort": {"name": "名稱", "modified": "修改日期", "type": "格式", "size": "大小"},
+    "sortAsc": "正序",
+    "sortDesc": "倒序",
     "format": {
       "all": "全部",
       "folders": "僅資料夾",

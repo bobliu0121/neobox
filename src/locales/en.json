@@ -2729,6 +2729,10 @@
     "pickFolder": "Choose folder…",
     "chooseFolder": "Choose a folder to search",
     "formatLabel": "Format",
+    "sortLabel": "Sort",
+    "sort": {"name": "Name", "modified": "Date modified", "type": "Type", "size": "Size"},
+    "sortAsc": "Ascending",
+    "sortDesc": "Descending",
     "format": {
       "all": "All",
       "folders": "Folders only",

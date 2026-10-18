@@ -55,8 +55,11 @@ export interface SearchOptions {
   includeHidden: boolean;
   caseSensitive: boolean;
   maxResults: number;
+  sortBy: SearchSort;
+  sortDesc: boolean;
 }
 
+export type SearchSort = "name" | "modified" | "type" | "size";
 export type SearchScope =
   | { mode: "all" }
   | { mode: "path"; path: string };
@@ -65,6 +68,8 @@ export const SEARCH_SCOPE_KEY = "neobox_file_search_scope";
 export const SEARCH_FILTER_KEY = "neobox_file_search_filter";
 export const SEARCH_INCLUDE_HIDDEN_KEY = "neobox_file_search_include_hidden";
 export const SEARCH_CUSTOM_EXT_KEY = "neobox_file_search_custom_ext";
+export const SEARCH_SORT_KEY = "neobox_file_search_sort";
+export const SEARCH_SORT_DESC_KEY = "neobox_file_search_sort_desc";
 
 export interface SearchFilterPreset {
   key: string;

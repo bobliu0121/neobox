@@ -2531,6 +2531,10 @@
     "pickFolder": "指定目录…",
     "chooseFolder": "选择要搜索的目录",
     "formatLabel": "格式",
+    "sortLabel": "排序",
+    "sort": {"name": "名称", "modified": "修改日期", "type": "格式", "size": "大小"},
+    "sortAsc": "正序",
+    "sortDesc": "倒序",
     "format": {
       "all": "全部",
       "folders": "仅文件夹",

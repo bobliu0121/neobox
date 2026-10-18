@@ -51,6 +51,8 @@ import {
   SEARCH_FILTER_PRESETS,
   SEARCH_INCLUDE_HIDDEN_KEY,
   SEARCH_SCOPE_KEY,
+  SEARCH_SORT_DESC_KEY,
+  SEARCH_SORT_KEY,
   buildSearchIndex,
   cancelSearchIndex,
   fileTypeOf,
@@ -69,6 +71,7 @@ import {
   type SearchProgress,
   type SearchResponse,
   type SearchScope,
+  type SearchSort,
   type SearchStatus,
 } from "@/lib/file-search";
 
@@ -145,6 +148,8 @@ export default function SearchPage() {
   const [customExt, setCustomExt] = useState("");
   const [includeHidden, setIncludeHidden] = useState(true);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [sortBy, setSortBy] = useState<SearchSort>("name");
+  const [sortDesc, setSortDesc] = useState(false);
 
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [searching, setSearching] = useState(false);
@@ -180,6 +185,16 @@ export default function SearchPage() {
         value: preset.key,
         label: t(`fileSearch.format.${preset.key}`),
       })),
+    [t],
+  );
+
+  const sortOptions = useMemo(
+    () => [
+      { value: "name", label: t("fileSearch.sort.name") },
+      { value: "modified", label: t("fileSearch.sort.modified") },
+      { value: "type", label: t("fileSearch.sort.type") },
+      { value: "size", label: t("fileSearch.sort.size") },
+    ],
     [t],
   );
 
@@ -236,12 +251,22 @@ export default function SearchPage() {
     let disposed = false;
     (async () => {
       try {
-        const [savedScope, savedFilter, savedHidden, savedCustom, driveList, currentStatus] =
-          await Promise.all([
+        const [
+          savedScope,
+          savedFilter,
+          savedHidden,
+          savedCustom,
+          savedSort,
+          savedSortDesc,
+          driveList,
+          currentStatus,
+        ] = await Promise.all([
             store.get<SearchScope>(SEARCH_SCOPE_KEY),
             store.get<string>(SEARCH_FILTER_KEY),
             store.get<boolean>(SEARCH_INCLUDE_HIDDEN_KEY),
             store.get<string>(SEARCH_CUSTOM_EXT_KEY),
+            store.get<string>(SEARCH_SORT_KEY),
+            store.get<boolean>(SEARCH_SORT_DESC_KEY),
             getSearchDrives(),
             getSearchStatus(),
           ]);
@@ -257,6 +282,10 @@ export default function SearchPage() {
         }
         if (typeof savedHidden === "boolean") setIncludeHidden(savedHidden);
         if (typeof savedCustom === "string") setCustomExt(savedCustom);
+        if (savedSort === "name" || savedSort === "modified" || savedSort === "type" || savedSort === "size") {
+          setSortBy(savedSort);
+        }
+        if (typeof savedSortDesc === "boolean") setSortDesc(savedSortDesc);
         setStatus(currentStatus);
         setLoaded(true);
       } catch (error) {
@@ -335,6 +364,8 @@ export default function SearchPage() {
           includeHidden,
           caseSensitive,
           maxResults: 500,
+          sortBy,
+          sortDesc,
         });
         if (disposed || sequence !== sequenceRef.current) return;
         setResponse(result);
@@ -360,6 +391,8 @@ export default function SearchPage() {
     filterKey,
     includeHidden,
     indexReady,
+    sortBy,
+    sortDesc,
     status?.builtAt,
   ]);
 
@@ -614,6 +647,34 @@ export default function SearchPage() {
             options={filterOptions}
             width="120px"
           />
+        </HStack>
+        <HStack spacing={1.5}>
+          <Text fontSize="xs" color={bodyColor} flexShrink={0}>
+            {t("fileSearch.sortLabel")}
+          </Text>
+          <CustomSelect
+            value={sortBy}
+            onChange={(value) => {
+              const next = value as SearchSort;
+              setSortBy(next);
+              persist(SEARCH_SORT_KEY, next);
+            }}
+            options={sortOptions}
+            width="112px"
+          />
+          <Tooltip label={sortDesc ? t("fileSearch.sortDesc") : t("fileSearch.sortAsc")}>
+            <IconButton
+              aria-label={sortDesc ? t("fileSearch.sortDesc") : t("fileSearch.sortAsc")}
+              icon={sortDesc ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                const next = !sortDesc;
+                setSortDesc(next);
+                persist(SEARCH_SORT_DESC_KEY, next);
+              }}
+            />
+          </Tooltip>
         </HStack>
         {filterKey === "custom" && (
           <Input

@@ -96,7 +96,7 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
         case "search_reveal_item":
           return;
         case "search_files": {
-          const a = args as { options?: { query?: string; extensions?: string[]; includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean } };
+          const a = args as { options?: { query?: string; extensions?: string[]; includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean; sortBy?: string; sortDesc?: boolean } };
           const options = a.options ?? {};
           const keyword = (options.query ?? "").toLowerCase();
           const exts = (options.extensions ?? []).map((ext) => ext.toLowerCase());
@@ -109,6 +109,17 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
               if (!item.extension || !exts.includes(item.extension)) return false;
             }
             return item.name.toLowerCase().includes(keyword);
+          });
+          const sortBy = options.sortBy ?? "name";
+          const direction = options.sortDesc ? -1 : 1;
+          items.sort((left, right) => {
+            const compare = (() => {
+              if (sortBy === "size") return (left.size ?? 0) - (right.size ?? 0);
+              if (sortBy === "modified") return (left.modified ?? 0) - (right.modified ?? 0);
+              if (sortBy === "type") return (left.extension ?? "").localeCompare(right.extension ?? "");
+              return left.name.localeCompare(right.name, "zh-CN");
+            })();
+            return compare === 0 ? left.name.localeCompare(right.name, "zh-CN") : compare * direction;
           });
           return {
             total: items.length,

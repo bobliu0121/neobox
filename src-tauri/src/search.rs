@@ -188,10 +188,16 @@ impl SearchIndex {
                 }
                 total += 1;
                 if matches.len() < COLLECT_CAP {
+                    let name = dir.name.clone();
                     matches.push(MatchRef {
                         is_dir: true,
                         id: i as u32,
                         score: match_score(&dir.name, &query, case_sensitive),
+                        sort_name: name.to_ascii_lowercase(),
+                        sort_ext: String::new(),
+                        size: None,
+                        modified: None,
+                        meta_loaded: false,
                     });
                 }
             }
@@ -217,31 +223,55 @@ impl SearchIndex {
                 }
                 total += 1;
                 if matches.len() < COLLECT_CAP {
+                    let name = file.name.clone();
                     matches.push(MatchRef {
                         is_dir: false,
                         id: i as u32,
                         score: match_score(&file.name, &query, case_sensitive),
+                        sort_name: name.to_ascii_lowercase(),
+                        sort_ext: name
+                            .rsplit_once('.')
+                            .map(|(_, ext)| ext.to_ascii_lowercase())
+                            .unwrap_or_default(),
+                        size: None,
+                        modified: None,
+                        meta_loaded: false,
                     });
                 }
             }
         }
 
+        let sort_by = options.sort_by.as_str();
+        let sort_desc = options.sort_desc;
+
+        // 按大小/修改时间排序需要真实元数据：先为候选集补齐（最多 COLLECT_CAP 条）
+        if sort_by == "size" || sort_by == "modified" {
+            for entry in matches.iter_mut() {
+                if entry.is_dir {
+                    continue;
+                }
+                let file = &self.files[entry.id as usize];
+                let path = self.file_path(file);
+                let (size, modified) = read_metadata(&path);
+                entry.size = size;
+                entry.modified = modified;
+                entry.meta_loaded = true;
+            }
+        }
+
         matches.sort_by(|a, b| {
-            a.score
-                .cmp(&b.score)
-                .then_with(|| {
-                    let name_a = self.match_name(a);
-                    let name_b = self.match_name(b);
-                    name_a
-                        .len()
-                        .cmp(&name_b.len())
-                        .then_with(|| name_a.cmp(name_b))
-                })
-                .then_with(|| match (a.is_dir, b.is_dir) {
-                    (false, true) => std::cmp::Ordering::Less,
-                    (true, false) => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                })
+            let ordering = match sort_by {
+                "modified" => a.modified.unwrap_or(0).cmp(&b.modified.unwrap_or(0)),
+                "size" => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
+                "type" => a.sort_ext.cmp(&b.sort_ext),
+                "name" => a.sort_name.cmp(&b.sort_name),
+                _ => a
+                    .score
+                    .cmp(&b.score)
+                    .then_with(|| a.sort_name.len().cmp(&b.sort_name.len())),
+            };
+            let ordering = if sort_desc { ordering.reverse() } else { ordering };
+            ordering.then_with(|| a.sort_name.cmp(&b.sort_name))
         });
 
         let truncated = total > max_results;
@@ -263,7 +293,11 @@ impl SearchIndex {
                 } else {
                     let file = &self.files[entry.id as usize];
                     let path = self.file_path(file);
-                    let (size, modified) = read_metadata(&path);
+                    let (size, modified) = if entry.meta_loaded {
+                        (entry.size, entry.modified)
+                    } else {
+                        read_metadata(&path)
+                    };
                     SearchItem {
                         name: file.name.clone(),
                         path,
@@ -288,20 +322,19 @@ impl SearchIndex {
             index_entries: self.dirs.len() + self.files.len(),
         }
     }
-
-    fn match_name(&self, entry: &MatchRef) -> &str {
-        if entry.is_dir {
-            &self.dirs[entry.id as usize].name
-        } else {
-            &self.files[entry.id as usize].name
-        }
-    }
 }
 
 struct MatchRef {
     is_dir: bool,
     id: u32,
     score: u8,
+    /// 小写名称，供名称排序复用，避免比较时反复分配
+    sort_name: String,
+    /// 小写扩展名；目录为空字符串
+    sort_ext: String,
+    size: Option<u64>,
+    modified: Option<i64>,
+    meta_loaded: bool,
 }
 
 fn read_metadata(path: &str) -> (Option<u64>, Option<i64>) {
@@ -384,6 +417,15 @@ pub struct SearchOptions {
     pub case_sensitive: bool,
     #[serde(default = "default_max_results")]
     pub max_results: usize,
+    /// name | modified | size | type | relevance
+    #[serde(default = "default_sort_by")]
+    pub sort_by: String,
+    #[serde(default)]
+    pub sort_desc: bool,
+}
+
+fn default_sort_by() -> String {
+    "relevance".to_string()
 }
 
 fn default_true() -> bool {
@@ -1228,6 +1270,8 @@ mod tests {
             include_hidden: true,
             case_sensitive: false,
             max_results: 50,
+            sort_by: "name".to_string(),
+            sort_desc: false,
         });
         assert_eq!(response.total, 1);
         assert_eq!(response.items[0].name, "Beta-Report.PDF");
@@ -1240,6 +1284,8 @@ mod tests {
             include_hidden: true,
             case_sensitive: false,
             max_results: 50,
+            sort_by: "name".to_string(),
+            sort_desc: false,
         });
         assert_eq!(response.total, 1);
 
@@ -1251,6 +1297,8 @@ mod tests {
             include_hidden: true,
             case_sensitive: false,
             max_results: 50,
+            sort_by: "name".to_string(),
+            sort_desc: false,
         });
         assert_eq!(response.total, 1);
         assert!(response.items[0].is_dir);
