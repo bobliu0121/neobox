@@ -994,13 +994,13 @@ pub fn run() {
     app.run(|app_handle, event| {
         match event {
             tauri::RunEvent::ExitRequested { .. } => {
-                // 若存在已下载未安装的更新包，退出前异步启动安装向导（不阻塞退出）
-                // 后端兜底：静默更新已关闭时不启动安装向导
+                // 若存在已下载未安装的更新包，退出前异步启动更新（不阻塞退出）
+                // ZIP 便携包会解压覆盖，MSI/EXE 仍走安装向导；静默更新关闭时不执行
                 if downloader::auto_update_enabled() {
                     if let Some(path) = downloader::take_pending_install() {
                         if std::path::Path::new(&path).exists() {
-                            if let Err(e) = downloader::launch_installer_sync(&path) {
-                                log::error!("[Update] 退出时自动启动安装向导失败: {e}");
+                            if let Err(e) = downloader::launch_update_sync(&path) {
+                                log::error!("[Update] 退出时自动启动更新失败: {e}");
                             }
                         }
                     }

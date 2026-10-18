@@ -1193,6 +1193,8 @@
       "checkFailed": "檢查更新失敗",
       "downloadFailed": "下載失敗",
       "installFailed": "安裝失敗",
+      "noUpdateAsset": "此版本暫未提供自動更新包",
+      "noUpdateAssetHint": "請稍後重試，或前往 Releases 手動下載",
       "acknowledgments": "致謝",
       "specialThanks": {
         "title": "特別感謝"
@@ -1203,6 +1205,7 @@
       "loadingChangelog": "載入中...",
       "islandDownloading": "新版本下載",
       "islandClickRestart": "點擊重啟",
+      "islandAutoApply": "結束後自動更新",
       "autoUpdateDisabledHint": "已關閉，開啟後自動更新",
       "downloadingWithProgress": "下載中 {{progress}}%",
       "pendingInstall": "待重新啟動安裝",

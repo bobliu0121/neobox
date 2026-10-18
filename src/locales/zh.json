@@ -1314,6 +1314,8 @@
       "checkFailed": "检查更新失败",
       "downloadFailed": "下载失败",
       "installFailed": "安装失败",
+      "noUpdateAsset": "该版本暂未提供自动更新包",
+      "noUpdateAssetHint": "请稍后重试，或前往 Releases 手动下载",
       "acknowledgments": "致谢",
       "specialThanks": {
         "title": "特别鸣谢"
@@ -1325,6 +1327,7 @@
       "loadingChangelog": "加载中...",
       "islandDownloading": "新版本下载",
       "islandClickRestart": "点击重启",
+      "islandAutoApply": "退出后自动更新",
       "autoUpdateDisabledHint": "已关闭，开启后自动更新",
       "downloadingWithProgress": "下载中 {{progress}}%",
       "pendingInstall": "待重启安装",

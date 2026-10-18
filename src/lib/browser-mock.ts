@@ -196,6 +196,14 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
         case "get_release_history":
           return [
             {
+              tag: "v1.1.1",
+              name: "NeoBox 1.1.1",
+              body: "## 自动更新\n\n- 检测到新版本后自动下载便携版 ZIP 并解压覆盖\n- 镜像更新会删除旧版本多余文件，无需打开 GitHub\n- 更新完成后自动重启新版本",
+              published_at: "2026-10-18T12:30:00Z",
+              html_url: "https://github.com/bobliu0121/neobox/releases/tag/v1.1.1",
+              prerelease: false,
+            },
+            {
               tag: "v1.1.0",
               name: "NeoBox 1.1.0",
               body: "## 音乐\n\n- 搜索不到时明确提示\n- 未登录也可红心，本地保存\n- MKA 双行字幕修复\n- MKA 可拖到 exe 打开\n\n## 导入与后台任务\n\n- 所有导入处支持拖入\n- 转换 / MKA 组合后台完成",

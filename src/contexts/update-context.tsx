@@ -21,7 +21,7 @@ import { useAppStartup } from "@/contexts/app-startup-context";
 import { fetchLatestRelease, compareVersions, type ReleaseInfo } from "@/lib/update-checker";
 import { IS_STORE_BUILD } from "@/lib/build-flags";
 
-const CURRENT_VERSION = "v1.1.0";
+const CURRENT_VERSION = "v1.1.1";
 const AUTO_UPDATE_KEY = "neobox_auto_update";
 /** 灵动岛更新下载岛的固定 id */
 const UPDATE_ISLAND_ID = "update-download";
@@ -285,9 +285,12 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
       });
 
       try {
-        const asset = release.assets.find(
-          (a) => a.name.endsWith(".msi") || a.name.endsWith(".exe"),
-        );
+        // 优先便携版 ZIP（解压覆盖更新），其次才是 MSI / EXE 安装包
+        const zipAssets = release.assets.filter((a) => /\.zip$/i.test(a.name));
+        const asset =
+          zipAssets.find((a) => /portable/i.test(a.name)) ??
+          zipAssets[0] ??
+          release.assets.find((a) => /\.(msi|exe)$/i.test(a.name));
         if (asset) {
           const downloadUrl = asset.browser_download_url;
           const filePath = await invoke<string>("download_update", {
@@ -323,14 +326,16 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
           isDownloadCompleteRef.current = true;
           setIsDownloadComplete(true);
           setIsDownloading(false);
-          // 灵动岛切换为「点击重启」，点击直接重启安装；常驻显示直至用户点击或跳过
+          // 灵动岛切换为「点击重启」/「退出后自动更新」；常驻显示直至用户点击或跳过
           toast.updatePersistent(UPDATE_ISLAND_ID, {
-            title: t("settings.aboutSettings.islandClickRestart") || "点击重启",
+            title: manual
+              ? t("settings.aboutSettings.islandClickRestart") || "点击重启"
+              : t("settings.aboutSettings.islandAutoApply") || "退出后自动更新",
             status: "success",
             progress: undefined,
             onClick: handleInstall,
           });
-          // 登记待安装标记：仅当静默更新仍开启时，关闭软件退出流程才自动启动安装向导
+          // 登记待安装标记：仅当静默更新仍开启时，关闭软件退出流程才自动应用更新
           if (autoUpdateEnabledRef.current) {
             try {
               await invoke("mark_pending_install", { filePath });
@@ -353,12 +358,14 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
           toast.closePersistent(UPDATE_ISLAND_ID);
           downloadStartedRef.current = false;
           setIsDownloading(false);
-          try {
-            const { open } = await import("@tauri-apps/plugin-shell");
-            await open(release.html_url);
-          } catch (error) {
-            console.error("Failed to open link:", error);
-          }
+          // 不再跳转 GitHub：没有自动更新包时明确提示，避免用户被带到浏览器
+          toast({
+            title: t("settings.aboutSettings.noUpdateAsset") || "该版本暂未提供自动更新包",
+            description: t("settings.aboutSettings.noUpdateAssetHint") || "请稍后重试，或前往 Releases 手动下载",
+            status: "warning",
+            duration: 4000,
+            isClosable: true,
+          });
         }
       } catch (error) {
         // 静默更新已关闭（用户主动取消 / 后端拒绝）：静默重置，绝不提示"下载失败"

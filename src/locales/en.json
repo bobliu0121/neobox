@@ -1488,6 +1488,8 @@
       "checkFailed": "Check update failed",
       "downloadFailed": "Download failed",
       "installFailed": "Installation failed",
+      "noUpdateAsset": "No automatic update package for this version",
+      "noUpdateAssetHint": "Please try again later, or download manually from Releases",
       "acknowledgments": "Acknowledgments",
       "specialThanks": {
         "title": "Special Thanks"
@@ -1499,6 +1501,7 @@
       "loadingChangelog": "Loading...",
       "islandDownloading": "New version downloading",
       "islandClickRestart": "Click to restart",
+      "islandAutoApply": "Updates on exit",
       "autoUpdateDisabledHint": "Disabled. Enable auto update to download automatically",
       "downloadingWithProgress": "Downloading {{progress}}%",
       "pendingInstall": "Ready to Install",

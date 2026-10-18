@@ -2548,7 +2548,7 @@ function AboutSettings() {
   const FEEDBACK_URL = "https://github.com/bobliu0121/neobox/issues";
   const AUTHOR_QQ = "3954720009";
 
-  const currentVersion = "1.1.0";
+  const currentVersion = "1.1.1";
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
 

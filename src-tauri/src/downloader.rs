@@ -141,6 +141,124 @@ pub fn launch_installer_sync(file_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ps_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 便携版自动更新脚本。
+///
+/// 当前进程退出后：解压新版本 ZIP → 用 robocopy /MIR 覆盖应用目录（同时删除旧版本多余文件）
+/// → 重新启动 neobox.exe。脚本运行在隐藏的 PowerShell 中，避免弹出黑框。
+const PORTABLE_UPDATE_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+$procId = __PID__
+$zip = __ZIP__
+$appDir = __APPDIR__
+try { Wait-Process -Id $procId -Timeout 120 -ErrorAction SilentlyContinue } catch {}
+Start-Sleep -Milliseconds 900
+$stage = Join-Path $env:TEMP ('neobox-update-' + [Guid]::NewGuid().ToString('N'))
+try {
+  New-Item -ItemType Directory -Path $stage -Force | Out-Null
+  Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+  $found = Get-ChildItem -LiteralPath $stage -Filter 'neobox.exe' -File -Recurse | Select-Object -First 1
+  if (-not $found) { throw 'neobox.exe not found in update package' }
+  $src = $found.Directory.FullName
+  & robocopy $src $appDir /MIR /R:3 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
+  Start-Sleep -Milliseconds 800
+  Start-Process -FilePath (Join-Path $appDir 'neobox.exe') -WorkingDirectory $appDir
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+} catch {
+  # 更新失败也重新启动旧版本，避免用户没有可用程序
+  try { Start-Process -FilePath (Join-Path $appDir 'neobox.exe') -WorkingDirectory $appDir } catch {}
+  exit 1
+}
+"#;
+
+/// 启动便携版 ZIP 更新：先退出当前进程，再由隐藏脚本解压覆盖并重启。
+pub fn launch_portable_update(file_path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        if !std::path::Path::new(file_path).is_file() {
+            return Err(format!("更新包不存在: {file_path}"));
+        }
+        wait_until_file_ready(file_path);
+
+        let exe = std::env::current_exe().map_err(|e| format!("获取当前程序路径失败: {e}"))?;
+        let app_dir = exe
+            .parent()
+            .ok_or_else(|| "无法定位应用目录".to_string())?;
+        let app_dir = app_dir.to_string_lossy().to_string();
+        let zip_path = std::path::Path::new(file_path)
+            .canonicalize()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| file_path.to_string());
+
+        let script = PORTABLE_UPDATE_SCRIPT
+            .replace("__PID__", &std::process::id().to_string())
+            .replace("__ZIP__", &ps_quote(&zip_path))
+            .replace("__APPDIR__", &ps_quote(&app_dir));
+
+        let script_dir = std::env::temp_dir();
+        let script_path = script_dir.join(format!(
+            "neobox-update-{}-{}.ps1",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        // Windows PowerShell 5.1 默认按 ANSI 读取 .ps1；带 BOM 才能正确识别中文路径
+        let mut script_bytes = Vec::with_capacity(script.len() + 3);
+        script_bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        script_bytes.extend_from_slice(script.as_bytes());
+        std::fs::write(&script_path, script_bytes)
+            .map_err(|e| format!("写入更新脚本失败: {e}"))?;
+
+        log::info!("[Update] 便携版更新脚本: {}", script_path.display());
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+            ])
+            .arg(&script_path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("启动更新脚本失败: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = file_path;
+        Err("Only Windows is supported".to_string())
+    }
+}
+
+/// 是否是需要解压覆盖的便携版 ZIP
+pub fn is_portable_update(file_path: &str) -> bool {
+    std::path::Path::new(file_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+/// 根据更新包类型选择安装方式：ZIP 走解压覆盖，MSI/EXE 走安装向导
+pub fn launch_update_sync(file_path: &str) -> Result<(), String> {
+    if is_portable_update(file_path) {
+        launch_portable_update(file_path)
+    } else {
+        launch_installer_sync(file_path)
+    }
+}
+
 /// GitCode API 返回的 release 资产 URL 可能落在 test.gitcode.net 等
 /// 在当前网络环境不可达的 CDN 域名上。统一替换为主站域名 gitcode.com，
 /// 由其 302 重定向到可达的 file-cdn.gitcode.com 并生成签名链接。
@@ -293,7 +411,7 @@ pub async fn install_update(
     file_path: String,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    launch_installer_sync(&file_path)?;
+    launch_update_sync(&file_path)?;
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -348,4 +466,16 @@ pub async fn delete_download_file(file_path: String) -> Result<(), String> {
         fs::remove_file(&file_path).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zip_is_portable_update() {
+        assert!(is_portable_update(r"C:\Downloads\NeoBox-1.1.1-portable.ZIP"));
+        assert!(!is_portable_update(r"C:\Downloads\NeoBox-1.1.1.msi"));
+        assert!(!is_portable_update(r"C:\Downloads\NeoBox-1.1.1.exe"));
+    }
 }
