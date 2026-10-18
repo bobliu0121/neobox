@@ -1300,6 +1300,7 @@
     "aboutSettings": {
       "title": "关于",
       "authorRole": "作者 / 项目维护者",
+      "originAuthorRole": "原作者 / 原始项目",
       "authorGithub": "作者 GitHub",
       "authorQQ": "作者 QQ",
       "repo": "开源仓库",

@@ -68,6 +68,9 @@ struct VideoReader {
     out_width: u32,
     out_height: u32,
     stride: i32,
+    /// stride 是否来自 MF_MT_DEFAULT_STRIDE（可靠）。false 表示是 fallback 估算，
+    /// 需要在每帧用 buffer 实际长度反推真实行步幅，否则会因行对齐 padding 导致画面斜条纹。
+    stride_exact: bool,
 }
 
 impl VideoReader {
@@ -91,7 +94,7 @@ impl VideoReader {
                 .SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)
                 .map_err(|e| format!("选择视频轨道失败: {e}"))?;
 
-            // 先读取原始尺寸，计算等比缩放后的目标尺寸
+            // 先读取原始尺寸
             let native = reader
                 .GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0)
                 .map_err(|e| format!("读取视频信息失败: {e}"))?;
@@ -104,19 +107,12 @@ impl VideoReader {
                 return Err("无法读取视频分辨率".to_string());
             }
 
-            let target_width = target_width.clamp(64, 1920);
-            let (width, height) = if native_width <= target_width {
-                (native_width & !1, native_height & !1)
-            } else {
-                let scale = target_width as f32 / native_width as f32;
-                (
-                    (native_width as f32 * scale).round().max(2.0) as u32 & !1,
-                    (native_height as f32 * scale).round().max(2.0) as u32 & !1,
-                )
-            };
-            let width = width.max(2);
-            let height = height.max(2);
-
+            // 关键：总是请求 native 尺寸的 RGB32，不让 MF 做缩放。
+            // 原因：MF 在接受缩放请求后，内部 surface 可能按更大边界对齐，
+            // stride > width*4 且 MF_MT_DEFAULT_STRIDE 可能不提供或不可靠，
+            // 导致行步幅错位产生水平条纹。native 尺寸下 Source Reader 软件解码
+            // 输出紧凑帧，stride == native_width*4，稳定可预测。
+            // 缩放交给后续 image::imageops::resize 完成。
             let output_type = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
             output_type
                 .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -125,42 +121,18 @@ impl VideoReader {
                 .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
                 .map_err(|e| format!("设置 RGB32 输出失败: {e}"))?;
             output_type
-                .SetUINT64(&MF_MT_FRAME_SIZE, ((width as u64) << 32) | height as u64)
+                .SetUINT64(&MF_MT_FRAME_SIZE, ((native_width as u64) << 32) | native_height as u64)
                 .map_err(|e| format!("设置输出尺寸失败: {e}"))?;
             output_type
                 .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
                 .map_err(|e| format!("设置逐行扫描失败: {e}"))?;
-
-            // 某些解码器不接受指定尺寸：退化为原始尺寸输出
-            if reader
+            reader
                 .SetCurrentMediaType(
                     MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
                     None,
                     &output_type,
                 )
-                .is_err()
-            {
-                let fallback = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
-                fallback
-                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-                    .map_err(|e| format!("设置媒体类型失败: {e}"))?;
-                fallback
-                    .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
-                    .map_err(|e| format!("设置 RGB32 输出失败: {e}"))?;
-                fallback
-                    .SetUINT64(
-                        &MF_MT_FRAME_SIZE,
-                        ((native_width as u64) << 32) | native_height as u64,
-                    )
-                    .map_err(|e| format!("设置输出尺寸失败: {e}"))?;
-                reader
-                    .SetCurrentMediaType(
-                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                        None,
-                        &fallback,
-                    )
-                    .map_err(|e| format!("初始化视频解码失败: {e}"))?;
-            }
+                .map_err(|e| format!("初始化视频解码失败: {e}"))?;
 
             let actual = reader
                 .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
@@ -170,13 +142,14 @@ impl VideoReader {
                 .map_err(|e| format!("读取输出尺寸失败: {e}"))?;
             let width = (packed >> 32) as u32;
             let height = (packed & 0xFFFF_FFFF) as u32;
-            let stride = actual
-                .GetUINT32(&MF_MT_DEFAULT_STRIDE)
-                .map(|stride| stride as i32)
-                .unwrap_or((width * 4) as i32);
+            let raw_stride = actual.GetUINT32(&MF_MT_DEFAULT_STRIDE);
+            let (stride, stride_exact) = match raw_stride {
+                Ok(s) if s != 0 => (s as i32, true),
+                _ => ((width * 4) as i32, false),
+            };
 
-            // 部分解码器不接受指定尺寸（回退到原始尺寸），这里再按请求宽度做一次
-            // 软件缩放，保证输出尺寸与 UI 设置一致。
+            // 按请求宽度计算最终输出尺寸（后续 resize 使用）
+            let target_width = target_width.clamp(64, 1920);
             let out_width = target_width.min(width).max(2) & !1;
             let out_height = (((height as f64 * out_width as f64 / width as f64).round() as u32).max(2)) & !1;
 
@@ -187,6 +160,7 @@ impl VideoReader {
                 out_width,
                 out_height,
                 stride,
+                stride_exact,
             })
         }
     }
@@ -230,9 +204,15 @@ impl VideoReader {
 
                 let width = self.width as usize;
                 let height = self.height as usize;
-                let stride = self.stride;
                 let row_bytes = width * 4;
-                let abs_stride = stride.unsigned_abs() as usize;
+                // stride 策略：
+                // - MF 提供了 MF_MT_DEFAULT_STRIDE（stride_exact=true）：直接用它。
+                // - 未提供：RGB32 格式行宽自然 4 字节对齐，Source Reader 软件解码
+                //   输出紧凑帧，stride == width*4。
+                // 注意：绝不能用 current_len/height 反推——MF sample buffer 末尾常带
+                // 2KB 左右的对齐 padding，导致 current_len > stride*height，反推值偏大，
+                // 行间距错位产生横向/斜向条纹。
+                let abs_stride = self.stride.unsigned_abs() as usize;
                 if abs_stride < row_bytes || (current_len as usize) < abs_stride * height {
                     let _ = buffer.Unlock();
                     return Err("视频帧数据长度异常".to_string());
@@ -242,7 +222,7 @@ impl VideoReader {
                 for row in 0..height {
                     // MF 的 RGB32 内存布局是 BGRA。Source Reader 输出通常为
                     // 自上而下（正 stride）；负 stride 才需要从最后一行倒序读取。
-                    let src_row = if stride < 0 { height - 1 - row } else { row };
+                    let src_row = if self.stride < 0 { height - 1 - row } else { row };
                     let src = &slice[src_row * abs_stride..src_row * abs_stride + row_bytes];
                     let dst = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
                     for x in 0..width {

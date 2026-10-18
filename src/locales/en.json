@@ -1474,6 +1474,7 @@
     "aboutSettings": {
       "title": "About",
       "authorRole": "Author / Maintainer",
+      "originAuthorRole": "Original Author / Upstream",
       "authorGithub": "Author GitHub",
       "authorQQ": "Author QQ",
       "repo": "Open Source Repo",

@@ -2218,6 +2218,7 @@ const PlayerBar = memo(function PlayerBar({ onExpand, hidden }: { onExpand?: () 
   const loginInfo = useMusicStore((s) => s.loginInfo);
   const desktopLyricsVisible = useMusicStore((s) => s.desktopLyricsVisible);
   const queuePanelOpen = useMusicStore((s) => s.queuePanelOpen);
+  const likedSongIds = useMusicStore((s) => s.likedSongIds);
   const [dlSettingsOpen, setDlSettingsOpen] = useState(false);
 
   const { getActiveColor, getHoverColor, getContrastTextColor, getBorderColor } = useThemeColor();
@@ -2247,6 +2248,8 @@ const PlayerBar = memo(function PlayerBar({ onExpand, hidden }: { onExpand?: () 
       </LiquidGlassCard>
     );
   }
+
+  const isLiked = likedSongIds.has(currentSong.id);
 
   return (
     <>
@@ -2320,6 +2323,19 @@ const PlayerBar = memo(function PlayerBar({ onExpand, hidden }: { onExpand?: () 
                 variant="ghost"
                 sx={{ color: playMode !== "list" ? activeColor : subTextColor, _hover: { bg: hoverBg } }}
                 onClick={() => useMusicStore.getState().togglePlayMode()}
+              />
+            </Tooltip>
+            <Tooltip label={isLiked ? "取消红心" : "红心"}>
+              <IconButton
+                aria-label="Like"
+                icon={<Heart size={16} fill={isLiked ? "#e53e3e" : "none"} color={isLiked ? "#e53e3e" : undefined} />}
+                size="sm"
+                variant="ghost"
+                sx={{
+                  color: isLiked ? "#e53e3e" : textColor,
+                  _hover: { bg: hoverBg, color: "#e53e3e" },
+                }}
+                onClick={() => useMusicStore.getState().toggleLike(currentSong.id)}
               />
             </Tooltip>
           </HStack>

@@ -119,7 +119,9 @@ function ActiveKaraokeLine({
 
   const sharedStyle: React.CSSProperties = {
     display: "inline-block",
-    whiteSpace: "pre-line",
+    // 必须 nowrap：高亮 overlay 用 width% + overflow:hidden 水平裁剪，
+    // pre-line 换行成多行后裁剪会同时作用于每行，高亮位置错乱。
+    whiteSpace: "nowrap",
     fontSize: `${fontSize}px`,
     fontFamily: fontFamily || undefined,
     fontWeight: "bold",
@@ -146,7 +148,7 @@ function ActiveKaraokeLine({
         style={{
           display: "inline-block",
           position: "relative",
-          whiteSpace: "pre-line",
+          whiteSpace: "nowrap",
           transform: "translate3d(0, 0, 0)",
           willChange: "transform",
         }}

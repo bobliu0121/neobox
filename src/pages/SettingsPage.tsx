@@ -2547,8 +2547,11 @@ function AboutSettings() {
   const REPO_URL = "https://github.com/bobliu0121/neobox";
   const FEEDBACK_URL = "https://github.com/bobliu0121/neobox/issues";
   const AUTHOR_QQ = "3954720009";
+  // 原作者与原始仓库
+  const ORIGIN_AUTHOR_NAME = "MuLiuSaMa";
+  const ORIGIN_REPO_URL = "https://github.com/MuLiuSaMa/NexBox";
 
-  const currentVersion = "1.1.1";
+  const currentVersion = "1.1.2";
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
 
@@ -2703,32 +2706,71 @@ function AboutSettings() {
         </HStack>
       </LiquidGlassCard>
 
-      {/* 作者信息 */}
-      <LiquidGlassCard p={5} boxShadow="sm" mb={4}>
-        <HStack spacing={4} align="center">
-          <Image
-            src="/author/bobliu.webp"
-            alt={AUTHOR_NAME}
-            boxSize="76px"
-            borderRadius="full"
-            objectFit="cover"
-            border="2px solid"
-            borderColor={getActiveColor()}
-            flexShrink={0}
-          />
-          <VStack spacing={1} align="start" flex={1}>
-            <Text fontSize="xl" fontWeight="bold" color={titleColor}>
-              {AUTHOR_NAME}
-            </Text>
-            <Text fontSize="sm" color={subLabelColor}>
-              {t("settings.aboutSettings.authorRole")}
-            </Text>
-            <Text fontSize="xs" color={subLabelColor}>
-              NeoBox v{currentVersion}
-            </Text>
-          </VStack>
-        </HStack>
-      </LiquidGlassCard>
+      {/* 作者信息：维护者 + 原作者 并排 */}
+      <HStack spacing={4} align="stretch" mb={4} flexWrap="wrap">
+        {/* 维护者 */}
+        <LiquidGlassCard p={5} flex="1" minW="240px" flexBasis="320px">
+          <HStack spacing={4} align="center">
+            <Image
+              src="/author/bobliu.webp"
+              alt={AUTHOR_NAME}
+              boxSize="76px"
+              borderRadius="full"
+              objectFit="cover"
+              border="2px solid"
+              borderColor={getActiveColor()}
+              flexShrink={0}
+            />
+            <VStack spacing={1} align="start" flex={1}>
+              <Text fontSize="xl" fontWeight="bold" color={titleColor}>
+                {AUTHOR_NAME}
+              </Text>
+              <Text fontSize="sm" color={subLabelColor}>
+                {t("settings.aboutSettings.authorRole")}
+              </Text>
+              <Text fontSize="xs" color={subLabelColor}>
+                NeoBox v{currentVersion}
+              </Text>
+            </VStack>
+          </HStack>
+        </LiquidGlassCard>
+
+        {/* 原作者：点击跳转原始仓库 */}
+        <LiquidGlassCard
+          p={5}
+          flex="1"
+          minW="240px"
+          flexBasis="320px"
+          cursor="pointer"
+          transition="border-color 0.2s"
+          _hover={{ borderColor: getActiveColor() }}
+          onClick={() => handleOpenLink(ORIGIN_REPO_URL)}
+        >
+          <HStack spacing={4} align="center">
+            <Image
+              src="/author/origin.png"
+              alt={ORIGIN_AUTHOR_NAME}
+              boxSize="76px"
+              borderRadius="full"
+              objectFit="cover"
+              border="2px solid"
+              borderColor={getActiveColor()}
+              flexShrink={0}
+            />
+            <VStack spacing={1} align="start" flex={1}>
+              <Text fontSize="xl" fontWeight="bold" color={titleColor}>
+                {ORIGIN_AUTHOR_NAME}
+              </Text>
+              <Text fontSize="sm" color={subLabelColor}>
+                {t("settings.aboutSettings.originAuthorRole")}
+              </Text>
+              <Text fontSize="xs" color={subLabelColor} noOfLines={1}>
+                github.com/MuLiuSaMa/NexBox
+              </Text>
+            </VStack>
+          </HStack>
+        </LiquidGlassCard>
+      </HStack>
 
       {/* 第一行：版本号（含更新状态） + 问题反馈 */}
       <HStack spacing={4} align="stretch" flexWrap="wrap" mb={4}>

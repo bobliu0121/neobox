@@ -1179,6 +1179,7 @@
     "aboutSettings": {
       "title": "關於",
       "authorRole": "作者 / 專案維護者",
+      "originAuthorRole": "原作者 / 原始專案",
       "authorGithub": "作者 GitHub",
       "authorQQ": "作者 QQ",
       "repo": "開源倉庫",

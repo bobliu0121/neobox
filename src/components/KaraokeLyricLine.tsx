@@ -51,6 +51,9 @@ function KaraokeLyricLineInner({
   const scrollRef = useRef<HTMLSpanElement>(null);
   const [scrollNeeded, setScrollNeeded] = useState(false);
   const scrollLimitRef = useRef(0);
+  // 用 ref 跟踪 scrollNeeded，避免 RAF effect 因它变化而重启（重启会导致高亮闪一下）
+  const scrollNeededRef = useRef(false);
+  scrollNeededRef.current = scrollNeeded;
 
   // 检测超长歌词
   useEffect(() => {
@@ -74,6 +77,7 @@ function KaraokeLyricLineInner({
     if (!isActive || !overlayRef.current || !audioRef) return;
 
     const el = overlayRef.current;
+    // 仅在行变为 active 或切换行时重置进度；scrollNeeded 变化不应重置
     el.style.width = "0%";
 
     let rafId: number;
@@ -88,7 +92,7 @@ function KaraokeLyricLineInner({
       el.style.width = `${(progress * 100).toFixed(2)}%`;
 
       // 超长歌词智能水平滚动（滚动整个文字容器）
-      if (scrollNeeded && scrollRef.current) {
+      if (scrollNeededRef.current && scrollRef.current) {
         const offset = calculateScrollOffset(progress, scrollLimitRef.current);
         scrollRef.current.style.transform = `translate3d(${offset.toFixed(2)}px, 0, 0)`;
       }
@@ -118,7 +122,7 @@ function KaraokeLyricLineInner({
       audioRef.removeEventListener("pause", onPause);
     };
 
-  }, [isActive, line, nextLine, scrollNeeded, audioRef]);
+  }, [isActive, line, nextLine, audioRef]);
 
   // ── 非当前行：简单显示 ──
   if (!isActive) {
@@ -153,7 +157,9 @@ function KaraokeLyricLineInner({
   // ── 当前行：双层叠加卡拉OK效果 ──
   const sharedTextStyle: React.CSSProperties = {
     display: "inline-block",
-    whiteSpace: "pre-line",
+    // 必须 nowrap：高亮 overlay 用 width% + overflow:hidden 水平裁剪，
+    // 一旦 pre-line 换行成多行，裁剪会同时作用于每一行，高亮位置错乱。
+    whiteSpace: "nowrap",
     fontSize: `${fontSize}px`,
     fontWeight: "bold",
     lineHeight: 1.4,
@@ -179,7 +185,7 @@ function KaraokeLyricLineInner({
         style={{
           display: "inline-block",
           position: "relative",
-          whiteSpace: "pre-line",
+          whiteSpace: "nowrap",
           transform: "translate3d(0, 0, 0)",
           willChange: "transform",
         }}
