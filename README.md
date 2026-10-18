@@ -1,7 +1,7 @@
 # NeoBox
 
 > Windows 桌面工具箱 · 硬件监控 / 系统优化 / 桌面工具<br>
-> 当前版本：**v1.1.1** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
+> 当前版本：**v1.1.3** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
 
 NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所有功能均在本地运行，把常用的系统监控、维护和桌面增强能力整合到一个轻量界面里，不依赖云端账号。
 
@@ -24,6 +24,14 @@ NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所�
 | 文件搜索 | 类 Everything 的本地文件名即时搜索：MFT 索引、整盘 / 指定目录、按格式筛选、四种排序；关键词留空可浏览全部 |
 
 动态壁纸中的 **GIF / HTML** 两种模式仍处于 BETA：GIF 通过置底透明窗口挂载到桌面壁纸层，HTML 由本地回环静态服务器提供页面与相对资源。多显示器、混合 DPI 等场景可能只覆盖主屏，详见 [壁纸文档](docs/wallpaper.md)。
+
+## 界面预览
+
+![内置工具](docs/screenshots/tools.png)
+
+![音乐中心](docs/screenshots/screenshot2.png)
+
+![系统优化](docs/screenshots/screenshot3.png)
 
 ## 下载
 
