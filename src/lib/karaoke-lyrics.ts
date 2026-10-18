@@ -126,7 +126,11 @@ export function parseLrcEnhanced(lyric: string, translation?: string): KaraokeLi
   for (const line of mainLines) {
     const matches = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
     if (matches.length === 0) continue;
-    const text = line.replace(/\[\d+:\d+(?:\.\d+)?\]/g, "").trim();
+    // MKA 内嵌字幕用字面量 \N 表示同一句里的双行字幕，这里还原成换行
+    const text = line
+      .replace(/\[\d+:\d+(?:\.\d+)?\]/g, "")
+      .trim()
+      .replace(/\\N/g, "\n");
     if (!text) continue;
     for (const m of matches) {
       const time = parseInt(m[1]) * 60 + parseFloat(m[2]);

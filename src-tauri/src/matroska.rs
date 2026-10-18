@@ -1523,10 +1523,21 @@ fn strip_ass_tags(text: &str) -> String {
 }
 
 /// 字幕事件 → LRC（音乐模块歌词面板与桌面歌词直接复用）
+///
+/// 一条字幕可能包含多行（双语/双行字幕）。LRC 本身没有多行文本语法，
+/// 这里用字面量 `\N` 作为行内换行标记：前端解析时还原成换行，
+/// 避免过去把两行直接拼成一行（显示成「第一行 第二行」）。
 pub fn subtitle_lrc_from_events(events: &[SubtitleEvent]) -> String {
     let mut out = String::new();
     for event in events {
-        let text = event.text.replace('\r', " ").replace('\n', " ");
+        let text = event
+            .text
+            .replace('\r', "")
+            .split('\n')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\\N");
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -1674,7 +1685,7 @@ pub fn extract_playable_audio(
         );
         let lrc = subtitle_lrc_from_events(&subtitle.events);
         if !lrc.is_empty() {
-            let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lrc")), lrc);
+            let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v2.lrc")), lrc);
         }
     }
 
@@ -1759,6 +1770,17 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_lrc_keeps_two_lines() {
+        let events = vec![SubtitleEvent {
+            start_ms: 1500,
+            end_ms: 3000,
+            text: "第一行\n第二行".to_string(),
+        }];
+        let lrc = subtitle_lrc_from_events(&events);
+        assert_eq!(lrc, "[00:01.50]第一行\\N第二行\n");
+    }
+
+    #[test]
     fn ass_events() {
         let text = "[Script Info]\nTitle: t\n\n[V4+ Styles]\nFormat: Name\nStyle: Default\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,你好,世界\n";
         let (header, events, is_ssa) = parse_ass(text).unwrap();
@@ -1780,6 +1802,3 @@ mod tests {
         assert_eq!(size, Some(130));
     }
 }
-
-
-

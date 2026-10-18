@@ -19,6 +19,8 @@ import { ArrowLeft, FileAudio, FileInput, Save, RefreshCw } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { hexToRgba } from "@/lib/color-utils";
 
 const AUDIO_FORMATS = ["wav", "mp3", "m4a"] as const;
@@ -38,6 +40,18 @@ export default function AudioConverterPage() {
   const [outputFormat, setOutputFormat] = useState<string>("mp3");
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
+
+  // 支持把音频文件直接拖到页面任意位置
+  const handleDrop = useCallback((paths: string[]) => {
+    const audio = paths.find((path) => /\.(wav|mp3|m4a|flac|aac|ogg|opus|wma)$/i.test(path));
+    if (!audio) {
+      toast({ title: "请拖入音频文件", status: "warning", duration: 3000 });
+      return;
+    }
+    setInputPath(audio);
+    setOutputPath(null);
+  }, [toast]);
+  const { isDragging, dropProps } = useFileDrop(handleDrop);
 
   const handlePickInput = useCallback(async () => {
     try {
@@ -106,7 +120,8 @@ export default function AudioConverterPage() {
   }, [inputPath, outputPath, outputFormat, t, toast]);
 
   return (
-    <Box pt={8} pb={8}>
+    <Box pt={8} pb={8} {...dropProps}>
+      <FileDropOverlay visible={isDragging} hint="松开即可导入音频" />
       <HStack justify="space-between" mb={6} flexWrap="wrap" gap={2}>
         <HStack>
           <IconButton

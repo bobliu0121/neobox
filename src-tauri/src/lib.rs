@@ -69,7 +69,39 @@ mod video_convert;
 mod webview_args;
 mod wmi_query;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::Manager;
+
+/// 待打开的 MKA 文件：拖到 exe / 通过文件关联启动时由命令行传入。
+/// 前端就绪后主动取走，避免事件监听晚于启动参数而丢失。
+static PENDING_OPEN_MKA: Mutex<Option<String>> = Mutex::new(None);
+
+fn mka_path_from_args(args: &[String]) -> Option<String> {
+    args.iter()
+        .skip(1)
+        .find(|arg| {
+            !arg.starts_with('-')
+                && std::path::Path::new(arg)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("mka"))
+                    .unwrap_or(false)
+        })
+        .cloned()
+}
+
+fn queue_open_mka<R: tauri::Runtime>(app: &tauri::AppHandle<R>, path: &str) {
+    use tauri::Emitter;
+    if let Ok(mut pending) = PENDING_OPEN_MKA.lock() {
+        *pending = Some(path.to_string());
+    }
+    let _ = app.emit("open-mka-file", path.to_string());
+}
+
+#[tauri::command]
+fn take_pending_open_mka() -> Option<String> {
+    PENDING_OPEN_MKA.lock().ok().and_then(|mut pending| pending.take())
+}
 
 /// 主窗口可见性状态（用于最小化/托盘时暂停动态背景视频）
 static MAIN_WINDOW_VISIBLE: AtomicBool = AtomicBool::new(true);
@@ -247,9 +279,13 @@ fn is_autostart_mode() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 重复启动时：统一走托盘打开主窗口入口（恢复任务栏、若处于离屏预热则归位到屏幕内）
             crate::tray::show_main_window(app);
+            // 从资源管理器把 .mka 拖到已运行的 exe 上：新进程的路径参数转交给主实例
+            if let Some(path) = mka_path_from_args(&args) {
+                queue_open_mka(app, &path);
+            }
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -286,6 +322,13 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // 直接拖到 exe 启动：命令行参数里带 .mka 时先暂存，前端就绪后取走并播放
+            let startup_args: Vec<String> = std::env::args().collect();
+            if let Some(path) = mka_path_from_args(&startup_args) {
+                if let Ok(mut pending) = PENDING_OPEN_MKA.lock() {
+                    *pending = Some(path);
+                }
+            }
             // 初始化音乐 API 和音频代理
             let app_handle_for_music = app.handle().clone();
             music_api::audio_proxy::set_app_handle(app_handle_for_music.clone());
@@ -921,6 +964,10 @@ pub fn run() {
         file_convert::convert_audio,
         file_convert::convert_video,
         file_convert::mux_mka,
+        file_convert::path_is_directory,
+        file_convert::read_image_as_data_url,
+        file_convert::read_text_file,
+        take_pending_open_mka,
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,
@@ -991,5 +1038,3 @@ pub fn run() {
         }
     });
 }
-
-

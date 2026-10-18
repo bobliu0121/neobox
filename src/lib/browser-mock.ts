@@ -229,6 +229,17 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
             duration_ms: 215_000,
             size: 8_560_000,
           };
+        case "path_is_directory": {
+          const a = args as { path?: string };
+          return !!a.path && !/\.[^.\\/]+$/.test(a.path);
+        }
+        case "read_image_as_data_url":
+          // 1x1 透明 PNG，仅用于浏览器预览时走通拖入背景逻辑
+          return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        case "read_text_file":
+          return "CLASS1 : Effect Type\n9: Version\nPreview\n0: Double Params Flag\n1: Total number of elements\n";
+        case "take_pending_open_mka":
+          return null;
         default:
           if (cmd.startsWith("plugin:")) return;
           console.warn("[Tauri Mock] Unhandled command:", cmd, args);

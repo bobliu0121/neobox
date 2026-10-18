@@ -13,6 +13,9 @@
 
 ## 实现要点
 
+- 支持把视频 / 音频文件直接拖到页面任意位置，自动填入输入路径。
+- 转换任务运行在全局后台 store：点击转换后可立即切换到其他页面，任务不会中断；
+  完成后通过灵动岛提示，返回页面仍能看到结果。
 - 视频解码通过 Windows Media Foundation 的 Source Reader 完成。设置
   `MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING` 后，任意受系统支持的视频格式都会
   统一转成 RGB32；`MF_MT_FRAME_SIZE` 请求输出尺寸，若解码器不接受则回退到原始

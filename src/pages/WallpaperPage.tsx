@@ -42,6 +42,8 @@ import {
   Square,
 } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { store } from "@/lib/store";
 import {
@@ -358,15 +360,8 @@ export default function WallpaperPage() {
   }, []);
 
   // 导入壁纸文件夹：recursive=false 仅当前文件夹，true 含子文件夹；结果持久化
-  const handleImportFolder = useCallback(async (recursive: boolean) => {
+  const importFolderPath = useCallback(async (selected: string, recursive: boolean) => {
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: recursive ? t("wallpaper.selectFolderRecursive") : t("wallpaper.selectFolderTitle"),
-      });
-      if (typeof selected !== "string") return;
       if (folders.some((folder) => folder.path === selected)) {
         toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
         return;
@@ -391,7 +386,52 @@ export default function WallpaperPage() {
     }
   }, [t, toast, folders, persistFolders]);
 
-  // 移除已导入文件夹并重扫剩余文件夹
+  const handleImportFolder = useCallback(async (recursive: boolean) => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: recursive ? t("wallpaper.selectFolderRecursive") : t("wallpaper.selectFolderTitle"),
+      });
+      if (typeof selected !== "string") return;
+      await importFolderPath(selected, recursive);
+    } catch (e) {
+      toast({ title: String(e), status: "error", duration: 3000 });
+    }
+  }, [t, toast, importFolderPath]);
+
+  // 拖入壁纸：文件夹按「含子文件夹」导入，图片/GIF/HTML 直接应用
+  const handleDrop = useCallback(async (paths: string[]) => {
+    let applied = false;
+    let handled = false;
+    for (const path of paths) {
+      try {
+        const isDir = await invoke<boolean>("path_is_directory", { path });
+        if (isDir) {
+          handled = true;
+          await importFolderPath(path, true);
+          continue;
+        }
+        if (/\.(jpe?g|png|webp|bmp|gif|html?)$/i.test(path)) {
+          handled = true;
+          setWallpapers((prev) => dedupe([...prev, path]));
+          if (!applied) {
+            applied = true;
+            await applyWallpaper(path, -1, true);
+          }
+        }
+      } catch (e) {
+        toast({ title: String(e), status: "error", duration: 3000 });
+      }
+    }
+    if (!handled) {
+      toast({ title: "请拖入图片、GIF、HTML 或壁纸文件夹", status: "warning", duration: 3000 });
+    }
+  }, [importFolderPath, applyWallpaper, toast]);
+  const { isDragging, dropProps } = useFileDrop(handleDrop);
+
+
   const handleRemoveFolder = useCallback(
     async (folder: WallpaperFolder) => {
       const rest = folders.filter((f) => f.path !== folder.path);
@@ -502,7 +542,8 @@ export default function WallpaperPage() {
   }, []);
 
   return (
-    <Box minH="100vh" p={6} onClick={() => setCtxMenu(null)} onContextMenu={() => setCtxMenu(null)}>
+    <Box minH="100vh" p={6} {...dropProps} onClick={() => setCtxMenu(null)} onContextMenu={() => setCtxMenu(null)}>
+      <FileDropOverlay visible={isDragging} hint="松开即可应用壁纸 / 导入文件夹" />
       <HStack mb={5} spacing={3}>
         <IconButton
           aria-label="back"

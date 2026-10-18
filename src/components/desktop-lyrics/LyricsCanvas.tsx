@@ -119,7 +119,7 @@ function ActiveKaraokeLine({
 
   const sharedStyle: React.CSSProperties = {
     display: "inline-block",
-    whiteSpace: "nowrap",
+    whiteSpace: "pre-line",
     fontSize: `${fontSize}px`,
     fontFamily: fontFamily || undefined,
     fontWeight: "bold",
@@ -146,7 +146,7 @@ function ActiveKaraokeLine({
         style={{
           display: "inline-block",
           position: "relative",
-          whiteSpace: "nowrap",
+          whiteSpace: "pre-line",
           transform: "translate3d(0, 0, 0)",
           willChange: "transform",
         }}

@@ -529,3 +529,38 @@ pub async fn mux_mka(
     .await
     .map_err(|e| format!("合成任务异常: {e}"))?
 }
+
+/// 拖入路径是文件还是文件夹（WebView 拖放只给路径，需要后端判断）
+#[tauri::command]
+pub fn path_is_directory(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
+/// 读取文本文件（拖入 .fac 预设时用）
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))
+}
+
+/// 把本地图片读成 data URL，供「拖入设置背景」复用现有上传逻辑
+#[tauri::command]
+pub fn read_image_as_data_url(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
+    let ext = Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        _ => return Err(format!("不支持的图片格式: {ext}")),
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}

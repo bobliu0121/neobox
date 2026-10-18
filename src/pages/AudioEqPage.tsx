@@ -55,6 +55,7 @@ import { CustomSelect } from "@/components/special/custom-select";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { store } from "@/lib/store";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { fitEngineGains, interpolateCurveToLayout } from "@/lib/eq-curve";
 
 // ===== 类型定义 =====
@@ -847,12 +848,9 @@ export default function AudioEqPage() {
   };
 
   // 导入 FAC 预设文件
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const importFacContent = async (content: string) => {
     setImporting(true);
     try {
-      const content = await file.text();
       const imported = await invoke<EqPreset>("import_eq_preset", { content });
       setPresets((prev) => [...prev, imported]);
       const newImportedIds = [...importedIds, imported.id];
@@ -880,6 +878,31 @@ export default function AudioEqPage() {
       setImporting(false);
     }
   };
+
+  const importFacFile = async (file: File) => {
+    await importFacContent(await file.text());
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await importFacFile(file);
+  };
+
+  // 原生拖入 .fac：WebView 只给路径，后端读文本后复用导入逻辑
+  useFileDrop(async (paths) => {
+    const path = paths.find((item) => /\.fac$/i.test(item));
+    if (!path) {
+      toast({ title: "请拖入 .fac 预设文件", status: "warning", duration: 2500 });
+      return;
+    }
+    try {
+      const content = await invoke<string>("read_text_file", { path });
+      await importFacContent(content);
+    } catch (error) {
+      toast({ title: String(error), status: "error", duration: 4000 });
+    }
+  });
 
   // 构建 FAC 文件内容（含当前音效参数）
   const buildFacContent = (name: string): string => {
@@ -1521,7 +1544,15 @@ ${bandsStr}`;
                       </Box>
                     </VStack>
                   </TabPanel>
-                  <TabPanel p={0}>
+                  <TabPanel
+                    p={0}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) void importFacFile(file);
+                    }}
+                  >
                     <VStack spacing={3} align="stretch" pt={2}>
                       <Input ref={fileInputRef} type="file" accept=".fac" onChange={handleImportFile} display="none" id="fac-file-input" />
                       <Button as="label" htmlFor="fac-file-input" leftIcon={<Upload size={14} />}

@@ -660,6 +660,11 @@ function makeToast(defaultIcon?: IconKey): DynamicIslandToast {
   return fn;
 }
 
+/** 不依赖组件生命周期的全局灵动岛提示（后台任务完成后仍可弹出） */
+export function showIslandToast(options: IslandOptions) {
+  show(options);
+}
+
 /* ------------------------------------------------------------------ */
 /* 状态图标：自绘 SVG（渐变 + 发光），info/loading 复用品牌主题色        */
 /* ------------------------------------------------------------------ */

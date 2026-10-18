@@ -21,12 +21,14 @@ import {
   useToast,
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Clapperboard, FileInput, Save, RefreshCw, Film, Info } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useConversionStore } from "@/stores/conversion-store";
 import { hexToRgba } from "@/lib/color-utils";
 
 type VideoOutputFormat = {
@@ -46,14 +48,6 @@ const OUTPUT_FORMATS: VideoOutputFormat[] = [
   { value: "wav", label: "WAV（音频）", group: "audio", extension: "wav" },
 ];
 
-interface ConvertResult {
-  output_path: string;
-  frames: number;
-  width: number;
-  height: number;
-  duration_ms: number;
-}
-
 export default function VideoConverterPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -72,8 +66,29 @@ export default function VideoConverterPage() {
   const [width, setWidth] = useState(480);
   const [startSeconds, setStartSeconds] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(10);
-  const [converting, setConverting] = useState(false);
-  const [result, setResult] = useState<ConvertResult | null>(null);
+
+  // 转换任务放在全局 store：切到其他页面也会继续执行，结果不会随组件卸载丢失
+  const videoJob = useConversionStore((s) => s.videoJob);
+  const runVideoConvert = useConversionStore((s) => s.runVideoConvert);
+  const clearVideoJob = useConversionStore((s) => s.clearVideoJob);
+  const converting = videoJob?.status === "running";
+  const result = videoJob?.status === "done" ? videoJob.result : null;
+  const convertError = videoJob?.status === "error" ? videoJob.error : null;
+
+  // 支持把视频/音频直接拖到页面任意位置
+  const handleDrop = useCallback((paths: string[]) => {
+    const media = paths.find((path) =>
+      /\.(mp4|mkv|mov|avi|webm|flv|wmv|m4v|ts|m2ts|mpg|mpeg|mp3|wav|flac|aac|m4a|ogg|opus|wma)$/i.test(path)
+    );
+    if (!media) {
+      toast({ title: "请拖入视频或音频文件", status: "warning", duration: 3000 });
+      return;
+    }
+    setInputPath(media);
+    setOutputPath(null);
+    clearVideoJob();
+  }, [toast, clearVideoJob]);
+  const { isDragging, dropProps } = useFileDrop(handleDrop);
 
   const selectedFormat = useMemo(
     () => OUTPUT_FORMATS.find((item) => item.value === outputFormat) ?? OUTPUT_FORMATS[0],
@@ -101,12 +116,12 @@ export default function VideoConverterPage() {
       if (typeof selected === "string") {
         setInputPath(selected);
         setOutputPath(null);
-        setResult(null);
+        clearVideoJob();
       }
     } catch (e) {
       toast({ title: String(e), status: "error", duration: 3000 });
     }
-  }, [t, toast]);
+  }, [t, toast, clearVideoJob]);
 
   const defaultOutputPath = useCallback(
     (source: string, extension: string) =>
@@ -138,30 +153,16 @@ export default function VideoConverterPage() {
       toast({ title: t("videoConverter.samePath"), status: "warning", duration: 2500 });
       return;
     }
-    setConverting(true);
-    setResult(null);
-    try {
-      const converted = await invoke<ConvertResult>("convert_video", {
-        inputPath,
-        outputPath: target,
-        format: outputFormat,
-        fps,
-        width,
-        startSeconds,
-        durationSeconds: selectedFormat.group === "image" ? 0 : durationSeconds,
-      });
-      setResult(converted);
-      toast({ title: t("videoConverter.success"), status: "success", duration: 3000 });
-    } catch (e) {
-      toast({
-        title: `${t("videoConverter.failed")}: ${String(e)}`,
-        status: "error",
-        duration: 6000,
-        isClosable: true,
-      });
-    } finally {
-      setConverting(false);
-    }
+    // 不 await：页面切走后 Promise 仍在全局 store 中继续执行
+    void runVideoConvert({
+      inputPath,
+      outputPath: target,
+      format: outputFormat,
+      fps,
+      width,
+      startSeconds,
+      durationSeconds: selectedFormat.group === "image" ? 0 : durationSeconds,
+    });
   }, [
     inputPath,
     outputPath,
@@ -174,10 +175,12 @@ export default function VideoConverterPage() {
     defaultOutputPath,
     t,
     toast,
+    runVideoConvert,
   ]);
 
   return (
-    <Box pt={8} pb={8}>
+    <Box pt={8} pb={8} {...dropProps}>
+      <FileDropOverlay visible={isDragging} hint="松开即可导入视频，点击转换后即使离开页面也会后台完成" />
       <HStack justify="space-between" mb={6} flexWrap="wrap" gap={2}>
         <HStack>
           <IconButton
@@ -229,7 +232,7 @@ export default function VideoConverterPage() {
                 onChange={(event) => {
                   setOutputFormat(event.target.value);
                   setOutputPath(null);
-                  setResult(null);
+                  clearVideoJob();
                 }}
               >
                 {OUTPUT_FORMATS.map((item) => (
@@ -320,7 +323,12 @@ export default function VideoConverterPage() {
               </Button>
               {converting && (
                 <Text fontSize="xs" color={subTextColor}>
-                  {t("videoConverter.convertingHint")}
+                  {t("videoConverter.convertingHint")} 可切换到其他页面，完成后会通过灵动岛提示。
+                </Text>
+              )}
+              {convertError && !converting && (
+                <Text fontSize="xs" color="#e53e3e" wordBreak="break-all">
+                  {t("videoConverter.failed")}: {convertError}
                 </Text>
               )}
             </HStack>

@@ -15,7 +15,6 @@ import {
   useToast,
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
@@ -31,16 +30,10 @@ import {
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useConversionStore } from "@/stores/conversion-store";
 import { hexToRgba } from "@/lib/color-utils";
-
-interface MuxResult {
-  output_path: string;
-  audio_codec: string;
-  subtitle_codec: string | null;
-  has_cover: boolean;
-  duration_ms: number;
-  size: number;
-}
 
 function formatBytes(bytes: number): string {
   if (!bytes) return "0 B";
@@ -73,8 +66,14 @@ export default function MkaMuxerPage() {
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [title, setTitle] = useState("");
-  const [muxing, setMuxing] = useState(false);
-  const [result, setResult] = useState<MuxResult | null>(null);
+
+  // 组合任务放在全局 store：离开页面也会继续，结果不会丢失
+  const mkaJob = useConversionStore((s) => s.mkaJob);
+  const runMkaMux = useConversionStore((s) => s.runMkaMux);
+  const clearMkaJob = useConversionStore((s) => s.clearMkaJob);
+  const muxing = mkaJob?.status === "running";
+  const result = mkaJob?.status === "done" ? mkaJob.result : null;
+  const muxError = mkaJob?.status === "error" ? mkaJob.error : null;
 
   const pickFile = useCallback(
     async (
@@ -101,7 +100,7 @@ export default function MkaMuxerPage() {
       } else {
         setCoverPath(selected);
       }
-      setResult(null);
+      clearMkaJob();
     },
     [t],
   );
@@ -166,32 +165,44 @@ export default function MkaMuxerPage() {
       return;
     }
     const target = outputPath ?? audioPath.replace(/\.[^.\\/]+$/, "") + ".mka";
-    setMuxing(true);
-    setResult(null);
-    try {
-      const converted = await invoke<MuxResult>("mux_mka", {
-        audioPath,
-        subtitlePath: subtitlePath ?? undefined,
-        coverPath: coverPath ?? undefined,
-        outputPath: target,
-        title: title.trim() || undefined,
-      });
-      setResult(converted);
-      toast({ title: t("mkaMuxer.success"), status: "success", duration: 3000 });
-    } catch (e) {
-      toast({
-        title: `${t("mkaMuxer.failed")}: ${String(e)}`,
-        status: "error",
-        duration: 7000,
-        isClosable: true,
-      });
-    } finally {
-      setMuxing(false);
-    }
-  }, [audioPath, subtitlePath, coverPath, outputPath, title, t, toast]);
+    // 不 await：页面切走后 Promise 仍在全局 store 中继续执行
+    void runMkaMux({
+      audioPath,
+      subtitlePath: subtitlePath ?? undefined,
+      coverPath: coverPath ?? undefined,
+      outputPath: target,
+      title: title.trim() || undefined,
+    });
+  }, [audioPath, subtitlePath, coverPath, outputPath, title, runMkaMux]);
 
-  const fileRow = (
-    label: string,
+  // 拖入时按扩展名自动分配到音频 / 字幕 / 封面
+  const handleDrop = useCallback(
+    (paths: string[]) => {
+      let audio: string | undefined;
+      let subtitle: string | undefined;
+      let cover: string | undefined;
+      for (const path of paths) {
+        if (/\.(mp3|flac|wav|m4a|aac|ogg|opus|wma|aiff|ape|mka)$/i.test(path)) audio ??= path;
+        else if (/\.(srt|vtt|ass|ssa)$/i.test(path)) subtitle ??= path;
+        else if (/\.(jpe?g|png|webp|gif|bmp)$/i.test(path)) cover ??= path;
+      }
+      if (!audio && !subtitle && !cover) {
+        toast({ title: "请拖入音频、字幕或封面文件", status: "warning", duration: 3000 });
+        return;
+      }
+      if (audio) {
+        setAudioPath(audio);
+        setTitle((current) => current || audio!.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, ""));
+      }
+      if (subtitle) setSubtitlePath(subtitle);
+      if (cover) setCoverPath(cover);
+      clearMkaJob();
+    },
+    [toast],
+  );
+  const { isDragging, dropProps } = useFileDrop(handleDrop);
+
+  const fileRow = (    label: string,
     path: string | null,
     placeholder: string,
     icon: ReactElement,
@@ -231,7 +242,8 @@ export default function MkaMuxerPage() {
   );
 
   return (
-    <Box pt={8} pb={8}>
+    <Box pt={8} pb={8} {...dropProps}>
+      <FileDropOverlay visible={isDragging} hint="松开即可填入音频 / 字幕 / 封面" />
       <HStack justify="space-between" mb={6} flexWrap="wrap" gap={2}>
         <HStack>
           <IconButton
@@ -261,7 +273,7 @@ export default function MkaMuxerPage() {
               handlePickAudio,
               () => {
                 setAudioPath(null);
-                setResult(null);
+                clearMkaJob();
               },
             )}
             {fileRow(
@@ -272,7 +284,7 @@ export default function MkaMuxerPage() {
               handlePickSubtitle,
               () => {
                 setSubtitlePath(null);
-                setResult(null);
+                clearMkaJob();
               },
             )}
             {fileRow(
@@ -283,7 +295,7 @@ export default function MkaMuxerPage() {
               handlePickCover,
               () => {
                 setCoverPath(null);
-                setResult(null);
+                clearMkaJob();
               },
             )}
 
@@ -334,6 +346,17 @@ export default function MkaMuxerPage() {
                 {t("mkaMuxer.mux")}
               </Button>
             </HStack>
+
+            {muxing && (
+              <Text fontSize="xs" color={subTextColor}>
+                组合在后台进行，可切换到其他页面，完成后会通过灵动岛提示。
+              </Text>
+            )}
+            {muxError && !muxing && (
+              <Text fontSize="xs" color="#e53e3e" wordBreak="break-all">
+                {t("mkaMuxer.failed")}: {muxError}
+              </Text>
+            )}
 
             {result && (
               <Box p={3} borderRadius="md" bg={themeColorRgba(0.08)} border="1px solid" borderColor={themeColorRgba(0.25)}>

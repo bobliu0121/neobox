@@ -50,6 +50,7 @@ import {
 import { useDynamicIsland } from "@/components/ui/dynamic-island";
 import {
   Search,
+  SearchX,
   Volume2,
   VolumeX,
   ListMusic,
@@ -101,6 +102,8 @@ import { MusicLoginSection } from "@/components/MusicLoginSection";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { buildKaraokeLines } from "@/lib/karaoke-lyrics";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { KaraokeLyricsView } from "@/components/KaraokeLyricsView";
 import { ImmersiveLyricsView, ImmersiveRippleField } from "@/components/ImmersiveLyricsView";
 import SpectrumScene from "@/components/SpectrumScene";
@@ -285,7 +288,10 @@ function parseLrc(lyric: string, translation?: string): LyricLine[] {
   for (const line of mainLines) {
     const matches = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
     if (matches.length === 0) continue;
-    const text = line.replace(/\[\d+:\d+(?:\.\d+)?\]/g, "").trim();
+    const text = line
+      .replace(/\[\d+:\d+(?:\.\d+)?\]/g, "")
+      .trim()
+      .replace(/\\N/g, "\n");
     if (!text) continue;
     for (const m of matches) {
       const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
@@ -2530,7 +2536,6 @@ interface SongRowProps {
   isCurrent: boolean;
   isPlaying: boolean;
   isLiked: boolean;
-  isLoggedIn: boolean;
   proxyPort: number;
   activeColor: string;
   hoverBg: string;
@@ -2552,7 +2557,6 @@ const SongRow = memo(function SongRow({
   isCurrent,
   isPlaying,
   isLiked,
-  isLoggedIn,
   proxyPort,
   activeColor,
   hoverBg,
@@ -2594,7 +2598,7 @@ const SongRow = memo(function SongRow({
           <Text color={textColor} fontSize="sm" noOfLines={1} fontWeight={isCurrent ? "bold" : "normal"}>
             {song.name}
           </Text>
-          <VipSongMark fee={song.fee} />
+          <VipSongMark song={song} />
         </HStack>
         <HStack spacing={1} minW={0}>
           {song.artists.length > 0 && song.artists[0].id && onArtistClick ? (
@@ -2656,20 +2660,18 @@ const SongRow = memo(function SongRow({
           onAddToQueue(song);
         }}
       />
-      {isLoggedIn && (
-        <IconButton
-          aria-label={isLiked ? "取消红心" : "红心"}
-          title={isLiked ? "取消红心" : "红心"}
-          icon={<Heart size={14} fill={isLiked ? "#e53e3e" : "none"} color={isLiked ? "#e53e3e" : "currentColor"} />}
-          size="xs"
-          variant="ghost"
-          sx={{ color: subTextColor, _hover: { bg: hoverBg } }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleLike(song.id);
-          }}
-        />
-      )}
+      <IconButton
+        aria-label={isLiked ? "取消红心" : "红心"}
+        title={isLiked ? "取消红心" : "红心"}
+        icon={<Heart size={14} fill={isLiked ? "#e53e3e" : "none"} color={isLiked ? "#e53e3e" : "currentColor"} />}
+        size="xs"
+        variant="ghost"
+        sx={{ color: subTextColor, _hover: { bg: hoverBg } }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLike(song.id);
+        }}
+      />
       <IconButton
         aria-label="播放"
         title="播放"
@@ -2709,6 +2711,8 @@ interface LocalSongRowProps {
   onAddToQueue: (song: Song) => void;
   onTogglePlay: () => void;
   onRemove: (id: string) => void;
+  isLiked: boolean;
+  onToggleLike: (id: string) => void;
 }
 
 const LocalSongRow = memo(function LocalSongRow({
@@ -2727,6 +2731,8 @@ const LocalSongRow = memo(function LocalSongRow({
   onAddToQueue,
   onTogglePlay,
   onRemove,
+  isLiked,
+  onToggleLike,
 }: LocalSongRowProps) {
   return (
     <HStack
@@ -2782,6 +2788,19 @@ const LocalSongRow = memo(function LocalSongRow({
       <Text color={subTextColor} fontSize="xs" flexShrink={0}>
         {song.duration > 0 ? formatTime(song.duration / 1000) : ""}
       </Text>
+      <Tooltip label={isLiked ? "取消红心" : "红心"}>
+        <IconButton
+          aria-label={isLiked ? "取消红心" : "红心"}
+          icon={<Heart size={14} fill={isLiked ? "#e53e3e" : "none"} color={isLiked ? "#e53e3e" : subTextColor} />}
+          size="xs"
+          variant="ghost"
+          sx={{ color: isLiked ? "#e53e3e" : subTextColor, _hover: { bg: hoverBg, color: "#e53e3e" } }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleLike(song.id);
+          }}
+        />
+      </Tooltip>
       <Tooltip label="添加到播放队列">
         <IconButton
           aria-label="Add to queue"
@@ -2848,6 +2867,8 @@ interface HistorySongRowProps {
   onAddToQueue: (song: Song) => void;
   onTogglePlay: () => void;
   onRemove: (provider: string, id: string) => void;
+  isLiked: boolean;
+  onToggleLike: (id: string) => void;
 }
 
 const HistorySongRow = memo(function HistorySongRow({
@@ -2866,6 +2887,8 @@ const HistorySongRow = memo(function HistorySongRow({
   onAddToQueue,
   onTogglePlay,
   onRemove,
+  isLiked,
+  onToggleLike,
 }: HistorySongRowProps) {
   const song = entry.song;
   return (
@@ -2894,7 +2917,7 @@ const HistorySongRow = memo(function HistorySongRow({
           <Text color={textColor} fontSize="sm" noOfLines={1} fontWeight={isCurrent ? "bold" : "normal"}>
             {song.name}
           </Text>
-          <VipSongMark fee={song.fee} />
+          <VipSongMark song={song} />
         </HStack>
         <Text color={subTextColor} fontSize="xs" noOfLines={1}>
           {song.artist}
@@ -2907,6 +2930,18 @@ const HistorySongRow = memo(function HistorySongRow({
         {formatCommentTime(entry.playedAt)}
       </Text>
       {/* 行内按钮用原生 title 而不是 Chakra Tooltip：与 SongRow 同一考虑，虚拟列表滚动时 Tooltip 是掉帧主因 */}
+      <IconButton
+        aria-label={isLiked ? "取消红心" : "红心"}
+        title={isLiked ? "取消红心" : "红心"}
+        icon={<Heart size={14} fill={isLiked ? "#e53e3e" : "none"} color={isLiked ? "#e53e3e" : subTextColor} />}
+        size="xs"
+        variant="ghost"
+        sx={{ color: isLiked ? "#e53e3e" : subTextColor, _hover: { bg: hoverBg, color: "#e53e3e" } }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLike(song.id);
+        }}
+      />
       <IconButton
         aria-label="添加到播放队列"
         title="添加到播放队列"
@@ -3045,7 +3080,7 @@ const SortableQueueRow = memo(function SortableQueueRow({
             >
               {song.name}
             </Text>
-            <VipSongMark fee={song.fee} />
+            <VipSongMark song={song} />
           </HStack>
           <Text
             fontSize="xs"
@@ -3224,9 +3259,39 @@ const SEARCH_PROVIDERS: { id: MusicProvider; name: string; logo: string }[] = [
 // 听歌权限：VIP 徽标 + 平台权限说明表
 // ═══════════════════════════════════════════════
 
-/** VIP/付费歌曲徽标：song.fee > 0 时在列表行内显示 */
-const VipSongMark = memo(function VipSongMark({ fee }: { fee?: number }) {
-  if (!fee || fee <= 0) return null;
+/**
+ * 各平台歌曲付费类型判定。
+ *
+ * 网易云 fee 的官方语义：0 免费、1 VIP、4 付费专辑、8 免费（低音质）。
+ * 之前用 fee > 0 一律标 VIP，会把 fee=8 的免费歌曲和 fee=4 的付费专辑误标成 VIP。
+ */
+function resolveVipKind(song: { provider?: string; fee?: number }): "vip" | "paid" | null {
+  const fee = song.fee ?? 0;
+  if (fee <= 0) return null;
+  if (song.provider === "netease") {
+    if (fee === 1) return "vip";
+    if (fee === 4) return "paid";
+    if (fee === 8) return null;
+    return "vip";
+  }
+  if (song.provider === "qqmusic") {
+    // QQ 音乐的 pay_play 同时覆盖绿钻与数字专辑，无法进一步区分，统一标「付费」
+    return "paid";
+  }
+  return "vip";
+}
+
+/** VIP/付费歌曲徽标：按平台 fee 语义显示，避免免费低音质/付费专辑被误标 VIP */
+const VipSongMark = memo(function VipSongMark({
+  song,
+  kind,
+}: {
+  song?: { provider?: string; fee?: number };
+  kind?: "vip" | "paid";
+}) {
+  const resolved = kind ?? (song ? resolveVipKind(song) : null);
+  if (!resolved) return null;
+  const isPaid = resolved === "paid";
   return (
     <Box
       as="span"
@@ -3239,12 +3304,16 @@ const VipSongMark = memo(function VipSongMark({ fee }: { fee?: number }) {
       fontSize="9px"
       fontWeight="bold"
       lineHeight="1.2"
-      bg="linear-gradient(135deg, #f6d365 0%, #fda085 50%, #f6d365 100%)"
-      color="#5a3000"
+      bg={
+        isPaid
+          ? "linear-gradient(135deg, #a5b4fc 0%, #818cf8 50%, #a5b4fc 100%)"
+          : "linear-gradient(135deg, #f6d365 0%, #fda085 50%, #f6d365 100%)"
+      }
+      color={isPaid ? "#1e1b4b" : "#5a3000"}
       flexShrink={0}
     >
       <Crown size={10} strokeWidth={2.5} />
-      VIP
+      {isPaid ? "付费" : "VIP"}
     </Box>
   );
 });
@@ -3349,7 +3418,7 @@ function MusicPermissionInfo() {
           <ModalBody pb={5}>
             <VStack spacing={4} align="stretch">
               <Text fontSize="xs" color={subTextColor}>
-                无需登录即可搜索与试听免费歌曲；登录可解锁更高音质与个性化功能；带 <VipSongMark fee={1} /> 标记的歌曲需要对应平台的 VIP 会员（或付费）才能完整播放。
+                无需登录即可搜索与试听免费歌曲；登录可解锁更高音质与个性化功能；带 <VipSongMark kind="vip" /> 标记的歌曲需要对应平台的 VIP 会员（或付费）才能完整播放。
               </Text>
               <Box
                 border="1px solid"
@@ -3631,6 +3700,8 @@ const SearchBox = memo(function SearchBox({
 
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [dropdownResults, setDropdownResults] = useState<Song[]>([]);
+  // 已完成的实时预览搜索词：用于在结果为空时明确提示「搜索不到」，而不是静默无下拉
+  const [dropdownEmptyKeyword, setDropdownEmptyKeyword] = useState("");
   // 搜索历史：localStorage 持久化；输入为空时聚焦显示
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
   const [showHistory, setShowHistory] = useState(false);
@@ -3688,6 +3759,7 @@ const SearchBox = memo(function SearchBox({
     useMusicStore.setState({ currentSearchKeyword: value.trim() });
     // 输入清空时显示历史，非空时隐藏历史
     setShowHistory(!value.trim());
+    setDropdownEmptyKeyword("");
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!value.trim()) {
       setDropdownResults([]);
@@ -3698,6 +3770,7 @@ const SearchBox = memo(function SearchBox({
       await storeActions.search(value);
       const results = useMusicStore.getState().searchResults;
       setDropdownResults(results);
+      setDropdownEmptyKeyword(results.length === 0 ? value.trim() : "");
       setShowSearchDropdown(true);
     }, 300);
   }, [storeActions]);
@@ -3790,7 +3863,6 @@ const SearchBox = memo(function SearchBox({
         isCurrent={state.currentSong?.id === song.id}
         isPlaying={state.isPlaying}
         isLiked={likedSongIds.has(song.id)}
-        isLoggedIn={!!state.loginInfo?.logged_in}
         proxyPort={state.proxyPort}
         activeColor={activeColor}
         hoverBg={hoverBg}
@@ -3918,7 +3990,7 @@ const SearchBox = memo(function SearchBox({
 
       {/* 搜索下拉预览 */}
       <AnimatePresence>
-        {showSearchDropdown && dropdownResults.length > 0 && (
+        {showSearchDropdown && (dropdownResults.length > 0 || dropdownEmptyKeyword) && (
           <motion.div
             key="search-dropdown"
             initial="hidden"
@@ -3945,31 +4017,40 @@ const SearchBox = memo(function SearchBox({
               animate="visible"
               style={{ display: "flex", flexDirection: "column", gap: "4px" }}
             >
-              {dropdownResults.slice(0, 6).map((song, i) => (
-                <motion.div key={`${song.provider}-${song.id}-${i}`} variants={listItemVariants}>
-                  {renderSongRow(song, i)}
-                </motion.div>
-              ))}
-              <motion.div variants={listItemVariants}>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    const val = searchInputRef.current;
-                    Promise.all([
-                      storeActions.search(val),
-                      storeActions.searchArtists(val),
-                      storeActions.searchPlaylists(val),
-                    ]).then(() => {
-                      onUnifiedSearch(val);
-                      setShowSearchDropdown(false);
-                    });
-                  }}
-                  sx={{ color: activeColor, _hover: { bg: hoverBg } }}
-                >
-                  查看全部 ({dropdownResults.length})
-                </Button>
-              </motion.div>
+              {dropdownResults.length === 0 ? (
+                <HStack spacing={2} px={3} py={4} justify="center" color={subTextColor}>
+                  <SearchX size={18} />
+                  <Text fontSize="sm">搜索不到“{dropdownEmptyKeyword}”</Text>
+                </HStack>
+              ) : (
+                <>
+                  {dropdownResults.slice(0, 6).map((song, i) => (
+                    <motion.div key={`${song.provider}-${song.id}-${i}`} variants={listItemVariants}>
+                      {renderSongRow(song, i)}
+                    </motion.div>
+                  ))}
+                  <motion.div variants={listItemVariants}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const val = searchInputRef.current;
+                        Promise.all([
+                          storeActions.search(val),
+                          storeActions.searchArtists(val),
+                          storeActions.searchPlaylists(val),
+                        ]).then(() => {
+                          onUnifiedSearch(val);
+                          setShowSearchDropdown(false);
+                        });
+                      }}
+                      sx={{ color: activeColor, _hover: { bg: hoverBg } }}
+                    >
+                      查看全部 ({dropdownResults.length})
+                    </Button>
+                  </motion.div>
+                </>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -3990,6 +4071,7 @@ export default function MusicPage() {
   const searchResults = useMusicStore((s) => s.searchResults);
   const userPlaylists = useMusicStore((s) => s.userPlaylists);
   const localSongs = useMusicStore((s) => s.localSongs);
+  const favoriteSongs = useMusicStore((s) => s.favoriteSongs);
   const localFolders = useMusicStore((s) => s.localFolders);
   // 持久化播放历史（最近在前）：左侧「播放历史」入口卡片与列表共用
   const playHistoryList = useMusicStore((s) => s.playHistoryList);
@@ -4076,7 +4158,7 @@ export default function MusicPage() {
   const [searchInput, setSearchInput] = useState("");
   const [searchTab, setSearchTab] = useState<"songs" | "playlists" | "artists">("songs");
   const previousViewRef = useRef<typeof viewMode>("main");
-  const [leftPanelView, setLeftPanelView] = useState<"playlists" | "tracks" | "local" | "history">("playlists");
+  const [leftPanelView, setLeftPanelView] = useState<"playlists" | "tracks" | "local" | "history" | "favorites">("playlists");
   // 本地音乐视图：当前选中的导入文件夹（null = 全部）+ 本地搜索关键词
   const [localFolderId, setLocalFolderId] = useState<string | null>(null);
   const [localKeyword, setLocalKeyword] = useState("");
@@ -4482,6 +4564,43 @@ setPlaylistKeyword("");
     }
   }, [storeActions, toast]);
 
+  // ── 拖入本地音乐：音频文件直接导入，文件夹按「含子文件夹」导入 ──
+  const handleLocalDrop = useCallback(async (paths: string[]) => {
+    try {
+      const folders: string[] = [];
+      const files: string[] = [];
+      for (const path of paths) {
+        const isDir = await invoke<boolean>("path_is_directory", { path }).catch(() => false);
+        if (isDir) folders.push(path);
+        else files.push(path);
+      }
+      let imported = 0;
+      if (files.length > 0) {
+        const audios = files.filter((path) =>
+          /\.(mp3|wav|ogg|m4a|flac|aac|opus|wma|aiff|ape|oga|mka)$/i.test(path)
+        );
+        if (audios.length > 0) {
+          const result = await storeActions.importLocalSongs(audios);
+          imported += result.count;
+        }
+      }
+      for (const folder of folders) {
+        const result = await storeActions.importLocalFolder(folder, true);
+        imported += result.count;
+        setLocalFolderId(folder);
+      }
+      if (imported > 0) {
+        setLeftPanelView("local");
+        toast({ title: "导入成功", description: `已导入 ${imported} 首本地歌曲`, status: "success", duration: 3000 });
+      } else {
+        toast({ title: "导入失败", description: "未找到支持的音频文件", status: "warning", duration: 2500 });
+      }
+    } catch (e) {
+      toast({ title: "导入失败", description: String(e), status: "error", duration: 3000 });
+    }
+  }, [storeActions, toast]);
+  const { isDragging, dropProps } = useFileDrop(handleLocalDrop);
+
   const handleRemoveLocalFolder = useCallback((folder: LocalMusicFolder) => {
     storeActions.removeLocalFolder(folder.id);
     setLocalFolderId((current) => (current === folder.id ? null : current));
@@ -4684,7 +4803,6 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
       isCurrent={currentSong?.id === song.id}
       isPlaying={isPlaying}
       isLiked={likedSongIds.has(song.id)}
-      isLoggedIn={!!loginInfo?.logged_in}
       proxyPort={proxyPort}
       activeColor={activeColor}
       hoverBg={hoverBg}
@@ -4773,9 +4891,11 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
         onAddToQueue={onAddToQueue}
         onTogglePlay={onTogglePlay}
         onRemove={handleRemoveLocalSong}
+        isLiked={likedSongIds.has(song.id)}
+        onToggleLike={onToggleLike}
       />
     ),
-    [currentSong, isPlaying, proxyPort, activeColor, hoverBg, itemHoverBg, itemActiveBg, textColor, subTextColor, liquidGlassEnabled, handleLocalPlay, onAddToQueue, onTogglePlay, handleRemoveLocalSong]
+    [currentSong, isPlaying, proxyPort, activeColor, hoverBg, itemHoverBg, itemActiveBg, textColor, subTextColor, liquidGlassEnabled, handleLocalPlay, onAddToQueue, onTogglePlay, handleRemoveLocalSong, likedSongIds, onToggleLike]
   );
 
   // 播放历史行渲染：数据是进入视图时的快照，列表内播歌不会重排/刷时间；删除按 provider+id 定位
@@ -4797,9 +4917,11 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
         onAddToQueue={onAddToQueue}
         onTogglePlay={onTogglePlay}
         onRemove={handleRemoveHistoryEntry}
+        isLiked={likedSongIds.has(entry.song.id)}
+        onToggleLike={onToggleLike}
       />
     ),
-    [currentSong, isPlaying, proxyPort, activeColor, hoverBg, itemHoverBg, itemActiveBg, textColor, subTextColor, liquidGlassEnabled, handlePlayHistorySong, onAddToQueue, onTogglePlay, handleRemoveHistoryEntry]
+    [currentSong, isPlaying, proxyPort, activeColor, hoverBg, itemHoverBg, itemActiveBg, textColor, subTextColor, liquidGlassEnabled, handlePlayHistorySong, onAddToQueue, onTogglePlay, handleRemoveHistoryEntry, likedSongIds, onToggleLike]
   );
 
   // ── 渲染歌单行（可自定义 onClick）──
@@ -5700,7 +5822,10 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
           ) : !hasAnyResults ? (
             <VStack py={12} spacing={2}>
               <Search size={32} color={subTextColor} />
-              <Text color={subTextColor} fontSize="sm">没有找到相关内容</Text>
+              <Text color={textColor} fontSize="sm" fontWeight="medium">
+                搜索不到“{searchInput.trim()}”
+              </Text>
+              <Text color={subTextColor} fontSize="xs">换个关键词，或切换搜索平台再试</Text>
             </VStack>
           ) : (
             <Box flex={1} overflowY="auto" overflowX="hidden" sx={memoScrollbarSx}>
@@ -6013,7 +6138,9 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
       h="calc(100vh - 120px)"
       overflow="hidden"
       sx={{ maxWidth: "100%", overflowX: "hidden", position: "relative" }}
+      {...dropProps}
     >
+      <FileDropOverlay visible={isDragging} hint="松开即可导入本地音乐" />
       {/* 标题 + 登录 */}
       <HStack justify="space-between" w="100%" flexShrink={0}>
         <HStack spacing={3}>
@@ -6252,12 +6379,59 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                 loadingText="加载中..."
                 emptyText={
                   localKeyword.trim()
-                    ? "未找到匹配的本地歌曲"
+                    ? "搜索不到匹配的本地歌曲"
                     : activeLocalFolder
                     ? "该文件夹下暂无已导入的歌曲"
                     : "暂无本地歌曲，点击右上角导入"
                 }
                 resetKey={`local|${localFolderId ?? "all"}|${localKeyword}`}
+                scrollbarSx={memoScrollbarSx}
+              />
+            </>
+          ) : leftPanelView === "favorites" ? (
+            <>
+              {/* 我的红心：不依赖登录，点击红心即写入本地并持久化 */}
+              <HStack spacing={2} mb={3} flexShrink={0}>
+                <Tooltip label="返回歌单列表">
+                  <IconButton
+                    aria-label="Back"
+                    icon={<ArrowLeft size={16} />}
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleBackToPlaylists}
+                    sx={{ color: activeColor, _hover: { bg: hoverBg } }}
+                  />
+                </Tooltip>
+                <Heart size={16} color="#e53e3e" fill="#e53e3e" />
+                <Text fontSize="sm" fontWeight="bold" color={textColor} noOfLines={1}>
+                  我的红心
+                </Text>
+                <Text color={subTextColor} fontSize="xs" flexShrink={0}>
+                  ({favoriteSongs.length} 首)
+                </Text>
+                <Box flex={1} />
+                <Button
+                  size="xs"
+                  leftIcon={<PlayBtn size={12} />}
+                  variant="solid"
+                  bg={activeColor}
+                  color={contrastText}
+                  isDisabled={favoriteSongs.length === 0}
+                  _hover={{ opacity: 0.9 }}
+                  _active={{ transform: "scale(0.97)" }}
+                  onClick={() => playAll(favoriteSongs)}
+                >
+                  播放全部
+                </Button>
+              </HStack>
+              <VirtualList
+                items={favoriteSongs}
+                itemHeight={60}
+                renderItem={(song, i) => renderSongRow(song, i, favoriteSongs)}
+                getKey={(song, i) => `favorite-${song.provider}-${song.id}-${i}`}
+                loading={false}
+                emptyText="还没有红心歌曲，点击任意歌曲右侧的爱心即可收藏"
+                resetKey={`favorites|${favoriteSongs.length}`}
                 scrollbarSx={memoScrollbarSx}
               />
             </>
@@ -6498,6 +6672,44 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                       {playHistoryList.length > 0
                         ? `${playHistoryList.length} 条 · 最近 ${formatCommentTime(playHistoryList[0].playedAt)}`
                         : "播放歌曲后自动记录"}
+                    </Text>
+                  </VStack>
+                  <ChevronRight size={16} color={subTextColor} />
+                </HStack>
+              </Box>
+
+              {/* 我的红心入口：未登录也可用，收藏记录保存在本地 */}
+              <Box
+                p={2}
+                borderRadius="lg"
+                cursor="pointer"
+                mb={3}
+                _hover={{ bg: liquidGlassEnabled ? hoverBg : itemHoverBg }}
+                onClick={() => setLeftPanelView("favorites")}
+                transition="background 0.15s"
+                flexShrink={0}
+              >
+                <HStack spacing={3}>
+                  <Box
+                    w="44px"
+                    h="44px"
+                    borderRadius="md"
+                    flexShrink={0}
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                    bg={useColorModeValue("rgba(229,62,62,0.10)", "rgba(229,62,62,0.18)")}
+                  >
+                    <Heart size={22} color="#e53e3e" fill={favoriteSongs.length > 0 ? "#e53e3e" : "none"} />
+                  </Box>
+                  <VStack spacing={0} align="start" flex={1} minW={0}>
+                    <Text color={textColor} fontSize="sm" fontWeight="medium" noOfLines={1}>
+                      我的红心
+                    </Text>
+                    <Text color={subTextColor} fontSize="xs" noOfLines={1}>
+                      {favoriteSongs.length > 0
+                        ? `${favoriteSongs.length} 首 · 本地保存，未登录也可用`
+                        : "点击歌曲爱心收藏，本地保存"}
                     </Text>
                   </VStack>
                   <ChevronRight size={16} color={subTextColor} />

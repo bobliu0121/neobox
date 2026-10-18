@@ -66,6 +66,8 @@ import { PRESET_COLORS, hexToRgba } from "@/lib/color-utils";
 import { CustomColorPicker } from "@/components/special/custom-color-picker";
 import { fetchReleaseByTag, type ReleaseInfo } from "@/lib/update-checker";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { LiquidGlassButton } from "@/components/special/liquid-glass-button";
 import { LiquidGlassMenuItem } from "@/components/special/liquid-glass-menu-item";
 import { ThemeSwitch } from "@/components/special/theme-switch";
@@ -1341,6 +1343,30 @@ function AppearanceSettings() {
       reader.readAsDataURL(file);
     });
 
+  /** 已是 data URL 的图片（拖入路径读取）走同一套压缩逻辑 */
+  const compressBackgroundDataUrl = (src: string) =>
+    new Promise<string>((resolve, reject) => {
+      const image = new window.Image();
+      image.onerror = () => reject(new Error("解析图片失败"));
+      image.onload = () => {
+        const maxSide = 1920;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("无法创建画布"));
+          return;
+        }
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.86));
+      };
+      image.src = src;
+    });
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -1366,6 +1392,31 @@ function AppearanceSettings() {
     }
     e.target.value = "";
   };
+
+  // 拖入图片作为自定义背景（与上传共用压缩/上限逻辑）
+  const handleBackgroundDrop = useCallback(async (paths: string[]) => {
+    const images = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(path));
+    if (images.length === 0) {
+      toast({ title: "请拖入图片文件", status: "warning", duration: 2500 });
+      return;
+    }
+    let added = 0;
+    for (const path of images) {
+      try {
+        const raw = await invoke<string>("read_image_as_data_url", { path });
+        const compressed = await compressBackgroundDataUrl(raw);
+        if (addCustomBgImage(compressed)) added += 1;
+      } catch (error) {
+        console.error("拖入背景处理失败:", error);
+      }
+    }
+    if (added > 0) {
+      toast({ title: "已添加背景图片", description: `新增 ${added} 张`, status: "success", duration: 2000 });
+    } else {
+      toast({ title: "背景图片已达上限或格式不支持", status: "warning", duration: 2500 });
+    }
+  }, [addCustomBgImage, toast]);
+  const { isDragging: bgDragging, dropProps: bgDropProps } = useFileDrop(handleBackgroundDrop);
 
   const handleVideoUpload = async () => {
     try {
@@ -1408,7 +1459,8 @@ function AppearanceSettings() {
   };
 
   return (
-    <Box>
+    <Box {...bgDropProps}>
+      <FileDropOverlay visible={bgDragging} hint="松开即可添加为自定义背景" />
       <Text fontSize="lg" fontWeight="bold" mb={6} color={titleColor}>
         {t("settings.appearanceSettings.title")}
       </Text>
@@ -2479,6 +2531,7 @@ function NetworkSettings() {
 
 function AboutSettings() {
   const { t } = useTranslation();
+  const toast = useDynamicIsland("settings");
   const { getActiveColor } = useThemeColor();
   const titleColor = useColorModeValue("gray.800", "#ffffff");
   const labelColor = useColorModeValue("gray.700", "#ffffff");
@@ -2495,7 +2548,7 @@ function AboutSettings() {
   const FEEDBACK_URL = "https://github.com/bobliu0121/neobox/issues";
   const AUTHOR_QQ = "3954720009";
 
-  const currentVersion = "1.0.0";
+  const currentVersion = "1.1.0";
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
 
@@ -2558,6 +2611,32 @@ function AboutSettings() {
     }
   };
 
+  // 关于页顶部品牌图彩蛋：连点 5 次跳转到指定视频，每次点击在灵动岛显示进度
+  const eggClicksRef = useRef(0);
+  const handleBrandEggClick = useCallback(() => {
+    const next = eggClicksRef.current + 1;
+    if (next >= 5) {
+      eggClicksRef.current = 0;
+      toast({
+        title: "彩蛋已触发",
+        description: "正在打开神秘链接…",
+        status: "success",
+        iconKey: "sparkles",
+        duration: 3000,
+      });
+      void handleOpenLink("https://www.bilibili.com/video/BV1GJ411x7h7/");
+      return;
+    }
+    eggClicksRef.current = next;
+    toast({
+      title: `彩蛋 ${next}/5`,
+      description: "正在触发彩蛋，继续点击顶部品牌图",
+      status: "info",
+      iconKey: "sparkles",
+      duration: 1400,
+    });
+  }, [toast]);
+
   // 版本卡片点击：有更新时打开更新弹窗，无更新时重新检查；下载中/待安装交给卡片底部按钮
   const handleVersionClick = () => {
     if (isDownloading || isDownloadComplete) return;
@@ -2595,8 +2674,16 @@ function AboutSettings() {
         {t("settings.aboutSettings.title")}
       </Text>
 
-      {/* 品牌展示：关于页顶部的图标 + 字标 */}
-      <LiquidGlassCard p={4} boxShadow="sm" mb={4}>
+      {/* 品牌展示：关于页顶部的图标 + 字标（连点 5 次触发彩蛋） */}
+      <LiquidGlassCard
+        p={4}
+        boxShadow="sm"
+        mb={4}
+        cursor="pointer"
+        userSelect="none"
+        title="NeoBox"
+        onClick={handleBrandEggClick}
+      >
         <HStack spacing={5} justify="center" align="center" flexWrap="wrap">
           <Image
             src="/about/about1.webp"

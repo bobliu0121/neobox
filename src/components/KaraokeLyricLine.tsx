@@ -130,6 +130,7 @@ function KaraokeLyricLineInner({
           fontWeight="normal"
           textAlign={align}
           noOfLines={2}
+          whiteSpace="pre-line"
           wordBreak="break-word"
         >
           {line.text}
@@ -152,7 +153,7 @@ function KaraokeLyricLineInner({
   // ── 当前行：双层叠加卡拉OK效果 ──
   const sharedTextStyle: React.CSSProperties = {
     display: "inline-block",
-    whiteSpace: "nowrap",
+    whiteSpace: "pre-line",
     fontSize: `${fontSize}px`,
     fontWeight: "bold",
     lineHeight: 1.4,
@@ -178,7 +179,7 @@ function KaraokeLyricLineInner({
         style={{
           display: "inline-block",
           position: "relative",
-          whiteSpace: "nowrap",
+          whiteSpace: "pre-line",
           transform: "translate3d(0, 0, 0)",
           willChange: "transform",
         }}

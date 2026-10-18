@@ -465,7 +465,7 @@ fn build_local_song_info(
             match cached {
                 Some(cached_path) => {
                     play_path = cached_path;
-                    if play_dir.join(format!("{cache_key}.lrc")).is_file() {
+                    if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
                         has_lyric = true;
                     }
                     if cover_path.is_empty() {
@@ -482,7 +482,7 @@ fn build_local_song_info(
                 None => match crate::matroska::extract_playable_audio(raw_path, play_dir, &cache_key) {
                     Ok((cached_path, mka_cover, mka_duration)) => {
                         play_path = cached_path;
-                        if play_dir.join(format!("{cache_key}.lrc")).is_file() {
+                        if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
                             has_lyric = true;
                         }
                         if duration_ms == 0 && mka_duration > 0 {
@@ -677,7 +677,7 @@ pub async fn get_local_lyric(app: AppHandle, path: String) -> Result<String, Str
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.clone());
         let cache_key = playback_cache_key(audio_path, &id);
-        let cached_lrc = play_dir.join(format!("{cache_key}.lrc"));
+        let cached_lrc = play_dir.join(format!("{cache_key}.lyrics-v2.lrc"));
         if cached_lrc.is_file() {
             return Ok(std::fs::read_to_string(&cached_lrc).unwrap_or_default());
         }

@@ -109,6 +109,8 @@ interface MusicState {
 
   // 本地导入歌曲
   localSongs: Song[];
+  /** 本地红心：不依赖登录，按歌曲完整对象持久化（跨平台/本地导入均可用） */
+  favoriteSongs: Song[];
   /** 本地导入的文件夹（显示为「本地导入的歌单」下的子文件夹） */
   localFolders: LocalMusicFolder[];
   // 本地导入进行中（文件夹/多文件导入耗时长，用于 UI 反馈避免误以为卡死）
@@ -234,6 +236,9 @@ interface MusicState {
 
   // 本地导入歌曲 Actions
   loadLocalSongs: () => Promise<void>;
+  loadFavoriteSongs: () => Promise<void>;
+  /** 切换本地红心（不依赖登录）；返回切换后的状态 */
+  toggleFavoriteSong: (song: Song, liked?: boolean) => Promise<boolean>;
   importLocalSongs: (paths: string[]) => Promise<{ count: number; noCoverCount: number }>;
   importLocalFolder: (
     folder: string,
@@ -403,6 +408,18 @@ function serializeLocalSong(song: Song): Record<string, unknown> {
     _localCoverPath: song._localCoverPath,
     _localHasLyric: song._localHasLyric,
   };
+}
+
+// 本地红心序列化：本地歌曲保留播放路径/封面缓存，在线歌曲复用历史序列化字段
+function serializeFavoriteSong(song: Song): Record<string, unknown> {
+  return song.provider === "local" ? serializeLocalSong(song) : serializeHistorySong(song);
+}
+
+/** 把本地红心 id 合并进「已喜欢」集合，保证未登录时也能点亮红心 */
+function withFavoriteIds(remoteIds: Set<string>, favorites: Song[]): Set<string> {
+  const merged = new Set(remoteIds);
+  for (const song of favorites) merged.add(song.id);
+  return merged;
 }
 
 // ============================================================
@@ -917,6 +934,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   queuePanelOpen: false,
 
   localSongs: [],
+  favoriteSongs: [],
   localFolders: [],
   importingLocal: false,
 
@@ -1050,6 +1068,49 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     } catch {
       set({ localSongs: [], localFolders: [] });
     }
+  },
+
+  loadFavoriteSongs: async () => {
+    try {
+      const s = await getStore();
+      const stored = await s.get<Song[]>("favoriteSongs");
+      const restored = (Array.isArray(stored) ? stored : []).map((song) =>
+        song._localCoverPath
+          ? { ...song, cover: convertFileSrc(song._localCoverPath) }
+          : song
+      );
+      set((state) => ({
+        favoriteSongs: restored,
+        likedSongIds: withFavoriteIds(state.likedSongIds, restored),
+      }));
+    } catch (e) {
+      console.error("[Music] loadFavoriteSongs failed:", e);
+    }
+  },
+
+  toggleFavoriteSong: async (song, liked) => {
+    const exists = get().favoriteSongs.some((item) => item.id === song.id);
+    const nextLiked = liked ?? !exists;
+    if (nextLiked === exists) {
+      return nextLiked;
+    }
+    const next = nextLiked
+      ? [song, ...get().favoriteSongs]
+      : get().favoriteSongs.filter((item) => item.id !== song.id);
+    set((state) => {
+      const ids = new Set(state.likedSongIds);
+      if (nextLiked) ids.add(song.id);
+      else ids.delete(song.id);
+      return { favoriteSongs: next, likedSongIds: ids };
+    });
+    try {
+      const s = await getStore();
+      await s.set("favoriteSongs", next.map(serializeFavoriteSong));
+      await s.save();
+    } catch (e) {
+      console.error("[Music] persist favorite songs failed:", e);
+    }
+    return nextLiked;
   },
 
   importLocalSongs: async (paths) => {
@@ -1210,6 +1271,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   init: async () => {
     // 加载本地导入的歌曲（不阻塞其余初始化）
     get().loadLocalSongs();
+    // 加载本地红心（未登录也可用，独立于各平台账号）
+    void get().loadFavoriteSongs();
     // 加载持久化播放历史（不阻塞，完成后左侧「播放历史」直接可用）
     void get().loadPlayHistoryList();
 
@@ -2780,7 +2843,10 @@ export const useMusicStore = create<MusicState>((set, get) => ({
         loginInfos: { ...s.loginInfos, [provider]: null },
         loginInfo: s.playbackSource === provider ? null : s.loginInfo,
         userPlaylists: s.playbackSource === provider ? [] : s.userPlaylists,
-        likedSongIds: s.playbackSource === provider ? new Set() : s.likedSongIds,
+        likedSongIds:
+          s.playbackSource === provider
+            ? withFavoriteIds(new Set(), s.favoriteSongs)
+            : s.likedSongIds,
       }));
     } catch {
       // ignore
@@ -3286,32 +3352,33 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   loadLikedList: async () => {
     try {
       const provider = get().playbackSource;
+      const favorites = get().favoriteSongs;
       if (provider === "kugou") {
         // 酷狗: 从"我喜欢"歌单获取已喜欢的歌曲 hash 列表
         const hashes = await invoke<string[]>("kugou_liked_hashes").catch(() => []);
         console.log("[Music] kugou liked songs loaded:", hashes.length);
-        set({ likedSongIds: new Set(hashes) });
+        set({ likedSongIds: withFavoriteIds(new Set(hashes), favorites) });
       } else if (provider === "qqmusic") {
         // QQ 音乐: 从"我喜欢"歌单获取已喜欢的歌曲 mid 列表
         const mids = await invoke<string[]>("qq_liked_hashes").catch(() => []);
         console.log("[Music] qq liked songs loaded:", mids.length);
-        set({ likedSongIds: new Set(mids) });
+        set({ likedSongIds: withFavoriteIds(new Set(mids), favorites) });
       } else if (provider === "migu") {
         // 咪咕暂不支持红心读取
-        set({ likedSongIds: new Set() });
+        set({ likedSongIds: withFavoriteIds(new Set(), favorites) });
       } else if (provider === "qishui") {
         // 汽水: 读「我喜欢的音乐」歌单里的曲目 id。
         // 这里刻意不 catch：接口失败就抛给外层，保留已有红心，别被空集合清掉。
         const ids = await invoke<string[]>("qishui_liked_tracks");
         console.log("[Music] qishui liked songs loaded:", ids.length);
-        set({ likedSongIds: new Set(ids) });
+        set({ likedSongIds: withFavoriteIds(new Set(ids), favorites) });
       } else if (provider === "spotify") {
         // Spotify 试听版无红心收藏
-        set({ likedSongIds: new Set() });
+        set({ likedSongIds: withFavoriteIds(new Set(), favorites) });
       } else {
         const ids = await invoke<string[]>("music_likelist");
         console.log("[Music] liked songs loaded:", ids.length);
-        set({ likedSongIds: new Set(ids) });
+        set({ likedSongIds: withFavoriteIds(new Set(ids), favorites) });
       }
     } catch (e) {
       console.error("[Music] loadLikedList failed:", e);
@@ -3319,102 +3386,69 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   },
 
   toggleLike: async (songId) => {
-    const provider = get().playbackSource;
-    // QQ 音乐暂不支持写回红心
-    if (provider === "qqmusic") {
-      set({ musicToast: { type: "warning", message: "QQ 音乐当前仅支持读取账号收藏，暂不支持写回" } });
+    const state = get();
+    const provider = state.playbackSource;
+    const findSong = (list: Song[]) => list.find((item) => item.id === songId);
+    const song =
+      (state.currentSong?.id === songId ? state.currentSong : null) ||
+      findSong(state.playQueue) ||
+      findSong(state.searchResults) ||
+      findSong(state.leftPlaylistTracks) ||
+      findSong(state.rightPlaylistTracks) ||
+      findSong(state.recommendSongs) ||
+      findSong(state.artistSongs) ||
+      findSong(state.localSongs) ||
+      findSong(state.favoriteSongs);
+    if (!song) {
+      console.warn("[Music] toggleLike: song not found in any list, using minimal object");
+      // 兜底：至少让本地红心可用；在线平台需要的 hash/mid 只有部分场景能补齐
+      // （心形按钮始终来自某个列表，正常不会走到这里）
       return;
     }
-    // 咪咕暂不支持红心
-    if (provider === "migu") {
-      set({ musicToast: { type: "warning", message: "咪咕音乐暂不支持红心收藏" } });
+
+    const wasLiked = state.likedSongIds.has(songId);
+    const desired = !wasLiked;
+    // 先写本地红心：未登录、平台不支持云端红心时也能正常收藏并持久化
+    await get().toggleFavoriteSong(song, desired);
+
+    const loggedIn = !!state.loginInfo?.logged_in;
+    const supportsRemote = !["qqmusic", "migu", "spotify"].includes(provider);
+    if (!loggedIn || !supportsRemote) {
+      // 本地已保存，无需提示；未登录时红心即为本地收藏
       return;
     }
-    // Spotify 试听版不支持红心收藏（官方 API 无此能力）
-    if (provider === "spotify") {
-      set({ musicToast: { type: "warning", message: "Spotify 试听版暂不支持红心收藏" } });
-      return;
-    }
-    const liked = get().likedSongIds.has(songId);
-    console.log("[Music] toggleLike: provider=", provider, "songId=", songId, "liked=", liked);
-    // 乐观更新：先改 UI，API 在后台执行
-    const newSet = new Set(get().likedSongIds);
-    if (liked) {
-      newSet.delete(songId);
-    } else {
-      newSet.add(songId);
-    }
-    set({ likedSongIds: newSet });
+
     try {
       if (provider === "kugou") {
-        // 酷狗: 需要完整的歌曲对象来执行喜欢/取消喜欢
-        // 从多个来源查找完整歌曲对象 (currentSong → playQueue → searchResults → 歌单列表 → 推荐)
-        let song = get().currentSong;
-        if (!song || song.id !== songId) {
-          song = get().playQueue.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          song = get().searchResults.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          song = get().leftPlaylistTracks.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          song = get().rightPlaylistTracks.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          song = get().recommendSongs.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          song = get().artistSongs.find((s) => s.id === songId) || null;
-        }
-        if (!song) {
-          console.warn("[Music] toggleLike: song not found in any list, using minimal object");
-          // 构造最小歌曲对象，QQ音乐需要 mid，酷狗需要 hash
-          song = { provider, id: songId, hash: songId, mid: songId, name: "", artist: "", artists: [], album: "", cover: "", duration: 0, fee: 0, playable: true, language: 0 };
-        }
-        const likeCmd = provider === "kugou" ? "kugou_like_toggle" : "qq_like_toggle";
-        await invoke(likeCmd, { song, like: !liked });
-        // 刷新喜欢列表, 确保与服务器同步
+        await invoke("kugou_like_toggle", { song, like: desired });
         await get().loadLikedList();
-        // 后台异步刷新歌单列表，更新"我喜欢"的歌单曲目数量
         get().loadUserPlaylists();
       } else if (provider === "qishui") {
-        // 汽水只需 track id，不需要完整 Song 对象
-        await invoke("qishui_like_toggle", { songId, like: !liked });
+        await invoke("qishui_like_toggle", { songId, like: desired });
         await get().loadLikedList();
         // 收藏列表接口可能有一小段延迟：写已经成功了，就不允许这次回读
         // 把刚点的红心抹掉（否则表现为"红心过一会消失"）
         const after = get().likedSongIds;
-        if (after.has(songId) !== !liked) {
+        if (after.has(songId) !== desired) {
           const patched = new Set(after);
-          if (liked) {
-            patched.delete(songId);
-          } else {
-            patched.add(songId);
-          }
+          if (desired) patched.add(songId);
+          else patched.delete(songId);
           set({ likedSongIds: patched });
         }
         get().loadUserPlaylists();
       } else {
-        await invoke("music_like", { id: songId, like: !liked });
-        // 刷新喜欢列表和歌单列表, 确保与服务器同步
+        await invoke("music_like", { id: songId, like: desired });
         await get().loadLikedList();
         get().loadUserPlaylists();
       }
     } catch (e) {
-      // 回滚
-      console.error("Toggle like failed:", e, "provider:", provider, "songId:", songId, "like:", !liked);
+      // 本地红心已写入：云端失败不回滚本地，避免「未登录能用、登录后反而丢收藏」
+      console.error("Toggle like failed:", e, "provider:", provider, "songId:", songId, "like:", desired);
       if (provider === "qishui" && !notifyQishuiDepsMissing(e)) {
-        set({ musicToast: { type: "warning", message: `汽水收藏失败：${String(e)}` } });
-      }
-      const rollback = new Set(get().likedSongIds);
-      if (liked) {
-        rollback.add(songId);
+        set({ musicToast: { type: "warning", message: `云端同步失败，已保存到本地红心：${String(e)}` } });
       } else {
-        rollback.delete(songId);
+        set({ musicToast: { type: "warning", message: "云端同步失败，已保存到本地红心" } });
       }
-      set({ likedSongIds: rollback });
     }
   },
 

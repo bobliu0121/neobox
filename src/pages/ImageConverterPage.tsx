@@ -19,6 +19,8 @@ import { ArrowLeft, Image as ImageIcon, FileInput, Save, RefreshCw } from "lucid
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { hexToRgba } from "@/lib/color-utils";
 
 const IMAGE_FORMATS = ["png", "jpg", "jpeg", "webp", "bmp"] as const;
@@ -38,6 +40,18 @@ export default function ImageConverterPage() {
   const [outputFormat, setOutputFormat] = useState<string>("png");
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
+
+  // 支持把图片直接拖到页面任意位置
+  const handleDrop = useCallback((paths: string[]) => {
+    const image = paths.find((path) => /\.(png|jpe?g|webp|bmp)$/i.test(path));
+    if (!image) {
+      toast({ title: "请拖入 PNG / JPG / WebP / BMP 图片", status: "warning", duration: 3000 });
+      return;
+    }
+    setInputPath(image);
+    setOutputPath(null);
+  }, [toast]);
+  const { isDragging, dropProps } = useFileDrop(handleDrop);
 
   const handlePickInput = useCallback(async () => {
     try {
@@ -108,7 +122,8 @@ export default function ImageConverterPage() {
   }, [inputPath, outputPath, outputFormat, t, toast]);
 
   return (
-    <Box pt={8} pb={8}>
+    <Box pt={8} pb={8} {...dropProps}>
+      <FileDropOverlay visible={isDragging} hint="松开即可导入图片" />
       <HStack justify="space-between" mb={6} flexWrap="wrap" gap={2}>
         <HStack>
           <IconButton

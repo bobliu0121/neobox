@@ -45,8 +45,11 @@ import ImageConverterPage from "./pages/ImageConverterPage";
 import AudioConverterPage from "./pages/AudioConverterPage";
 import VideoConverterPage from "./pages/VideoConverterPage";
 import MkaMuxerPage from "./pages/MkaMuxerPage";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useMusicStore } from "./stores/music-store";
 
 import { UpdateModal } from "./components/UpdateModal";
 import { SplashScreen } from "./components/SplashScreen";
@@ -80,6 +83,54 @@ function StartupAdHost() {
  * 主窗口专用的 Hook 如果写在早返回之后会违反 Hooks 调用顺序。
  */
 function MainWindowEffects() {
+  const navigate = useNavigate();
+  const openedMkaRef = useRef<Set<string>>(new Set());
+
+  // 把 .mka 拖到 exe（或通过文件关联启动）后：导入本地歌库、立即播放并打开播放器
+  const openMkaFile = useCallback(async (path: string) => {
+    const key = path.toLowerCase();
+    if (openedMkaRef.current.has(key)) return;
+    openedMkaRef.current.add(key);
+    try {
+      const store = useMusicStore.getState();
+      await store.importLocalSongs([path]);
+      const updated = useMusicStore.getState();
+      const song = updated.localSongs.find(
+        (item) => (item._localPath || "").toLowerCase() === key
+      );
+      if (!song) {
+        console.warn("[OpenMKA] imported but song not found:", path);
+        return;
+      }
+      await updated.playSong(song, [song]);
+      navigate("/music", { state: { expandPlayer: true } });
+    } catch (e) {
+      console.error("[OpenMKA] open failed:", e);
+      openedMkaRef.current.delete(key);
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        unlisten = await listen<string>("open-mka-file", (event) => {
+          if (typeof event.payload === "string") void openMkaFile(event.payload);
+        });
+        // 处理启动时命令行参数（拖到 exe 打开）
+        const pending = await invoke<string | null>("take_pending_open_mka");
+        if (!disposed && pending) await openMkaFile(pending);
+      } catch (e) {
+        console.error("[OpenMKA] listener setup failed:", e);
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openMkaFile]);
+
   // 开机自启(--autostart)模式：后端已离屏预热加载本窗口，前端初始化完成后隐藏到托盘，
   // 复用 minimize_to_tray 正确更新后端可见性并触发 EcoQoS。
   useEffect(() => {
