@@ -196,6 +196,14 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
         case "get_release_history":
           return [
             {
+              tag: "v1.1.0",
+              name: "NeoBox 1.1.0",
+              body: "## 音乐\n\n- 搜索不到时明确提示\n- 未登录也可红心，本地保存\n- MKA 双行字幕修复\n- MKA 可拖到 exe 打开\n\n## 导入与后台任务\n\n- 所有导入处支持拖入\n- 转换 / MKA 组合后台完成",
+              published_at: "2026-10-18T11:30:00Z",
+              html_url: "https://github.com/bobliu0121/neobox/releases/tag/v1.1.0",
+              prerelease: false,
+            },
+            {
               tag: "v1.0.0",
               name: "NeoBox 1.0.0",
               body: "## 首个正式版本\n\n- 全新的文件搜索（类 Everything）\n- 音乐 / 壁纸 / 内置工具多项改进\n- 修复若干稳定性问题",
