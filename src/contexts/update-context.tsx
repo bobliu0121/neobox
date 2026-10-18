@@ -347,16 +347,29 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
                   errorMessage: string;
                   saveDir: string;
                   fileName: string;
+                  totalBytes: number;
+                  downloadedBytes: number;
                 }>>("accel_list");
                 const cur = list.find((t) => t.id === task.id);
-                if (cur && cur.status === 3) {
-                  clearTimeout(timeout);
-                  clearInterval(checkCompleted);
-                  resolve(`${cur.saveDir}/${cur.fileName}`);
-                } else if (cur && cur.status === 4) {
-                  clearTimeout(timeout);
-                  clearInterval(checkCompleted);
-                  reject(new Error(cur.errorMessage || "下载失败"));
+                if (cur) {
+                  // 轮询时同步更新进度
+                  if (cur.totalBytes > 0 && !isDownloadCompleteRef.current) {
+                    const pct = (cur.downloadedBytes / cur.totalBytes) * 100;
+                    targetProgressRef.current = pct;
+                    setDownloadProgress(pct);
+                    const next = Math.max(lastIslandProgressRef.current, pct);
+                    lastIslandProgressRef.current = next;
+                    toast.updatePersistent(UPDATE_ISLAND_ID, { progress: next }, false);
+                  }
+                  if (cur.status === 3) {
+                    clearTimeout(timeout);
+                    clearInterval(checkCompleted);
+                    resolve(`${cur.saveDir}/${cur.fileName}`);
+                  } else if (cur.status === 4) {
+                    clearTimeout(timeout);
+                    clearInterval(checkCompleted);
+                    reject(new Error(cur.errorMessage || "下载失败"));
+                  }
                 }
               } catch {}
             }, 500);
