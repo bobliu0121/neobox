@@ -256,7 +256,16 @@ pub async fn accel_start(
     });
     tasks().lock().unwrap().insert(entry.id.clone(), entry.clone());
 
-    spawn_runner(app, entry.clone(), client, info, spec, db, max_segments.unwrap_or(0));
+    // 根据文件大小自动选择线程数（16-256），max_segments=0 时自动计算
+    let effective_max_segments = match max_segments {
+        Some(n) if n > 0 => n,
+        _ => {
+            let mb = info.total_bytes as f64 / (1024.0 * 1024.0);
+            let s = (mb / 5.0).round() as i32 * 16;
+            s.clamp(16, 256)
+        }
+    };
+    spawn_runner(app, entry.clone(), client, info, spec, db, effective_max_segments);
 
     let snap = {
         let map = tasks().lock().unwrap();

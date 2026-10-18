@@ -318,6 +318,9 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
           release.assets.find((a) => /\.(msi|exe)$/i.test(a.name));
         if (asset) {
           const downloadUrl = asset.browser_download_url;
+          // 根据文件大小自动选择线程数（16-256）
+          const sizeMB = asset.size / (1024 * 1024);
+          const maxSegments = Math.min(256, Math.max(16, Math.round(sizeMB / 5) * 16));
           // 获取 exe 所在目录，下载更新包到同目录
           const exeDir = await invoke<string>("get_exe_dir");
           // 调用内置下载器（加速器）下载更新包
@@ -333,7 +336,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
             url: downloadUrl,
             fileName: asset.name,
             saveDir: exeDir,
-            maxSegments: 0,
+            maxSegments,
           });
           accelTaskIdRef.current = task.id;
           // 轮询等待下载完成
