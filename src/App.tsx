@@ -84,13 +84,14 @@ function StartupAdHost() {
  */
 function MainWindowEffects() {
   const navigate = useNavigate();
-  const openedMkaRef = useRef<Set<string>>(new Set());
+  const lastOpenMkaRef = useRef<{ path: string; at: number } | null>(null);
 
   // 把 .mka 拖到 exe（或通过文件关联启动）后：导入本地歌库、立即播放并打开播放器
   const openMkaFile = useCallback(async (path: string) => {
     const key = path.toLowerCase();
-    if (openedMkaRef.current.has(key)) return;
-    openedMkaRef.current.add(key);
+    const last = lastOpenMkaRef.current;
+    if (last && last.path === key && Date.now() - last.at < 1500) return;
+    lastOpenMkaRef.current = { path: key, at: Date.now() };
     try {
       const store = useMusicStore.getState();
       await store.importLocalSongs([path]);
@@ -102,11 +103,15 @@ function MainWindowEffects() {
         console.warn("[OpenMKA] imported but song not found:", path);
         return;
       }
-      await updated.playSong(song, [song]);
+      // 先进入音乐页并等待音频元素挂载，否则 playSong 会因 audioRef 为空直接返回
       navigate("/music", { state: { expandPlayer: true } });
+      for (let i = 0; i < 40 && !useMusicStore.getState().audioRef; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await useMusicStore.getState().playSong(song, [song]);
     } catch (e) {
       console.error("[OpenMKA] open failed:", e);
-      openedMkaRef.current.delete(key);
+      lastOpenMkaRef.current = null;
     }
   }, [navigate]);
 
