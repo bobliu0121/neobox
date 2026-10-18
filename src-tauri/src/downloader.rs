@@ -468,6 +468,13 @@ pub async fn delete_download_file(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_exe_dir() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {e}"))?;
+    let dir = exe.parent().ok_or("无法定位程序目录")?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

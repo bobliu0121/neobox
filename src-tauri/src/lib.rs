@@ -656,6 +656,7 @@ pub fn run() {
         downloader::clear_pending_install,
         downloader::cancel_download,
         downloader::reset_download_cancel,
+        downloader::get_exe_dir,
         // === 下载加速器（FluxDown 引擎移植） ===
         download_accelerator::accel_start,
         download_accelerator::accel_pause,

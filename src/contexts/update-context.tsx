@@ -21,7 +21,7 @@ import { useAppStartup } from "@/contexts/app-startup-context";
 import { fetchLatestRelease, compareVersions, type ReleaseInfo } from "@/lib/update-checker";
 import { IS_STORE_BUILD } from "@/lib/build-flags";
 
-const CURRENT_VERSION = "v1.1.1";
+const CURRENT_VERSION = "v1.1.3";
 const AUTO_UPDATE_KEY = "neobox_auto_update";
 /** 灵动岛更新下载岛的固定 id */
 const UPDATE_ISLAND_ID = "update-download";
@@ -87,6 +87,8 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   const isDownloadCompleteRef = useRef(false);
   // 岛内进度只涨不跌的保险
   const lastIslandProgressRef = useRef(0);
+  // 内置下载器任务 id
+  const accelTaskIdRef = useRef<string>("");
 
   // 平滑动画：显示值每 50ms 向目标值逼近，且强制单调递增、永不倒退
   useEffect(() => {
@@ -173,7 +175,11 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
     if (!value) {
       // 关闭静默更新：立即取消进行中的下载、清除待安装标记，关闭软件不再自动更新
       try {
-        await invoke("cancel_download");
+        if (accelTaskIdRef.current) {
+          await invoke("accel_cancel", { id: accelTaskIdRef.current });
+        } else {
+          await invoke("cancel_download");
+        }
       } catch (error) {
         console.error("Failed to cancel download:", error);
       }
@@ -215,8 +221,27 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
       // 静默更新（animate=false），避免每 200ms 触发缩→扩动画
       toast.updatePersistent(UPDATE_ISLAND_ID, { progress: next }, false);
     });
+    // 监听内置下载器进度事件
+    const unlistenAccel = listen<{
+      id: string;
+      downloadedBytes: number;
+      totalBytes: number;
+      status: number;
+    }>("accel-progress", (event) => {
+      if (event.payload.id !== accelTaskIdRef.current) return;
+      if (isDownloadCompleteRef.current) return;
+      const pct = event.payload.totalBytes > 0
+        ? (event.payload.downloadedBytes / event.payload.totalBytes) * 100
+        : 0;
+      targetProgressRef.current = pct;
+      setDownloadProgress(pct);
+      const next = Math.max(lastIslandProgressRef.current, pct);
+      lastIslandProgressRef.current = next;
+      toast.updatePersistent(UPDATE_ISLAND_ID, { progress: next }, false);
+    });
     return () => {
       unlisten.then((fn) => fn());
+      unlistenAccel.then((fn) => fn());
     };
   }, [toast]);
 
@@ -293,18 +318,52 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
           release.assets.find((a) => /\.(msi|exe)$/i.test(a.name));
         if (asset) {
           const downloadUrl = asset.browser_download_url;
-          const filePath = await invoke<string>("download_update", {
+          // 获取 exe 所在目录，下载更新包到同目录
+          const exeDir = await invoke<string>("get_exe_dir");
+          // 调用内置下载器（加速器）下载更新包
+          const task = await invoke<{
+            id: string;
+            fileName: string;
+            saveDir: string;
+            totalBytes: number;
+            downloadedBytes: number;
+            status: number;
+            errorMessage: string;
+          }>("accel_start", {
             url: downloadUrl,
             fileName: asset.name,
-            silent: !manual,
+            saveDir: exeDir,
+            maxSegments: 0,
           });
-          // 若下载期间用户关闭了静默更新：删除文件并静默重置，绝不进入完成态
+          accelTaskIdRef.current = task.id;
+          // 轮询等待下载完成
+          const filePath = await new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("更新下载超时")), 10 * 60 * 1000);
+            const checkCompleted = setInterval(async () => {
+              try {
+                const list = await invoke<Array<{
+                  id: string;
+                  status: number;
+                  errorMessage: string;
+                  saveDir: string;
+                  fileName: string;
+                }>>("accel_list");
+                const cur = list.find((t) => t.id === task.id);
+                if (cur && cur.status === 3) {
+                  clearTimeout(timeout);
+                  clearInterval(checkCompleted);
+                  resolve(`${cur.saveDir}/${cur.fileName}`);
+                } else if (cur && cur.status === 4) {
+                  clearTimeout(timeout);
+                  clearInterval(checkCompleted);
+                  reject(new Error(cur.errorMessage || "下载失败"));
+                }
+              } catch {}
+            }, 500);
+          });
+          // 若下载期间用户关闭了静默更新：删除文件并静默重置
           if (downloadCancelledRef.current) {
-            try {
-              await invoke("delete_download_file", { filePath });
-            } catch (error) {
-              console.error("Failed to delete cancelled download:", error);
-            }
+            try { await invoke("delete_download_file", { filePath }); } catch {}
             toast.closePersistent(UPDATE_ISLAND_ID);
             downloadStartedRef.current = false;
             setIsDownloading(false);
@@ -317,16 +376,12 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
             return;
           }
           setDownloadedFilePath(filePath);
-          // 下载完成后延迟 1 秒再进入"点击重启"态：sync_all 之后给磁盘落盘
-          // 与杀软首次扫描留出缓冲，避免文件尚未就绪就显示重启安装导致安装失败
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await new Promise((r) => setTimeout(r, 1000));
           targetProgressRef.current = 100;
           setDownloadProgress(100);
-          // 同步置完成标记，杜绝延迟进度事件回写
           isDownloadCompleteRef.current = true;
           setIsDownloadComplete(true);
           setIsDownloading(false);
-          // 灵动岛切换为「点击重启」/「退出后自动更新」；常驻显示直至用户点击或跳过
           toast.updatePersistent(UPDATE_ISLAND_ID, {
             title: manual
               ? t("settings.aboutSettings.islandClickRestart") || "点击重启"
@@ -335,25 +390,14 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
             progress: undefined,
             onClick: handleInstall,
           });
-          // 登记待安装标记：仅当静默更新仍开启时，关闭软件退出流程才自动应用更新
           if (autoUpdateEnabledRef.current) {
-            try {
-              await invoke("mark_pending_install", { filePath });
-            } catch (error) {
-              console.error("Failed to mark pending install:", error);
-            }
+            try { await invoke("mark_pending_install", { filePath }); } catch {}
           } else if (!manual) {
-            // 自动下载但开关在下载期间被关闭（极端竞态）：删除文件，不进入完成态
-            try {
-              await invoke("delete_download_file", { filePath });
-            } catch (error) {
-              console.error("Failed to delete stale download:", error);
-            }
+            try { await invoke("delete_download_file", { filePath }); } catch {}
             toast.closePersistent(UPDATE_ISLAND_ID);
             setIsDownloadComplete(false);
             setDownloadedFilePath("");
           }
-          // 手动下载即使静默关闭也保留文件，显示"重启安装"供用户点击（但不登记自动安装）
         } else {
           toast.closePersistent(UPDATE_ISLAND_ID);
           downloadStartedRef.current = false;

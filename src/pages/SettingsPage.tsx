@@ -1,4 +1,4 @@
-import {
+﻿import {
   Box,
   Flex,
   HStack,
@@ -2551,7 +2551,7 @@ function AboutSettings() {
   const ORIGIN_AUTHOR_NAME = "MuLiuSaMa";
   const ORIGIN_REPO_URL = "https://github.com/MuLiuSaMa/NexBox";
 
-  const currentVersion = "1.1.2";
+  const currentVersion = "1.1.3";
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
 
