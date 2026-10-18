@@ -18,6 +18,7 @@ import {
   ModalBody,
   ModalFooter,
   Progress,
+  Image,
   useDisclosure,
   Slider,
   SliderTrack,
@@ -49,6 +50,9 @@ import {
   LuTrash2,
   LuRotateCcw,
   LuSlidersHorizontal,
+  LuGithub,
+  LuGitFork,
+  LuMessageCircle,
 } from "react-icons/lu";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -2436,52 +2440,25 @@ function NetworkSettings() {
 
 function AboutSettings() {
   const { t } = useTranslation();
-  const toast = useDynamicIsland("settings");
   const { getActiveColor } = useThemeColor();
   const titleColor = useColorModeValue("gray.800", "#ffffff");
   const labelColor = useColorModeValue("gray.700", "#ffffff");
   const subLabelColor = useColorModeValue("gray.500", "#ffffff");
-  const graphicLogoSrc = useColorModeValue("/logo/NBB.webp", "/logo/NBW.webp");
-  const textLogoSrc = useColorModeValue("/logo/CNBB.webp", "/logo/CNBW.webp");
+  const arrowColor = useColorModeValue("gray.400", "#6b7280");
   const changelogScrollColor = getActiveColor();
   // 卡片图标底色（浅色/深色适配）
   const iconBg = useColorModeValue("#f1f2f4", "#262626");
 
-  const currentVersion = "10.2.1";
+  // 作者与仓库信息（Bobliu 维护分支）
+  const AUTHOR_NAME = "Bobliu";
+  const AUTHOR_GITHUB = "https://github.com/bobliu0121";
+  const REPO_URL = "https://github.com/bobliu0121/neobox";
+  const FEEDBACK_URL = "https://github.com/bobliu0121/neobox/issues";
+  const AUTHOR_QQ = "3954720009";
+
+  const currentVersion = "1.0.0";
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
-
-
-  // LOGO 连续点击 5 次跳转原神官网的彩蛋
-  // 用 useRef 同步计数，避免 React 异步 setState 在快速连点 5 次内计数不生效的问题
-  const logoClickCountRef = useRef(0);
-  const logoClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleLogoClicks = () => {
-    logoClickCountRef.current += 1;
-    const remaining = 5 - logoClickCountRef.current;
-    console.log("[AboutSettings] logo click count:", logoClickCountRef.current);
-    toast({
-      title: `彩蛋触发中 ${logoClickCountRef.current}/5`,
-      description: `还差 ${remaining} 次`,
-      status: "info",
-      duration: 800,
-      isClosable: false,
-    });
-    if (logoClickTimer.current) {
-      clearTimeout(logoClickTimer.current);
-    }
-    logoClickTimer.current = setTimeout(() => {
-      logoClickCountRef.current = 0;
-    }, 2000);
-    if (logoClickCountRef.current >= 5) {
-      logoClickCountRef.current = 0;
-      if (logoClickTimer.current) {
-        clearTimeout(logoClickTimer.current);
-      }
-      console.log("[AboutSettings] logo clicked 5 times, opening browser...");
-      handleOpenLink("https://ys.mihoyo.com/main/?from_fab=1");
-    }
-  };
 
   const {
     hasUpdate,
@@ -2549,33 +2526,60 @@ function AboutSettings() {
     else handleCheckUpdate();
   };
 
+  const aboutLinks = [
+    {
+      key: "authorGithub",
+      title: t("settings.aboutSettings.authorGithub"),
+      subtitle: "github.com/bobliu0121",
+      url: AUTHOR_GITHUB,
+      icon: <LuGithub size={20} />,
+    },
+    {
+      key: "repo",
+      title: t("settings.aboutSettings.repo"),
+      subtitle: "bobliu0121/neobox",
+      url: REPO_URL,
+      icon: <LuGitFork size={20} />,
+    },
+    {
+      key: "qq",
+      title: t("settings.aboutSettings.authorQQ"),
+      subtitle: AUTHOR_QQ,
+      url: `https://wpa.qq.com/msgrd?v=3&uin=${AUTHOR_QQ}&site=qq&menu=yes`,
+      icon: <LuMessageCircle size={20} />,
+    },
+  ];
+
   return (
     <Box>
       <Text fontSize="lg" fontWeight="bold" mb={6} color={titleColor}>
         {t("settings.aboutSettings.title")}
       </Text>
 
-      {/* Logo（点击 5 次触发彩蛋） */}
+      {/* 作者信息 */}
       <LiquidGlassCard p={5} boxShadow="sm" mb={4}>
-        <HStack
-          spacing={4}
-          justify="center"
-          align="center"
-          cursor="pointer"
-          userSelect="none"
-          onClick={handleLogoClicks}
-          _hover={{ opacity: 0.8 }}
-        >
-          <img
-            src={graphicLogoSrc}
-            alt="NeoBox"
-            style={{ height: "72px", width: "auto", objectFit: "contain", pointerEvents: "none" }}
+        <HStack spacing={4} align="center">
+          <Image
+            src="/author/bobliu.webp"
+            alt={AUTHOR_NAME}
+            boxSize="76px"
+            borderRadius="full"
+            objectFit="cover"
+            border="2px solid"
+            borderColor={getActiveColor()}
+            flexShrink={0}
           />
-          <img
-            src={textLogoSrc}
-            alt="新境盒"
-            style={{ height: "40px", width: "auto", objectFit: "contain", pointerEvents: "none" }}
-          />
+          <VStack spacing={1} align="start" flex={1}>
+            <Text fontSize="xl" fontWeight="bold" color={titleColor}>
+              {AUTHOR_NAME}
+            </Text>
+            <Text fontSize="sm" color={subLabelColor}>
+              {t("settings.aboutSettings.authorRole")}
+            </Text>
+            <Text fontSize="xs" color={subLabelColor}>
+              NeoBox v{currentVersion}
+            </Text>
+          </VStack>
         </HStack>
       </LiquidGlassCard>
 
@@ -2689,7 +2693,7 @@ function AboutSettings() {
           flex="1"
           minW="200px"
           cursor="pointer"
-          onClick={() => handleOpenLink("https://neobox.top/feedback")}
+          onClick={() => handleOpenLink(FEEDBACK_URL)}
           tabIndex={0}
           transition="border-color 0.2s"
           _hover={{ borderColor: getActiveColor() }}
@@ -2716,7 +2720,7 @@ function AboutSettings() {
                 {t("settings.aboutSettings.feedbackTitle")}
               </Text>
               <Text fontSize="sm" color={subLabelColor} noOfLines={1}>
-                neobox.top/feedback
+                github.com/bobliu0121/neobox/issues
               </Text>
             </VStack>
             <Box color={useColorModeValue("gray.400", "#6b7280")} _groupHover={{ color: getActiveColor() }}>
@@ -2725,6 +2729,54 @@ function AboutSettings() {
           </HStack>
         </LiquidGlassCard>
       </HStack>
+
+      {/* 第二行：作者 GitHub / 开源仓库 / 作者 QQ */}
+      <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4} mb={4}>
+        {aboutLinks.map((link) => (
+          <LiquidGlassCard
+            key={link.key}
+            className="no-bounce"
+            role="group"
+            p={5}
+            cursor="pointer"
+            onClick={() => handleOpenLink(link.url)}
+            tabIndex={0}
+            transition="border-color 0.2s"
+            _hover={{ borderColor: getActiveColor() }}
+            _focusVisible={{
+              boxShadow: `0 0 0 2px ${getActiveColor()}`,
+              outline: "none",
+            }}
+          >
+            <HStack spacing={4}>
+              <Box
+                w="42px"
+                h="42px"
+                borderRadius="lg"
+                bg={iconBg}
+                color={labelColor}
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                flexShrink={0}
+              >
+                {link.icon}
+              </Box>
+              <VStack spacing={1} align="start" flex={1} minW={0}>
+                <Text fontSize="md" fontWeight="bold" color={labelColor} noOfLines={1}>
+                  {link.title}
+                </Text>
+                <Text fontSize="sm" color={subLabelColor} noOfLines={1}>
+                  {link.subtitle}
+                </Text>
+              </VStack>
+              <Box color={arrowColor} _groupHover={{ color: getActiveColor() }}>
+                <Text fontSize="xl" lineHeight="1">›</Text>
+              </Box>
+            </HStack>
+          </LiquidGlassCard>
+        ))}
+      </SimpleGrid>
 
 
       <LiquidGlassCard p={6} boxShadow="sm" mb={6}>

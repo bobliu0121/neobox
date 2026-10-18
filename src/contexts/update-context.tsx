@@ -21,7 +21,7 @@ import { useAppStartup } from "@/contexts/app-startup-context";
 import { fetchLatestRelease, compareVersions, type ReleaseInfo } from "@/lib/update-checker";
 import { IS_STORE_BUILD } from "@/lib/build-flags";
 
-const CURRENT_VERSION = "v10.2.1";
+const CURRENT_VERSION = "v1.0.0";
 const AUTO_UPDATE_KEY = "neobox_auto_update";
 /** 灵动岛更新下载岛的固定 id */
 const UPDATE_ISLAND_ID = "update-download";
@@ -289,12 +289,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
           (a) => a.name.endsWith(".msi") || a.name.endsWith(".exe"),
         );
         if (asset) {
-          // GitCode API 返回的资产 URL 落在 test.gitcode.net 等不可达 CDN，
-          // 替换为主站域名后由其 302 重定向到 file-cdn.gitcode.com 正常下载
-          const downloadUrl = asset.browser_download_url.replace(
-            "https://test.gitcode.net/",
-            "https://gitcode.com/",
-          );
+          const downloadUrl = asset.browser_download_url;
           const filePath = await invoke<string>("download_update", {
             url: downloadUrl,
             fileName: asset.name,

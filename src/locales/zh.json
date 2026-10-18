@@ -1291,6 +1291,9 @@
     },
     "aboutSettings": {
       "title": "关于",
+      "authorRole": "作者 / 项目维护者",
+      "authorGithub": "作者 GitHub",
+      "authorQQ": "作者 QQ",
       "repo": "开源仓库",
       "repoSubtitle": "查看源码",
       "version": "版本",

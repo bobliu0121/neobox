@@ -1465,6 +1465,9 @@
     },
     "aboutSettings": {
       "title": "About",
+      "authorRole": "Author / Maintainer",
+      "authorGithub": "Author GitHub",
+      "authorQQ": "Author QQ",
       "repo": "Open Source Repo",
       "repoSubtitle": "Source code",
       "version": "Version",

@@ -1,6 +1,6 @@
 [package]
 name = "neobox"
-version = "10.2.1"
+version = "1.0.0"
 description = "NeoBox - 性能监控与系统优化工具箱"
 authors = ["MuLiu_SaMa"]
 license = "GPL-3.0"
