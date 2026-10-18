@@ -11,5 +11,6 @@
 | [hidden-features.md](hidden-features.md) | 隐藏功能（Feature Flags）说明 |
 | [music-player.md](music-player.md) | 音乐中心与播放器说明 |
 | [wallpaper.md](wallpaper.md) | 壁纸管理、GIF / HTML 动态壁纸（BETA）实现与限制 |
+| [search.md](search.md) | 文件搜索：MFT 索引、目录遍历回退、范围与格式筛选 |
 
 文档更新约定：功能改名、页面路由调整、构建命令变化时，同步更新对应文档；删除功能时删除对应文档，避免保留指向不存在模块的说明。

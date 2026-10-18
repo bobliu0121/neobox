@@ -1,5 +1,5 @@
 import { Box as ChakraBox, Flex, IconButton, Text, useColorModeValue, Badge, Image, useColorMode } from "@chakra-ui/react";
-import { Home, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Images } from "lucide-react";
+import { Home, Search, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Images } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useBackground } from "@/contexts/background-context";
@@ -9,7 +9,7 @@ import { useLiquidGlassRefraction } from "@/components/special/liquid-glass-svg-
 import { store } from "@/lib/store";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 
-const HIDEABLE_NAV_PATHS = ["/hardware", "/builtin-tools", "/wallpaper", "/optimization", "/system-optimizer", "/music", "/custom"];
+const HIDEABLE_NAV_PATHS = ["/hardware", "/search", "/builtin-tools", "/wallpaper", "/optimization", "/system-optimizer", "/music", "/custom"];
 const getNavStorageKey = (path: string) => `neobox_nav_visible_${path.replace(/\//g, "").replace(/-/g, "_")}`;
 
 // 同步从 localStorage 预填充导航可见性：store 的读取是异步的，若首帧用空对象初始化，
@@ -290,7 +290,7 @@ export function Sidebar() {
       if (orderStr) {
         try {
           const parsed = JSON.parse(orderStr) as string[];
-          const allPaths = ["/hardware", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
+          const allPaths = ["/hardware", "/search", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
           let changed = false;
           for (const p of allPaths) {
             if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -307,7 +307,7 @@ export function Sidebar() {
           const saved = localStorage.getItem(NAV_ORDER_KEY);
           if (saved) {
             const parsed = JSON.parse(saved) as string[];
-            const allPaths = ["/hardware", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
+            const allPaths = ["/hardware", "/search", "/builtin-tools", "/optimization", "/system-optimizer", "/music", "/custom"];
             let changed = false;
             for (const p of allPaths) {
               if (!parsed.includes(p)) { parsed.push(p); changed = true; }
@@ -389,6 +389,7 @@ export function Sidebar() {
   const navItems: NavItem[] = [
     { path: "/", icon: Home, ariaLabel: t("sidebar.home") },
     { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
+    { path: "/search", icon: Search, ariaLabel: t("sidebar.search") },
     { path: "/builtin-tools", icon: Package, ariaLabel: t("sidebar.builtinTools") },
     { path: "/wallpaper", icon: Images, ariaLabel: t("sidebar.wallpaper") },
     { path: "/optimization", icon: TrendingUp, ariaLabel: t("sidebar.optimization") },

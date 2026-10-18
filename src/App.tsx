@@ -3,6 +3,7 @@ import { Box } from "@chakra-ui/react";
 import { MainLayout } from "./components/ui/main-layout";
 import HomePage from "./pages/HomePage";
 import HardwarePage from "./pages/HardwarePage";
+import SearchPage from "./pages/SearchPage";
 import OptimizePage from "./pages/OptimizePage";
 import MemoryLimitPage from "./pages/MemoryLimitPage";
 import MemoryCleanupPage from "./pages/MemoryCleanupPage";
@@ -156,6 +157,12 @@ function App() {
           </Box>
           {location.pathname !== "/" && (
               <Routes location={location}>
+                  <Route
+                    path="/search"
+                    element={
+                      <SearchPage />
+                    }
+                  />
                   <Route
                     path="/hardware"
                     element={

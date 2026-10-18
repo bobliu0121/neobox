@@ -38,6 +38,7 @@ mod runtime_repair;
 mod optimization;
 mod overlay_panel;
 mod power_settings;
+mod search;
 mod vertical_overlay;
 mod vtx_virtualization;
 mod wallpaper;
@@ -927,6 +928,15 @@ pub fn run() {
         wallpaper::stop_dynamic_wallpaper,
         wallpaper::get_dynamic_wallpaper,
         wallpaper::wallpaper_window_ready,
+
+        // === 本地文件快速搜索 ===
+        search::search_get_drives,
+        search::search_get_status,
+        search::search_build_index,
+        search::search_cancel_index,
+        search::search_files,
+        search::search_open_item,
+        search::search_reveal_item,
     ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

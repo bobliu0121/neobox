@@ -205,7 +205,7 @@ function GeneralSettings() {
   const [navVisibility, setNavVisibility] = useState<Record<string, boolean>>({});
   const [navPosition, setNavPosition] = useState<"left" | "top">("left");
   const NAV_ORDER_KEY = "neobox_nav_order";
-  const defaultNavOrder = ["/hardware", "/builtin-tools", "/optimization", "/music", "/custom"];
+  const defaultNavOrder = ["/hardware", "/search", "/builtin-tools", "/optimization", "/music", "/custom"];
   const [navOrder, setNavOrder] = useState<string[]>(defaultNavOrder);
   const navSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -386,7 +386,7 @@ function GeneralSettings() {
 
       // 导航可见性
       const visibilityMap: Record<string, boolean> = {};
-      for (const p of ["/hardware", "/builtin-tools", "/optimization", "/music", "/custom"]) {
+      for (const p of ["/hardware", "/search", "/builtin-tools", "/optimization", "/music", "/custom"]) {
         const key = `neobox_nav_visible_${p.replace(/\//g, "").replace(/-/g, "_")}`;
         let vis = await store.get<boolean>(key);
         if (vis === null || vis === undefined) {
@@ -1137,6 +1137,7 @@ function GeneralSettings() {
                 {navOrder.map((path) => {
                   const labelMap: Record<string, string> = {
                     "/hardware": t("sidebar.hardware"),
+                    "/search": t("sidebar.search"),
                     "/builtin-tools": t("sidebar.builtinTools"),
                     "/optimization": t("sidebar.optimization"),
                     "/music": t("sidebar.music"),
