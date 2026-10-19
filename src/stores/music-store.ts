@@ -220,6 +220,10 @@ interface MusicState {
   // Toast 通知
   musicToast: { type: "warning" | "success"; message: string } | null;
 
+  // 看广告解锁 VIP 歌曲：非空时前端显示广告弹窗
+  adUnlockSong: Song | null;
+  adUnlockCountdown: number;
+
   // 汽水「听歌模式」会话：用于播完一批后自动拉取下一批
   qishuiFeedSession: {
     sceneModeId: number | null;
@@ -284,6 +288,10 @@ interface MusicState {
   seekTo: (time: number) => void;
   setVolume: (v: number) => void;
   togglePlayMode: () => void;
+  /** 开始看广告解锁 VIP 歌曲（倒计时后自动重试播放） */
+  startAdUnlock: () => void;
+  /** 取消广告解锁 */
+  cancelAdUnlock: () => void;
   /** 外部客户端控制命令（SMTC）：play-pause | prev | next | seek */
   externalControl: (action: "play-pause" | "prev" | "next" | "seek", valueMs?: number) => void;
   loadHeartbeatSongs: (baseSong: Song | null) => Promise<void>;
@@ -999,6 +1007,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   vinylCustomColor: "#E8B04B",
   expandedStyle: "modern",
   musicToast: null,
+  adUnlockSong: null,
+  adUnlockCountdown: 0,
   dynamicEnabled: false,
   coverFilmEffect: false,
   mediaKeysEnabled: true,
@@ -2050,6 +2060,16 @@ export const useMusicStore = create<MusicState>((set, get) => ({
         console.warn("Cannot play:", result.message);
         set({ isPlaying: false });
 
+        // 网易云 VIP 歌曲无法播放：提示看广告解锁，不自动跳过
+        if (song.provider === "netease" && (song.fee ?? 0) >= 1) {
+          set({
+            adUnlockSong: song,
+            adUnlockCountdown: 0,
+            musicToast: { type: "warning", message: "VIP 歌曲，看一段广告即可免费播放" },
+          });
+          return;
+        }
+
         // 检查是否因版权/会员限制无法播放，自动跳过
         if (unplayableSkipCount < 10) {
           unplayableSkipCount++;
@@ -2461,6 +2481,27 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     if (get().desktopLyricsVisible) {
       emit("desktop-lyrics:state", { isPlaying: get().isPlaying, playMode: get().playMode, volume: v });
     }
+  },
+
+  startAdUnlock: () => {
+    const song = get().adUnlockSong;
+    if (!song) return;
+    set({ adUnlockCountdown: 5 });
+    let remaining = 5;
+    const timer = setInterval(() => {
+      remaining -= 1;
+      set({ adUnlockCountdown: remaining });
+      if (remaining <= 0) {
+        clearInterval(timer);
+        set({ adUnlockSong: null, adUnlockCountdown: 0 });
+        // 广告看完，重试播放（后端会尝试旧版接口获取标准音质 URL）
+        void get().playSong(song);
+      }
+    }, 1000);
+  },
+
+  cancelAdUnlock: () => {
+    set({ adUnlockSong: null, adUnlockCountdown: 0 });
   },
 
   // 心动模式：根据基准歌曲拉取相似歌曲并追加到心动队列（自动去重已播放/已排队歌曲）

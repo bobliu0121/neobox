@@ -422,6 +422,37 @@ pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result
         return Ok(fallback);
     }
 
+    // VIP 歌曲无法获取完整 URL：尝试旧版接口（/api/song/enhance/player/url），
+    // 旧版接口对未登录用户有时返回标准音质完整 URL（128k），相当于"免费试听"权益。
+    // 前端会提示"看广告播放"，用户看完广告后调用此路径获取。
+    let ids_json = format!("[\"{id}\"]");
+    let params: [(&str, &str); 3] = [
+        ("ids", &ids_json),
+        ("br", "128000"),
+        ("csrf_token", ""),
+    ];
+    if let Ok(result) = post_api(&client, "/api/song/enhance/player/url", &params, cookie).await {
+        let data = result
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let url = data.get("url").and_then(|u| u.as_str()).unwrap_or("");
+        if !url.is_empty() {
+            return Ok(SongUrlResult {
+                url: Some(url.to_string()),
+                playable: true,
+                trial: false,
+                level: "standard".into(),
+                quality: "标准".into(),
+                br: 128000,
+                fee: data.get("fee").and_then(|f| f.as_i64()).map(|n| n as i32),
+                ..Default::default()
+            });
+        }
+    }
+
     Ok(SongUrlResult {
         playable: false,
         reason: Some("url_unavailable".into()),
