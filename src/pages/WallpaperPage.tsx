@@ -30,6 +30,7 @@ import {
   ArrowLeft,
   Images,
   FolderOpen,
+  FolderPlus,
   RefreshCw,
   Play,
   ListMusic,
@@ -103,7 +104,7 @@ function WallpaperThumb({ path }: { path: string }) {
         <iframe
           src={convertFileSrc(path)}
           style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
-          sandbox=""
+          sandbox="allow-scripts allow-same-origin"
         />
       </Box>
     );
@@ -114,12 +115,17 @@ function WallpaperThumb({ path }: { path: string }) {
         w="100%"
         aspectRatio={16 / 9}
         bg="black"
-        display="flex"
-        alignItems="center"
-        justifyContent="center"
-        color="purple.200"
+        overflow="hidden"
+        position="relative"
       >
-        <MonitorPlay size={26} />
+        <video
+          src={convertFileSrc(path)}
+          autoPlay
+          muted
+          loop
+          playsInline
+          style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
+        />
       </Box>
     );
   }
@@ -146,7 +152,12 @@ export default function WallpaperPage() {
   const menuBg = useColorModeValue("white", "gray.800");
   const menuBorder = useColorModeValue("gray.200", "gray.600");
 
-  const [folders, setFolders] = useState<string[]>([]);
+  interface WallpaperFolder {
+  path: string;
+  recursive: boolean;
+}
+
+const [folders, setFolders] = useState<WallpaperFolder[]>([]);
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -337,22 +348,15 @@ export default function WallpaperPage() {
   );
 
   // 导入壁纸文件夹（可多次导入，合并结果）
-  const handleImportFolder = useCallback(async () => {
+  const importFolderPath = useCallback(async (selected: string, recursive: boolean) => {
+    if (folders.some((f) => f.path === selected)) {
+      toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
+      return;
+    }
+    setLoading(true);
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: t("wallpaper.selectFolderTitle"),
-      });
-      if (typeof selected !== "string") return;
-      if (folders.includes(selected)) {
-        toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
-        return;
-      }
-      setLoading(true);
-      const files = await invoke<string[]>("scan_wallpaper_folder", { dir: selected });
-      setFolders((prev) => [...prev, selected]);
+      const files = await invoke<string[]>("scan_wallpaper_folder", { dir: selected, recursive });
+      setFolders((prev) => [...prev, { path: selected, recursive }]);
       setWallpapers((prev) => dedupe([...prev, ...files]));
       rotateIndexRef.current = 0;
       if (files.length === 0) {
@@ -367,16 +371,31 @@ export default function WallpaperPage() {
     }
   }, [t, toast, folders]);
 
+  const handleImportFolder = useCallback(async (recursive: boolean) => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: recursive ? t("wallpaper.selectFolderRecursive") : t("wallpaper.selectFolderTitle"),
+      });
+      if (typeof selected !== "string") return;
+      await importFolderPath(selected, recursive);
+    } catch (e) {
+      toast({ title: String(e), status: "error", duration: 3000 });
+    }
+  }, [t, toast, importFolderPath]);
+
   // 移除已导入文件夹并重扫剩余文件夹
   const handleRemoveFolder = useCallback(
-    async (folder: string) => {
-      const rest = folders.filter((f) => f !== folder);
+    async (folder: WallpaperFolder) => {
+      const rest = folders.filter((f) => f.path !== folder.path);
       setFolders(rest);
       setLoading(true);
       try {
         let merged: string[] = [];
         for (const f of rest) {
-          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f });
+          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f.path, recursive: f.recursive });
           merged = dedupe([...merged, ...files]);
         }
         setWallpapers(merged);
@@ -472,10 +491,20 @@ export default function WallpaperPage() {
                 leftIcon={<FolderOpen />}
                 colorScheme="blue"
                 size="sm"
-                onClick={handleImportFolder}
+                onClick={() => handleImportFolder(false)}
                 isLoading={loading}
               >
                 {t("wallpaper.importFolder")}
+              </Button>
+              <Button
+                leftIcon={<FolderPlus />}
+                colorScheme="blue"
+                variant="outline"
+                size="sm"
+                onClick={() => handleImportFolder(true)}
+                isLoading={loading}
+              >
+                {t("wallpaper.importFolderRecursive")}
               </Button>
               <HStack ml="auto" spacing={2}>
                 <Text fontSize="sm" color={subTextColor}>
@@ -505,10 +534,13 @@ export default function WallpaperPage() {
             {folders.length > 0 && (
               <HStack flexWrap="wrap" spacing={2}>
                 {folders.map((f) => (
-                  <Tag key={f} size="md" colorScheme="blue" variant="subtle">
-                    <TagLabel maxW="240px" isTruncated>
-                      {f}
+                  <Tag key={f.path} size="md" colorScheme="blue" variant="subtle">
+                    <TagLabel maxW="240px" isTruncated title={f.path}>
+                      {f.path}
                     </TagLabel>
+                    <Badge fontSize="2xs" colorScheme={f.recursive ? "purple" : "gray"} ml={1}>
+                      {f.recursive ? "含子目录" : "仅当前"}
+                    </Badge>
                     <TagCloseButton onClick={() => handleRemoveFolder(f)} />
                   </Tag>
                 ))}
