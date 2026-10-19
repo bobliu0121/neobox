@@ -71,7 +71,7 @@ static ACTIVE: Mutex<Option<DynamicWallpaperInfo>> = Mutex::new(None);
 /// HTML 壁纸使用的本地静态服务器；切走/停止时 drop 掉。
 static SERVER: Mutex<Option<LocalServer>> = Mutex::new(None);
 
-/// 文件扩展名 → 动态壁纸类型（只认 GIF / HTML）。
+/// 文件扩展名 → 动态壁纸类型（GIF / HTML / 视频）。
 fn dynamic_kind(path: &str) -> Option<&'static str> {
     let ext = Path::new(path)
         .extension()
@@ -80,6 +80,7 @@ fn dynamic_kind(path: &str) -> Option<&'static str> {
     match ext.as_str() {
         "gif" => Some("gif"),
         "html" | "htm" => Some("html"),
+        "mp4" | "webm" | "mov" | "mkv" | "avi" | "m4v" => Some("video"),
         _ => None,
     }
 }
@@ -486,6 +487,33 @@ pub async fn stop_dynamic_wallpaper(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// 动态切换壁纸窗口的鼠标穿透：interactive=true 时允许鼠标事件到达 HTML 页面。
+#[tauri::command]
+pub async fn set_wallpaper_interactive(
+    app: tauri::AppHandle,
+    interactive: bool,
+) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(WALLPAPER_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    let raw = win.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
+    let hwnd = HWND(raw.0);
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let ex = if interactive {
+            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize)
+                & !WS_EX_TRANSPARENT.0 as isize
+        } else {
+            ex | WS_EX_TRANSPARENT.0 as isize
+                | WS_EX_NOACTIVATE.0 as isize
+                | WS_EX_TOOLWINDOW.0 as isize
+        };
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+    }
+    log::info!("[Wallpaper] 鼠标穿透={}", if interactive { "关闭(可交互)" } else { "开启(穿透)" });
+    Ok(())
+}
+
 /// 查询当前动态壁纸（前端页面挂载/恢复时使用）。
 #[tauri::command]
 pub fn get_dynamic_wallpaper() -> Option<DynamicWallpaperInfo> {
@@ -537,8 +565,9 @@ pub fn get_current_wallpaper() -> Result<Option<String>, String> {
 }
 
 /// 支持的壁纸文件扩展名（静态图片 + 动态壁纸）
-const WALLPAPER_EXTS: [&str; 10] = [
+const WALLPAPER_EXTS: [&str; 16] = [
     "png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "jfif", "html", "htm",
+    "mp4", "webm", "mov", "mkv", "avi", "m4v",
 ];
 
 /// 保存壁纸编辑结果（data_url 覆盖/另存为指定路径）

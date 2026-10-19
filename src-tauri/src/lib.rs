@@ -979,6 +979,7 @@ pub fn run() {
         wallpaper::stop_dynamic_wallpaper,
         wallpaper::get_dynamic_wallpaper,
         wallpaper::wallpaper_window_ready,
+        wallpaper::set_wallpaper_interactive,
 
         // === 本地文件快速搜索 ===
         search::search_get_drives,

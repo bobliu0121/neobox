@@ -16,6 +16,12 @@ import type { DynamicWallpaperInfo } from "@/lib/dynamic-wallpaper";
 export default function WallpaperWindowPage() {
   const [info, setInfo] = useState<DynamicWallpaperInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // 读取壁纸交互设置（与壁纸管理页 localStorage 同步）
+  const [settings, setSettings] = useState(() => ({
+    mouse: localStorage.getItem("wp_html_mouse") !== "0",
+    keyboard: localStorage.getItem("wp_html_keyboard") === "1",
+    audio: localStorage.getItem("wp_html_audio") !== "0",
+  }));
 
   // 动态壁纸窗口必须整页透明：index.css 里 :root 的背景色会铺满整块画布，
   // 不覆盖的话置底窗口会变成一块不透明黑底，看起来就像“GIF 渲染失败”。
@@ -69,6 +75,12 @@ export default function WallpaperWindowPage() {
     });
   }, [info, loaded]);
 
+  // 鼠标设置变化时动态切换窗口穿透样式（仅 HTML 壁纸生效）
+  useEffect(() => {
+    if (!info || info.kind !== "html") return;
+    invoke("set_wallpaper_interactive", { interactive: settings.mouse }).catch(() => {});
+  }, [settings.mouse, info?.kind]);
+
   if (!info) return null;
 
   // HTML 用后端本地服务地址（相对路径资源可用）；GIF 走 Tauri asset 协议
@@ -93,7 +105,26 @@ export default function WallpaperWindowPage() {
         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
         onLoad={() => setLoaded(true)}
         onError={() => setLoaded(true)}
-        style={{ ...fullscreen, pointerEvents: "none", colorScheme: "normal" }}
+        style={{ ...fullscreen, pointerEvents: settings.mouse ? "auto" : "none", colorScheme: "normal" }}
+      />
+    );
+  }
+
+  if (info.kind === "video") {
+    return (
+      <video
+        key={src}
+        src={src}
+        autoPlay
+        loop
+        playsInline
+        muted={!settings.audio}
+        onCanPlay={() => setLoaded(true)}
+        onError={() => {
+          console.error("[Wallpaper] 视频加载失败:", info.path);
+          setLoaded(true);
+        }}
+        style={{ ...fullscreen, objectFit: "cover", pointerEvents: "none" }}
       />
     );
   }

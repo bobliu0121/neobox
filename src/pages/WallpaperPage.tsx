@@ -88,20 +88,38 @@ function BetaTag() {
   );
 }
 
-/** 壁纸缩略图：HTML 没有可预览的位图，用图标占位。 */
+/** 壁纸缩略图：HTML/视频用图标占位，图片直接渲染。 */
 function WallpaperThumb({ path }: { path: string }) {
-  if (dynamicWallpaperKind(path) === "html") {
+  const kind = dynamicWallpaperKind(path);
+  if (kind === "html") {
     return (
       <Box
         w="100%"
         aspectRatio={16 / 9}
-        bg="purple.900"
+        bg="gray.800"
+        overflow="hidden"
+        position="relative"
+      >
+        <iframe
+          src={convertFileSrc(path)}
+          style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
+          sandbox=""
+        />
+      </Box>
+    );
+  }
+  if (kind === "video") {
+    return (
+      <Box
+        w="100%"
+        aspectRatio={16 / 9}
+        bg="black"
         display="flex"
         alignItems="center"
         justifyContent="center"
         color="purple.200"
       >
-        <FileCode2 size={26} />
+        <MonitorPlay size={26} />
       </Box>
     );
   }
@@ -142,6 +160,10 @@ export default function WallpaperPage() {
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [dynamic, setDynamic] = useState<DynamicWallpaperInfo | null>(null);
   const [dynamicBusy, setDynamicBusy] = useState(false);
+  // HTML 壁纸交互设置（持久化到 localStorage）
+  const [htmlMouse, setHtmlMouse] = useState(() => localStorage.getItem("wp_html_mouse") !== "0");
+  const [htmlKeyboard, setHtmlKeyboard] = useState(() => localStorage.getItem("wp_html_keyboard") === "1");
+  const [htmlAudio, setHtmlAudio] = useState(() => localStorage.getItem("wp_html_audio") !== "0");
   const rotateIndexRef = useRef(0);
 
   // 读取持久化状态
@@ -233,10 +255,12 @@ export default function WallpaperPage() {
         const selected = await open({
           directory: false,
           multiple: false,
-          title: t(kind === "gif" ? "wallpaper.dynamicGif" : "wallpaper.dynamicHtml"),
+          title: t(kind === "gif" ? "wallpaper.dynamicGif" : kind === "video" ? "wallpaper.dynamicVideo" : "wallpaper.dynamicHtml"),
           filters:
             kind === "gif"
               ? [{ name: "GIF", extensions: ["gif"] }]
+              : kind === "video"
+              ? [{ name: "视频", extensions: ["mp4", "webm", "mov", "mkv", "avi", "m4v"] }]
               : [{ name: "HTML", extensions: ["html", "htm"] }],
         });
         if (typeof selected !== "string") return;
@@ -531,11 +555,37 @@ export default function WallpaperPage() {
               >
                 {t("wallpaper.dynamicHtml")}
               </Button>
+              <Button
+                size="sm"
+                leftIcon={<MonitorPlay />}
+                rightIcon={<BetaTag />}
+                colorScheme="purple"
+                variant="outline"
+                isLoading={dynamicBusy}
+                onClick={() => handlePickDynamic("video")}
+              >
+                {t("wallpaper.dynamicVideo")}
+              </Button>
               {dynamic && (
                 <Button size="sm" leftIcon={<Square />} colorScheme="red" variant="ghost" onClick={handleStopDynamic}>
                   {t("wallpaper.dynamicStop")}
                 </Button>
               )}
+            </HStack>
+            {/* HTML/视频壁纸交互设置 */}
+            <HStack spacing={4} mt={2} fontSize="xs" flexWrap="wrap">
+              <HStack spacing={1}>
+                <Text color={subTextColor}>鼠标</Text>
+                <Switch size="sm" isChecked={htmlMouse} onChange={(e) => { setHtmlMouse(e.target.checked); localStorage.setItem("wp_html_mouse", e.target.checked ? "1" : "0"); }} />
+              </HStack>
+              <HStack spacing={1}>
+                <Text color={subTextColor}>键盘</Text>
+                <Switch size="sm" isChecked={htmlKeyboard} onChange={(e) => { setHtmlKeyboard(e.target.checked); localStorage.setItem("wp_html_keyboard", e.target.checked ? "1" : "0"); }} />
+              </HStack>
+              <HStack spacing={1}>
+                <Text color={subTextColor}>音频</Text>
+                <Switch size="sm" isChecked={htmlAudio} onChange={(e) => { setHtmlAudio(e.target.checked); localStorage.setItem("wp_html_audio", e.target.checked ? "1" : "0"); }} />
+              </HStack>
             </HStack>
             <Text fontSize="xs" color={subTextColor} isTruncated title={dynamic?.path}>
               {dynamic ? `${dynamic.kind.toUpperCase()} · ${dynamic.path}` : t("wallpaper.dynamicHint")}
