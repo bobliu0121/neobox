@@ -71,14 +71,22 @@ fn content_type_for(url: &str) -> &'static str {
         "audio/flac"
     } else if lower.contains(".mp3") {
         "audio/mpeg"
-    } else if lower.contains(".mp4") {
-        "video/mp4"
-    } else if lower.contains(".m4a") {
+    } else if lower.contains(".mp4") || lower.contains(".m4a") {
         "audio/mp4"
-    } else if lower.contains(".ogg") {
+    } else if lower.contains(".ogg") || lower.contains(".oga") {
         "audio/ogg"
     } else if lower.contains(".wav") {
         "audio/wav"
+    } else if lower.contains(".mka") {
+        "audio/x-matroska"
+    } else if lower.contains(".opus") {
+        "audio/ogg"
+    } else if lower.contains(".aac") {
+        "audio/aac"
+    } else if lower.contains(".wma") {
+        "audio/x-ms-wma"
+    } else if lower.contains(".ape") {
+        "audio/ape"
     } else {
         "audio/mpeg"
     }

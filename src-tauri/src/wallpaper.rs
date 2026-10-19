@@ -68,6 +68,9 @@ pub struct DynamicWallpaperInfo {
 
 static ACTIVE: Mutex<Option<DynamicWallpaperInfo>> = Mutex::new(None);
 
+/// HTML 壁纸交互模式：true 时不设置鼠标穿透，让 HTML 页面接收鼠标/键盘事件。
+static INTERACTIVE: Mutex<bool> = Mutex::new(false);
+
 /// HTML 壁纸使用的本地静态服务器；切走/停止时 drop 掉。
 static SERVER: Mutex<Option<LocalServer>> = Mutex::new(None);
 
@@ -195,14 +198,18 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
 
     unsafe {
         // 鼠标穿透 + 不抢焦点 + 不出现在 Alt+Tab / 任务栏
+        let interactive = *lock(&INTERACTIVE);
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let _ = SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
+        let ex = if interactive {
+            // HTML 交互模式：不穿透鼠标，保留 NOACTIVATE / TOOLWINDOW
+            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize)
+                & !WS_EX_TRANSPARENT.0 as isize
+        } else {
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize
-                | WS_EX_TOOLWINDOW.0 as isize,
-        );
+                | WS_EX_TOOLWINDOW.0 as isize
+        };
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
 
         let Some(host) = find_wallpaper_host() else {
             // 连 Progman 都找不到：保持顶级窗口，压到最底层
@@ -493,6 +500,7 @@ pub async fn set_wallpaper_interactive(
     app: tauri::AppHandle,
     interactive: bool,
 ) -> Result<(), String> {
+    *lock(&INTERACTIVE) = interactive;
     let Some(win) = app.get_webview_window(WALLPAPER_WINDOW_LABEL) else {
         return Ok(());
     };

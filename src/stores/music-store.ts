@@ -1996,7 +1996,20 @@ export const useMusicStore = create<MusicState>((set, get) => ({
           return;
         }
         if (mySeq !== playSongSeq) return;
-        const audioUrl = convertFileSrc(localPath);
+        // mka 容器格式在 WebView2 中 MIME 类型识别不一致，用 blob URL 强制正确类型
+        const isMka = /\.mka$/i.test(localPath);
+        let audioUrl: string;
+        if (isMka) {
+          try {
+            const resp = await fetch(convertFileSrc(localPath));
+            const blob = await resp.blob();
+            audioUrl = URL.createObjectURL(blob);
+          } catch {
+            audioUrl = convertFileSrc(localPath);
+          }
+        } else {
+          audioUrl = convertFileSrc(localPath);
+        }
         audio.src = audioUrl;
         audio.volume = state.volume;
         try {
