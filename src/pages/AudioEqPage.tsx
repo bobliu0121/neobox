@@ -56,6 +56,7 @@ import { useThemeColor } from "@/contexts/theme-color-context";
 import { store } from "@/lib/store";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
 import { useFileDrop } from "@/hooks/use-file-drop";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { fitEngineGains, interpolateCurveToLayout } from "@/lib/eq-curve";
 
 // ===== 类型定义 =====
@@ -890,7 +891,7 @@ export default function AudioEqPage() {
   };
 
   // 原生拖入 .fac：WebView 只给路径，后端读文本后复用导入逻辑
-  useFileDrop(async (paths) => {
+  const { isDragging: facDragging } = useFileDrop(async (paths) => {
     const path = paths.find((item) => /\.fac$/i.test(item));
     if (!path) {
       toast({ title: "请拖入 .fac 预设文件", status: "warning", duration: 2500 });
@@ -1710,6 +1711,7 @@ ${bandsStr}`;
           </ModalFooter>
         </ModalContent>
       </Modal>
+      <FileDropOverlay visible={facDragging} hint="松开即可导入 .fac 预设文件" />
     </Box>
   );
 }

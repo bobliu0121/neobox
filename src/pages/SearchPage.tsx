@@ -43,6 +43,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { CustomSelect } from "@/components/special/custom-select";
 import { useDynamicIsland } from "@/components/ui/dynamic-island";
+import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { store } from "@/lib/store";
 import {
@@ -464,6 +466,17 @@ export default function SearchPage() {
     },
     [applyScope, t],
   );
+
+  // 拖入文件夹作为搜索范围
+  const { isDragging } = useFileDrop(async (paths) => {
+    const folder = paths.find((p) => {
+      try { return !p.includes(".") || p.split("\\").pop()?.includes(".") === false; } catch { return false; }
+    });
+    // 拖入的路径直接作为搜索范围（优先第一个路径）
+    if (paths.length > 0) {
+      applyScope({ mode: "path", path: paths[0] });
+    }
+  });
 
   const handleOpen = useCallback(
     async (item: SearchItem) => {
@@ -1019,6 +1032,7 @@ export default function SearchPage() {
           </LiquidGlassCard>
         </Box>
       )}
+      <FileDropOverlay visible={isDragging} hint="松开即可将文件夹设为搜索范围" />
     </Flex>
   );
 }

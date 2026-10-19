@@ -1395,6 +1395,28 @@ function AppearanceSettings() {
 
   // 拖入图片作为自定义背景（与上传共用压缩/上限逻辑）
   const handleBackgroundDrop = useCallback(async (paths: string[]) => {
+    // 优先处理字体文件
+    const fonts = paths.filter((path) => /\.(ttf|otf|woff|woff2)$/i.test(path));
+    if (fonts.length > 0) {
+      for (const path of fonts) {
+        try {
+          const bytes = await invoke<number[]>("read_binary_file", { path });
+          const uint8 = new Uint8Array(bytes);
+          let binary = "";
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          const base64 = btoa(binary);
+          const fileName = path.split(/[\\/]/).pop() || "font";
+          const format = fileName.endsWith(".woff2") ? "woff2" : fileName.endsWith(".woff") ? "woff" : fileName.endsWith(".otf") ? "opentype" : "truetype";
+          const value = fileName.replace(/\.(ttf|otf|woff|woff2)$/i, "").replace(/\s+/g, "-");
+          const { registerFontFace } = await import("@/lib/fonts");
+          await registerFontFace(value, base64, format);
+          toast({ title: `已导入字体：${fileName}`, status: "success", duration: 2000 });
+        } catch (error) {
+          console.error("拖入字体失败:", error);
+        }
+      }
+      return;
+    }
     const images = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(path));
     if (images.length === 0) {
       toast({ title: "请拖入图片文件", status: "warning", duration: 2500 });
