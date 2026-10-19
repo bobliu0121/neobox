@@ -275,10 +275,12 @@ export default function WallpaperPage() {
         const selected = await open({
           directory: false,
           multiple: false,
-          title: t(kind === "gif" ? "wallpaper.dynamicGif" : "wallpaper.dynamicHtml"),
+          title: t(kind === "gif" ? "wallpaper.dynamicGif" : kind === "video" ? "wallpaper.dynamicVideo" : "wallpaper.dynamicHtml"),
           filters:
             kind === "gif"
               ? [{ name: "GIF", extensions: ["gif"] }]
+              : kind === "video"
+              ? [{ name: "视频", extensions: ["mp4", "webm", "mov", "mkv", "avi", "m4v"] }]
               : [{ name: "HTML", extensions: ["html", "htm"] }],
         });
         if (typeof selected !== "string") return;
@@ -650,6 +652,16 @@ export default function WallpaperPage() {
                 onClick={() => handlePickDynamic("gif")}
               >
                 {t("wallpaper.dynamicGif")}
+              </Button>
+              <Button
+                size="sm"
+                leftIcon={<MonitorPlay />}
+                colorScheme="purple"
+                variant="outline"
+                isLoading={dynamicBusy}
+                onClick={() => handlePickDynamic("video")}
+              >
+                {t("wallpaper.dynamicVideo")}
               </Button>
               <Button
                 size="sm"

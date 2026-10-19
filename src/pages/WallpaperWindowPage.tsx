@@ -90,10 +90,28 @@ export default function WallpaperWindowPage() {
         key={src}
         src={src}
         title=""
-        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+        allow="autoplay; fullscreen; encrypted-media; picture-in-picture; microphone"
         onLoad={() => setLoaded(true)}
         onError={() => setLoaded(true)}
-        style={{ ...fullscreen, pointerEvents: "none", colorScheme: "normal" }}
+        style={{ ...fullscreen, pointerEvents: "auto", colorScheme: "normal" }}
+      />
+    );
+  }
+
+  if (info.kind === "video") {
+    return (
+      <video
+        key={src}
+        src={src}
+        autoPlay
+        loop
+        playsInline
+        onCanPlay={() => setLoaded(true)}
+        onError={() => {
+          console.error("[Wallpaper] 视频加载失败:", info.path);
+          setLoaded(true);
+        }}
+        style={{ ...fullscreen, objectFit: "cover", pointerEvents: "none" }}
       />
     );
   }

@@ -71,7 +71,7 @@ static ACTIVE: Mutex<Option<DynamicWallpaperInfo>> = Mutex::new(None);
 /// HTML 壁纸使用的本地静态服务器；切走/停止时 drop 掉。
 static SERVER: Mutex<Option<LocalServer>> = Mutex::new(None);
 
-/// 文件扩展名 → 动态壁纸类型（只认 GIF / HTML）。
+/// 文件扩展名 → 动态壁纸类型（GIF / HTML / 视频）。
 fn dynamic_kind(path: &str) -> Option<&'static str> {
     let ext = Path::new(path)
         .extension()
@@ -80,6 +80,7 @@ fn dynamic_kind(path: &str) -> Option<&'static str> {
     match ext.as_str() {
         "gif" => Some("gif"),
         "html" | "htm" => Some("html"),
+        "mp4" | "webm" | "mov" | "mkv" | "avi" | "m4v" => Some("video"),
         _ => None,
     }
 }
@@ -186,8 +187,9 @@ unsafe fn find_wallpaper_host() -> Option<HWND> {
 
 /// 把壁纸窗口挂到桌面壁纸层，并铺满宿主机客户区。
 ///
-/// 返回是否成功挂载；失败时窗口仍是普通置底窗口（也可用，只是可能盖住图标）。
-fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() else {
+/// `interactive` 为 true 时（HTML 壁纸）不设置鼠标穿透，让 HTML 页面能响应点击。
+fn attach_to_desktop(win: &WebviewWindow, interactive: bool) -> bool {
+    let Ok(raw) = win.hwnd() else {
         return false;
     };
     let hwnd = HWND(raw.0);
@@ -195,13 +197,15 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
     unsafe {
         // 鼠标穿透 + 不抢焦点 + 不出现在 Alt+Tab / 任务栏
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let _ = SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
+        let ex = if interactive {
+            // HTML 壁纸：保留 NOACTIVATE / TOOLWINDOW，去掉 TRANSPARENT 让鼠标事件到达页面
+            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize) & !WS_EX_TRANSPARENT.0 as isize
+        } else {
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize
-                | WS_EX_TOOLWINDOW.0 as isize,
-        );
+                | WS_EX_TOOLWINDOW.0 as isize
+        };
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
 
         let Some(host) = find_wallpaper_host() else {
             // 连 Progman 都找不到：保持顶级窗口，压到最底层
@@ -258,12 +262,12 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
 ///
 /// 窗口属于主线程；从命令线程直接 `SetParent` 虽然多数情况下能用，但会打乱
 /// 窗口的输入队列/线程归属，保险起见统一切回主线程执行。
-fn attach_to_desktop_on_main(app: &tauri::AppHandle, win: &WebviewWindow) -> bool {
+fn attach_to_desktop_on_main(app: &tauri::AppHandle, win: &WebviewWindow, interactive: bool) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     let target = win.clone();
     if app
         .run_on_main_thread(move || {
-            let _ = tx.send(attach_to_desktop(&target));
+            let _ = tx.send(attach_to_desktop(&target, interactive));
         })
         .is_err()
     {
@@ -381,7 +385,11 @@ fn spawn_watchdog(app: tauri::AppHandle) {
             if lock(&ACTIVE).is_none() {
                 break;
             }
-            if !is_attached(&win) && !attach_to_desktop_on_main(&app, &win) {
+            let interactive = lock(&ACTIVE)
+                .as_ref()
+                .map(|i| i.kind == "html")
+                .unwrap_or(false);
+            if !is_attached(&win) && !attach_to_desktop_on_main(&app, &win, interactive) {
                 // 挂载失败就停掉守护，避免反复触发 Explorer 创建 WorkerW
                 break;
             }
@@ -447,7 +455,7 @@ pub async fn set_dynamic_wallpaper(
     // 页面在内容（GIF 解码 / HTML iframe）就绪后会调用 wallpaper_window_ready
     // 再显示窗口，避免透明窗口先闪一帧空白。
     if win.is_visible().unwrap_or(false) {
-        attach_to_desktop_on_main(&app, &win);
+        attach_to_desktop_on_main(&app, &win, info.kind == "html");
     }
     log::info!(
         "[Wallpaper] 设置动态壁纸 kind={} path={} visible={}",
@@ -469,7 +477,11 @@ pub async fn wallpaper_window_ready(app: tauri::AppHandle) -> Result<(), String>
         .ok_or_else(|| "动态壁纸窗口不存在".to_string())?;
     win.show()
         .map_err(|e| format!("显示动态壁纸窗口失败: {e}"))?;
-    let attached = attach_to_desktop_on_main(&app, &win);
+    let interactive = lock(&ACTIVE)
+        .as_ref()
+        .map(|i| i.kind == "html")
+        .unwrap_or(false);
+    let attached = attach_to_desktop_on_main(&app, &win, interactive);
     log::info!("[Wallpaper] 壁纸页面就绪 attached={attached}");
     Ok(())
 }
@@ -537,8 +549,9 @@ pub fn get_current_wallpaper() -> Result<Option<String>, String> {
 }
 
 /// 支持的壁纸文件扩展名（静态图片 + 动态壁纸）
-const WALLPAPER_EXTS: [&str; 10] = [
+const WALLPAPER_EXTS: [&str; 16] = [
     "png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "jfif", "html", "htm",
+    "mp4", "webm", "mov", "mkv", "avi", "m4v",
 ];
 
 /// 保存壁纸编辑结果（data_url 覆盖/另存为指定路径）
