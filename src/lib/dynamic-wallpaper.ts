@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/** 动态壁纸类型：GIF 逐帧播放；HTML 以完整网页渲染；视频循环播放带声音。 */
-export type DynamicWallpaperKind = "gif" | "html" | "video";
+/** 动态壁纸类型：GIF 逐帧播放；HTML 以完整网页渲染。 */
+export type DynamicWallpaperKind = "gif" | "html";
 
 export interface DynamicWallpaperInfo {
   kind: DynamicWallpaperKind;
@@ -18,7 +18,6 @@ export function dynamicWallpaperKind(path: string): DynamicWallpaperKind | null 
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "gif") return "gif";
   if (ext === "html" || ext === "htm") return "html";
-  if (["mp4", "webm", "mov", "mkv", "avi", "m4v"].includes(ext)) return "video";
   return null;
 }
 

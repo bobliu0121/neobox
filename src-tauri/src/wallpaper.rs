@@ -71,7 +71,7 @@ static ACTIVE: Mutex<Option<DynamicWallpaperInfo>> = Mutex::new(None);
 /// HTML 壁纸使用的本地静态服务器；切走/停止时 drop 掉。
 static SERVER: Mutex<Option<LocalServer>> = Mutex::new(None);
 
-/// 文件扩展名 → 动态壁纸类型（GIF / HTML / 视频）。
+/// 文件扩展名 → 动态壁纸类型（只认 GIF / HTML）。
 fn dynamic_kind(path: &str) -> Option<&'static str> {
     let ext = Path::new(path)
         .extension()
@@ -80,7 +80,6 @@ fn dynamic_kind(path: &str) -> Option<&'static str> {
     match ext.as_str() {
         "gif" => Some("gif"),
         "html" | "htm" => Some("html"),
-        "mp4" | "webm" | "mov" | "mkv" | "avi" | "m4v" => Some("video"),
         _ => None,
     }
 }
@@ -188,8 +187,7 @@ unsafe fn find_wallpaper_host() -> Option<HWND> {
 /// 把壁纸窗口挂到桌面壁纸层，并铺满宿主机客户区。
 ///
 /// 返回是否成功挂载；失败时窗口仍是普通置底窗口（也可用，只是可能盖住图标）。
-fn attach_to_desktop(win: &WebviewWindow) -> bool {
-    let Ok(raw) = win.hwnd() else {
+fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() else {
         return false;
     };
     let hwnd = HWND(raw.0);
@@ -539,9 +537,8 @@ pub fn get_current_wallpaper() -> Result<Option<String>, String> {
 }
 
 /// 支持的壁纸文件扩展名（静态图片 + 动态壁纸）
-const WALLPAPER_EXTS: [&str; 16] = [
+const WALLPAPER_EXTS: [&str; 10] = [
     "png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "jfif", "html", "htm",
-    "mp4", "webm", "mov", "mkv", "avi", "m4v",
 ];
 
 /// 保存壁纸编辑结果（data_url 覆盖/另存为指定路径）
@@ -563,17 +560,16 @@ pub fn save_wallpaper_edit(path: String, data_url: String) -> Result<(), String>
     Ok(())
 }
 
-/// 扫描壁纸文件夹，返回支持的图片/网页文件绝对路径。
-/// `recursive` 为 true 时递归包含子文件夹。
+/// 扫描壁纸文件夹，返回支持的图片/网页文件绝对路径
 #[tauri::command]
-pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec<String>, String> {
+pub fn scan_wallpaper_folder(dir: String) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
-    let root = Path::new(&dir);
-    if !root.is_dir() {
-        return Err("文件夹不存在".to_string());
-    }
-
-    let mut visit = |path: &Path| {
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取文件夹失败: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
             if WALLPAPER_EXTS.contains(&ext_lower.as_str()) {
@@ -582,28 +578,7 @@ pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec
                 }
             }
         }
-    };
-
-    if recursive.unwrap_or(false) {
-        for entry in walkdir::WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|entry| entry.ok())
-        {
-            if entry.file_type().is_file() {
-                visit(entry.path());
-            }
-        }
-    } else {
-        let entries = std::fs::read_dir(root).map_err(|e| format!("读取文件夹失败: {e}"))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                visit(&path);
-            }
-        }
     }
-
     out.sort();
     Ok(out)
 }

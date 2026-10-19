@@ -98,24 +98,6 @@ export default function WallpaperWindowPage() {
     );
   }
 
-  if (info.kind === "video") {
-    return (
-      <video
-        key={src}
-        src={src}
-        autoPlay
-        loop
-        playsInline
-        onCanPlay={() => setLoaded(true)}
-        onError={() => {
-          console.error("[Wallpaper] 视频加载失败:", info.path);
-          setLoaded(true);
-        }}
-        style={{ ...fullscreen, objectFit: "cover", pointerEvents: "none" }}
-      />
-    );
-  }
-
   return (
     <img
       key={src}
