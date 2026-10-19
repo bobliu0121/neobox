@@ -187,8 +187,8 @@ unsafe fn find_wallpaper_host() -> Option<HWND> {
 
 /// 把壁纸窗口挂到桌面壁纸层，并铺满宿主机客户区。
 ///
-/// `interactive` 为 true 时（HTML 壁纸）不设置鼠标穿透，让 HTML 页面能响应点击。
-fn attach_to_desktop(win: &WebviewWindow, interactive: bool) -> bool {
+/// 返回是否成功挂载；失败时窗口仍是普通置底窗口（也可用，只是可能盖住图标）。
+fn attach_to_desktop(win: &WebviewWindow) -> bool {
     let Ok(raw) = win.hwnd() else {
         return false;
     };
@@ -197,15 +197,13 @@ fn attach_to_desktop(win: &WebviewWindow, interactive: bool) -> bool {
     unsafe {
         // 鼠标穿透 + 不抢焦点 + 不出现在 Alt+Tab / 任务栏
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let ex = if interactive {
-            // HTML 壁纸：保留 NOACTIVATE / TOOLWINDOW，去掉 TRANSPARENT 让鼠标事件到达页面
-            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize) & !WS_EX_TRANSPARENT.0 as isize
-        } else {
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize
-                | WS_EX_TOOLWINDOW.0 as isize
-        };
-        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+                | WS_EX_TOOLWINDOW.0 as isize,
+        );
 
         let Some(host) = find_wallpaper_host() else {
             // 连 Progman 都找不到：保持顶级窗口，压到最底层
@@ -262,12 +260,12 @@ fn attach_to_desktop(win: &WebviewWindow, interactive: bool) -> bool {
 ///
 /// 窗口属于主线程；从命令线程直接 `SetParent` 虽然多数情况下能用，但会打乱
 /// 窗口的输入队列/线程归属，保险起见统一切回主线程执行。
-fn attach_to_desktop_on_main(app: &tauri::AppHandle, win: &WebviewWindow, interactive: bool) -> bool {
+fn attach_to_desktop_on_main(app: &tauri::AppHandle, win: &WebviewWindow) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     let target = win.clone();
     if app
         .run_on_main_thread(move || {
-            let _ = tx.send(attach_to_desktop(&target, interactive));
+            let _ = tx.send(attach_to_desktop(&target));
         })
         .is_err()
     {
@@ -385,11 +383,7 @@ fn spawn_watchdog(app: tauri::AppHandle) {
             if lock(&ACTIVE).is_none() {
                 break;
             }
-            let interactive = lock(&ACTIVE)
-                .as_ref()
-                .map(|i| i.kind == "html")
-                .unwrap_or(false);
-            if !is_attached(&win) && !attach_to_desktop_on_main(&app, &win, interactive) {
+            if !is_attached(&win) && !attach_to_desktop_on_main(&app, &win) {
                 // 挂载失败就停掉守护，避免反复触发 Explorer 创建 WorkerW
                 break;
             }
@@ -455,7 +449,7 @@ pub async fn set_dynamic_wallpaper(
     // 页面在内容（GIF 解码 / HTML iframe）就绪后会调用 wallpaper_window_ready
     // 再显示窗口，避免透明窗口先闪一帧空白。
     if win.is_visible().unwrap_or(false) {
-        attach_to_desktop_on_main(&app, &win, info.kind == "html");
+        attach_to_desktop_on_main(&app, &win);
     }
     log::info!(
         "[Wallpaper] 设置动态壁纸 kind={} path={} visible={}",
@@ -477,11 +471,7 @@ pub async fn wallpaper_window_ready(app: tauri::AppHandle) -> Result<(), String>
         .ok_or_else(|| "动态壁纸窗口不存在".to_string())?;
     win.show()
         .map_err(|e| format!("显示动态壁纸窗口失败: {e}"))?;
-    let interactive = lock(&ACTIVE)
-        .as_ref()
-        .map(|i| i.kind == "html")
-        .unwrap_or(false);
-    let attached = attach_to_desktop_on_main(&app, &win, interactive);
+    let attached = attach_to_desktop_on_main(&app, &win);
     log::info!("[Wallpaper] 壁纸页面就绪 attached={attached}");
     Ok(())
 }

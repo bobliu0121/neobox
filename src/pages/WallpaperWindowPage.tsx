@@ -90,10 +90,10 @@ export default function WallpaperWindowPage() {
         key={src}
         src={src}
         title=""
-        allow="autoplay; fullscreen; encrypted-media; picture-in-picture; microphone"
+        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
         onLoad={() => setLoaded(true)}
         onError={() => setLoaded(true)}
-        style={{ ...fullscreen, pointerEvents: "auto", colorScheme: "normal" }}
+        style={{ ...fullscreen, pointerEvents: "none", colorScheme: "normal" }}
       />
     );
   }
