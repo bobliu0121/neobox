@@ -362,16 +362,14 @@ pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result
 
     for q in &candidates {
         let level = q.level.as_str();
-        // ids 参数需要 JSON 数组格式: ["12345"]
-        let ids_json = format!("[\"{id}\"]");
-        let params: [(&str, &str); 4] = [
-            ("ids", &ids_json),
-            ("level", level),
-            ("encodeType", "flac"),
-            ("csrf_token", ""),
-        ];
+        // v1 接口需要 weapi 加密 POST
+        let mut payload = serde_json::Map::new();
+        payload.insert("ids".into(), json!([id]));
+        payload.insert("level".into(), json!(level));
+        payload.insert("encodeType".into(), json!("flac"));
+        payload.insert("csrf_token".into(), json!(""));
 
-        match post_api(&client, "/api/song/enhance/player/url/v1", &params, cookie).await {
+        match post_weapi(&client, "/api/song/enhance/player/url/v1", payload, cookie).await {
             Ok(result) => {
                 let data = result
                     .get("data")
@@ -423,15 +421,12 @@ pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result
     }
 
     // VIP 歌曲无法获取完整 URL：尝试旧版接口（/api/song/enhance/player/url），
-    // 旧版接口对未登录用户有时返回标准音质完整 URL（128k），相当于"免费试听"权益。
-    // 前端会提示"看广告播放"，用户看完广告后调用此路径获取。
-    let ids_json = format!("[\"{id}\"]");
-    let params: [(&str, &str); 3] = [
-        ("ids", &ids_json),
-        ("br", "128000"),
-        ("csrf_token", ""),
-    ];
-    if let Ok(result) = post_api(&client, "/api/song/enhance/player/url", &params, cookie).await {
+    // 旧版接口对未登录用户有时返回标准音质完整 URL（128k）。
+    let mut payload = serde_json::Map::new();
+    payload.insert("ids".into(), json!([id]));
+    payload.insert("br".into(), json!(128000));
+    payload.insert("csrf_token".into(), json!(""));
+    if let Ok(result) = post_weapi(&client, "/api/song/enhance/player/url", payload, cookie).await {
         let data = result
             .get("data")
             .and_then(|d| d.as_array())
