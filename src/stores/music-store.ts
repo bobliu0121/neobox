@@ -2060,16 +2060,6 @@ export const useMusicStore = create<MusicState>((set, get) => ({
         console.warn("Cannot play:", result.message);
         set({ isPlaying: false });
 
-        // 网易云 VIP 歌曲无法播放：提示看广告解锁，不自动跳过
-        if (song.provider === "netease" && (song.fee ?? 0) >= 1) {
-          set({
-            adUnlockSong: song,
-            adUnlockCountdown: 0,
-            musicToast: { type: "warning", message: "VIP 歌曲，看一段广告即可免费播放" },
-          });
-          return;
-        }
-
         // 检查是否因版权/会员限制无法播放，自动跳过
         if (unplayableSkipCount < 10) {
           unplayableSkipCount++;

@@ -7275,48 +7275,6 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
 
       {/* 展开的播放器 */}
       {expandedPlayer && <ExpandedPlayer onClose={handleCloseExpandedPlayer} />}
-
-      {/* VIP 歌曲看广告解锁弹窗 */}
-      <AdUnlockModal />
     </VStack>
-  );
-}
-
-/** VIP 歌曲看广告解锁弹窗 */
-function AdUnlockModal() {
-  const adUnlockSong = useMusicStore((s) => s.adUnlockSong);
-  const countdown = useMusicStore((s) => s.adUnlockCountdown);
-  const startAdUnlock = useMusicStore((s) => s.startAdUnlock);
-  const cancelAdUnlock = useMusicStore((s) => s.cancelAdUnlock);
-
-  return (
-    <Modal isOpen={!!adUnlockSong} onClose={cancelAdUnlock} isCentered closeOnOverlayClick={false}>
-      <ModalOverlay />
-      <ModalContent bg="white" _dark={{ bg: "#1a1a1a" }} borderRadius="xl">
-        <ModalHeader fontSize="md">VIP 歌曲解锁</ModalHeader>
-        <ModalCloseButton />
-        <ModalBody pb={6}>
-          {adUnlockSong && (
-            <VStack spacing={4}>
-              <Text fontSize="sm" color="gray.600" _dark={{ color: "gray.400" }} textAlign="center">
-                《{adUnlockSong.name}》是 VIP 歌曲
-                <br />
-                观看一段 {countdown > 0 ? `${countdown} 秒` : "广告"} 即可免费播放
-              </Text>
-              {countdown > 0 ? (
-                <Box w="full" p={6} borderRadius="lg" bg="gray.100" _dark={{ bg: "gray.800" }} textAlign="center">
-                  <Text fontSize="3xl" fontWeight="bold" color="brand.500">{countdown}</Text>
-                  <Text fontSize="xs" color="gray.500" mt={1}>广告播放中…</Text>
-                </Box>
-              ) : (
-                <Button colorScheme="teal" size="md" w="full" onClick={startAdUnlock}>
-                  看广告免费听
-                </Button>
-              )}
-            </VStack>
-          )}
-        </ModalBody>
-      </ModalContent>
-    </Modal>
   );
 }
