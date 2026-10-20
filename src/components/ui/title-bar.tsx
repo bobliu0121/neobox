@@ -92,17 +92,13 @@ export function TitleBar() {
     })();
   }, []);
 
-  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest("button") || target.closest("input") || target.closest('[role="search"]')) {
       return;
     }
-    try {
-      const appWindow = getCurrentWindow();
-      await appWindow.startDragging();
-    } catch (error) {
-      console.error("Failed to start dragging:", error);
-    }
+    // 不 await：await 期间鼠标可能已松开，导致拖动不触发
+    getCurrentWindow().startDragging().catch(() => {});
   }, []);
 
   const handleMinimize = async () => {

@@ -81,6 +81,24 @@ export default function WallpaperWindowPage() {
     invoke("set_wallpaper_interactive", { interactive: settings.mouse }).catch(() => {});
   }, [settings.mouse, info?.kind]);
 
+  // 音频设置变化时控制 HTML iframe 内的媒体元素音量
+  useEffect(() => {
+    if (!info || info.kind !== "html") return;
+    const muted = !settings.audio;
+    // iframe 与主窗口同源（都是 asset://），可直接访问内部 DOM
+    try {
+      const iframe = document.querySelector("iframe");
+      const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
+      if (doc) {
+        doc.querySelectorAll("audio, video").forEach((el) => {
+          (el as HTMLMediaElement).muted = muted;
+        });
+      }
+    } catch {
+      // 跨域时静默失败
+    }
+  }, [settings.audio, info?.kind, loaded]);
+
   if (!info) return null;
 
   // HTML 用后端本地服务地址（相对路径资源可用）；GIF 走 Tauri asset 协议

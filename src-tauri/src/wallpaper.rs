@@ -164,11 +164,15 @@ unsafe fn find_wallpaper_host() -> Option<HWND> {
         1000,
         None,
     );
+    // 等待 Explorer 处理消息并创建 WorkerW（某些 Win10 版本需要时间）
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
     // Windows 11 24H2 起，壁纸层 WorkerW 是 Progman 的子窗口（与桌面图标层
     // SHELLDLL_DefView 同级）；此时直接挂进去，z-order 天然位于图标之下。
+    // 不检查 IsWindowVisible——某些 Win10 上 WorkerW 存在但 z-order 在 Progman
+    // 之下，挂上去后会自动显示。
     if let Ok(worker) = FindWindowExW(progman, None, w!("WorkerW"), None) {
-        if IsWindowVisible(worker).as_bool() {
+        if !worker.is_invalid() {
             return Some(worker);
         }
     }
@@ -180,7 +184,7 @@ unsafe fn find_wallpaper_host() -> Option<HWND> {
         Some(find_workerw_proc),
         LPARAM(&mut worker as *mut HWND as isize),
     );
-    if !worker.is_invalid() && IsWindowVisible(worker).as_bool() {
+    if !worker.is_invalid() {
         return Some(worker);
     }
 
@@ -201,9 +205,11 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
         let interactive = *lock(&INTERACTIVE);
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let ex = if interactive {
-            // HTML 交互模式：不穿透鼠标，保留 NOACTIVATE / TOOLWINDOW
-            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize)
+            // HTML 交互模式：不穿透鼠标，去掉 NOACTIVATE 让窗口能获得焦点接收键盘事件；
+            // 保留 TOOLWINDOW 不出现在 Alt+Tab
+            (ex | WS_EX_TOOLWINDOW.0 as isize)
                 & !WS_EX_TRANSPARENT.0 as isize
+                & !WS_EX_NOACTIVATE.0 as isize
         } else {
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize
@@ -509,8 +515,9 @@ pub async fn set_wallpaper_interactive(
     unsafe {
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let ex = if interactive {
-            (ex | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize)
+            (ex | WS_EX_TOOLWINDOW.0 as isize)
                 & !WS_EX_TRANSPARENT.0 as isize
+                & !WS_EX_NOACTIVATE.0 as isize
         } else {
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize

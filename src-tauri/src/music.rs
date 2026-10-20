@@ -452,6 +452,12 @@ fn build_local_song_info(
     let mut play_path = raw_path.to_string();
     let mut has_lyric = find_local_lyric_path(path).is_some();
     if extension == "mka" {
+        // lofty 对 Matroska 的 pictures() 不可靠：读不到内嵌 cover 时会错误地
+        // 走文件夹兜底，把同目录下的图片当成封面。对于 mka 一律清空 lofty 结果，
+        // 只信任 demux_mka 直接解析 Attachments 的结果。
+        cover_path.clear();
+        cover_source.clear();
+
         if let Some(play_dir) = play_cache_dir {
             let cache_key = playback_cache_key(path, &id);
             let mut cached = None;
@@ -468,13 +474,31 @@ fn build_local_song_info(
                     if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
                         has_lyric = true;
                     }
-                    if cover_path.is_empty() {
-                        for ext in ["jpg", "png", "webp", "gif"] {
-                            let candidate = play_dir.join(format!("{cache_key}_cover.{ext}"));
-                            if candidate.is_file() {
-                                cover_path = candidate.to_string_lossy().to_string();
-                                cover_source = "embedded".to_string();
-                                break;
+                    // 缓存封面来自 MKA demux；若封面缓存文件缺失（旧版本遗留），
+                    // 重新解封装一次以提取封面。
+                    let mut cover_found = false;
+                    for ext in ["jpg", "png", "webp", "gif"] {
+                        let candidate = play_dir.join(format!("{cache_key}_cover.{ext}"));
+                        if candidate.is_file() {
+                            cover_path = candidate.to_string_lossy().to_string();
+                            cover_source = "embedded".to_string();
+                            cover_found = true;
+                            break;
+                        }
+                    }
+                    if !cover_found {
+                        match crate::matroska::extract_playable_audio(raw_path, play_dir, &cache_key) {
+                            Ok((_, mka_cover, mka_duration)) => {
+                                if duration_ms == 0 && mka_duration > 0 {
+                                    duration_ms = mka_duration;
+                                }
+                                if let Some(mka_cover) = mka_cover {
+                                    cover_path = mka_cover;
+                                    cover_source = "embedded".to_string();
+                                }
+                            }
+                            Err(error) => {
+                                log::warn!("[Music] 重新提取 MKA 封面失败 {}: {error}", path.display());
                             }
                         }
                     }
@@ -488,11 +512,9 @@ fn build_local_song_info(
                         if duration_ms == 0 && mka_duration > 0 {
                             duration_ms = mka_duration;
                         }
-                        if cover_path.is_empty() {
-                            if let Some(mka_cover) = mka_cover {
-                                cover_path = mka_cover;
-                                cover_source = "embedded".to_string();
-                            }
+                        if let Some(mka_cover) = mka_cover {
+                            cover_path = mka_cover;
+                            cover_source = "embedded".to_string();
                         }
                     }
                     Err(error) => {

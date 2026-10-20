@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
+import { useBackground } from "@/contexts/background-context";
 import { store } from "@/lib/store";
 import {
   DYNAMIC_WALLPAPER_STORE_KEY,
@@ -89,24 +90,56 @@ function BetaTag() {
   );
 }
 
+/** HTML 壁纸缩略图：把整个网页按 1920x1080 渲染后缩放到容器大小（整页缩放，不裁剪）。 */
+function HtmlThumb({ path }: { path: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.2);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      setScale(w / 1920);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <Box
+      ref={containerRef}
+      w="100%"
+      aspectRatio={16 / 9}
+      bg="gray.800"
+      overflow="hidden"
+      position="relative"
+    >
+      <Box
+        position="absolute"
+        top={0}
+        left={0}
+        style={{
+          width: "1920px",
+          height: "1080px",
+          transform: `scale(${scale})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <iframe
+          src={convertFileSrc(path)}
+          style={{ width: "1920px", height: "1080px", border: "none", pointerEvents: "none" }}
+          sandbox="allow-scripts allow-same-origin"
+        />
+      </Box>
+    </Box>
+  );
+}
+
 /** 壁纸缩略图：HTML/视频用图标占位，图片直接渲染。 */
 function WallpaperThumb({ path }: { path: string }) {
   const kind = dynamicWallpaperKind(path);
   if (kind === "html") {
     return (
-      <Box
-        w="100%"
-        aspectRatio={16 / 9}
-        bg="gray.800"
-        overflow="hidden"
-        position="relative"
-      >
-        <iframe
-          src={convertFileSrc(path)}
-          style={{ width: "100%", height: "100%", border: "none", pointerEvents: "none" }}
-          sandbox="allow-scripts allow-same-origin"
-        />
-      </Box>
+      <HtmlThumb path={path} />
     );
   }
   if (kind === "video") {
@@ -146,6 +179,7 @@ export default function WallpaperPage() {
   const { t } = useTranslation();
   const toast = useToast();
   const { config: themeConfig } = useThemeColor();
+  const { liquidGlassEnabled, liquidGlassBlur } = useBackground();
   const themeColorHex = themeConfig.primaryColor;
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
@@ -157,7 +191,13 @@ export default function WallpaperPage() {
   recursive: boolean;
 }
 
-const [folders, setFolders] = useState<WallpaperFolder[]>([]);
+const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
+    try {
+      const raw = localStorage.getItem("wp_folders");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [];
+  });
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -191,6 +231,32 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
       if (typeof interval === "number" && interval > 0) setRotateInterval(interval);
       if (Array.isArray(pl)) setPlaylist(pl);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // folders 持久化 + 恢复时重新扫描壁纸
+  useEffect(() => {
+    localStorage.setItem("wp_folders", JSON.stringify(folders));
+    if (folders.length === 0) {
+      setWallpapers([]);
+      return;
+    }
+    (async () => {
+      setLoading(true);
+      try {
+        let merged: string[] = [];
+        for (const f of folders) {
+          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f.path, recursive: f.recursive });
+          merged = [...merged, ...files];
+        }
+        setWallpapers(dedupe(merged));
+      } catch {
+        // 扫描失败不阻塞
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 进入页面时读取系统当前壁纸（可反映其他应用/Windows 设置中的修改），补入历史
@@ -809,7 +875,8 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
           top={ctxMenu.y}
           left={ctxMenu.x}
           zIndex={1401}
-          bg={menuBg}
+          bg={liquidGlassEnabled ? useColorModeValue("rgba(255,255,255,0.25)", "rgba(0,0,0,0.25)") : menuBg}
+          sx={liquidGlassEnabled ? { backdropFilter: `blur(${liquidGlassBlur}px) saturate(1.3)`, WebkitBackdropFilter: `blur(${liquidGlassBlur}px) saturate(1.3)` } : undefined}
           borderRadius="md"
           boxShadow="lg"
           p={1}
@@ -817,7 +884,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
           align="stretch"
           minW="200px"
           border="1px solid"
-          borderColor={menuBorder}
+          borderColor={liquidGlassEnabled ? useColorModeValue("rgba(255,255,255,0.2)", "rgba(255,255,255,0.1)") : menuBorder}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
