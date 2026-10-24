@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   Box,
   Text,
@@ -60,6 +60,7 @@ const WALLPAPER_HISTORY_KEY = "wallpaper_history";
 const WALLPAPER_ROTATE_KEY = "wallpaper_rotate_enabled";
 const WALLPAPER_INTERVAL_KEY = "wallpaper_rotate_interval_minutes";
 const WALLPAPER_PLAYLIST_KEY = "wallpaper_playlist";
+const WALLPAPER_FOLDERS_KEY = "wallpaper_folders";
 
 interface HistoryItem {
   path: string;
@@ -90,8 +91,34 @@ function BetaTag() {
   );
 }
 
-/** HTML 壁纸缩略图：把整个网页按 1920x1080 渲染后缩放到容器大小（整页缩放，不裁剪）。 */
-function HtmlThumb({ path }: { path: string }) {
+/** 懒加载容器：只在元素进入可视区域后才渲染子内容 */
+function LazyMount({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return (
+    <div ref={ref} style={{ width: "100%", aspectRatio: "16 / 9", overflow: "hidden" }}>
+      {visible ? children : null}
+    </div>
+  );
+}
+
+/** HTML 壁纸缩略图：懒加载 iframe，整页缩放 */
+const HtmlThumb = React.memo(function HtmlThumb({ path }: { path: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.2);
   useEffect(() => {
@@ -105,19 +132,12 @@ function HtmlThumb({ path }: { path: string }) {
     return () => ro.disconnect();
   }, []);
   return (
-    <Box
-      ref={containerRef}
-      w="100%"
-      aspectRatio={16 / 9}
-      bg="gray.800"
-      overflow="hidden"
-      position="relative"
-    >
-      <Box
-        position="absolute"
-        top={0}
-        left={0}
+    <div ref={containerRef} style={{ width: "100%", height: "100%", background: "#1a202c", overflow: "hidden", position: "relative" }}>
+      <div
         style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
           width: "1920px",
           height: "1080px",
           transform: `scale(${scale})`,
@@ -128,51 +148,49 @@ function HtmlThumb({ path }: { path: string }) {
           src={convertFileSrc(path)}
           style={{ width: "1920px", height: "1080px", border: "none", pointerEvents: "none" }}
           sandbox="allow-scripts allow-same-origin"
+          loading="lazy"
         />
-      </Box>
-    </Box>
+      </div>
+    </div>
   );
-}
+});
 
-/** 壁纸缩略图：HTML/视频用图标占位，图片直接渲染。 */
-function WallpaperThumb({ path }: { path: string }) {
+/** 壁纸缩略图：懒加载，HTML/视频不自动播放 */
+const WallpaperThumb = React.memo(function WallpaperThumb({ path }: { path: string }) {
   const kind = dynamicWallpaperKind(path);
   if (kind === "html") {
     return (
-      <HtmlThumb path={path} />
+      <LazyMount>
+        <HtmlThumb path={path} />
+      </LazyMount>
     );
   }
   if (kind === "video") {
     return (
-      <Box
-        w="100%"
-        aspectRatio={16 / 9}
-        bg="black"
-        overflow="hidden"
-        position="relative"
-      >
-        <video
-          src={convertFileSrc(path)}
-          autoPlay
-          muted
-          loop
-          playsInline
-          style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
-        />
-      </Box>
+      <LazyMount>
+        <div style={{ width: "100%", height: "100%", background: "black", overflow: "hidden" }}>
+          <video
+            src={convertFileSrc(path)}
+            preload="metadata"
+            muted
+            playsInline
+            style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
+          />
+        </div>
+      </LazyMount>
     );
   }
   return (
-    <Image
-      src={convertFileSrc(path)}
-      alt=""
-      w="100%"
-      aspectRatio={16 / 9}
-      objectFit="cover"
-      fallback={<Box w="100%" aspectRatio={16 / 9} bg="gray.600" />}
-    />
+    <LazyMount>
+      <img
+        src={convertFileSrc(path)}
+        alt=""
+        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        loading="lazy"
+      />
+    </LazyMount>
   );
-}
+});
 
 export default function WallpaperPage() {
   const navigate = useNavigate();
@@ -191,13 +209,7 @@ export default function WallpaperPage() {
   recursive: boolean;
 }
 
-const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
-    try {
-      const raw = localStorage.getItem("wp_folders");
-      if (raw) return JSON.parse(raw);
-    } catch {}
-    return [];
-  });
+const [folders, setFolders] = useState<WallpaperFolder[]>([]);
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -234,9 +246,42 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // folders 持久化 + 恢复时重新扫描壁纸
+  // folders 持久化到 store（settings.json）+ 恢复时重新扫描壁纸
   useEffect(() => {
+    (async () => {
+      try {
+        const saved = await store.get<WallpaperFolder[]>(WALLPAPER_FOLDERS_KEY);
+        if (Array.isArray(saved) && saved.length > 0) {
+          setFolders(saved);
+          return;
+        }
+      } catch {}
+      // 兼容旧版 localStorage
+      try {
+        const raw = localStorage.getItem("wp_folders");
+        if (raw) {
+          const old = JSON.parse(raw);
+          if (Array.isArray(old) && old.length > 0) {
+            setFolders(old);
+            await store.set(WALLPAPER_FOLDERS_KEY, old);
+            await store.save();
+          }
+        }
+      } catch {}
+    })();
+  }, []);
+
+  // folders 变化时持久化 + 重新扫描壁纸
+  useEffect(() => {
+    // 先保存到 localStorage（即时生效）
     localStorage.setItem("wp_folders", JSON.stringify(folders));
+    // 再保存到 store（持久化到 settings.json）
+    (async () => {
+      try {
+        await store.set(WALLPAPER_FOLDERS_KEY, folders);
+        await store.save();
+      } catch {}
+    })();
     if (folders.length === 0) {
       setWallpapers([]);
       return;
@@ -257,7 +302,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [folders]);
 
   // 进入页面时读取系统当前壁纸（可反映其他应用/Windows 设置中的修改），补入历史
   useEffect(() => {
@@ -345,6 +390,12 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
         const info = await setDynamicWallpaper(selected);
         setDynamic(info);
         persistDynamic(info);
+        // 记录到历史
+        setHistory((prev) => {
+          const next = [{ path: selected, time: Date.now() }, ...prev.filter((h) => h.path !== selected)].slice(0, 12);
+          store.set(WALLPAPER_HISTORY_KEY, next).then(() => store.save());
+          return next;
+        });
         toast({ title: t("wallpaper.dynamicApplied"), status: "success", duration: 2500 });
       } catch (e) {
         toast({ title: String(e), status: "error", duration: 3000 });
@@ -367,25 +418,22 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
     }
   }, [t, toast, persistDynamic]);
 
-  // 轮换定时器：优先使用循环播放列表（每项独立时长），否则按统一间隔轮换全部壁纸
+  // 轮换定时器：按 playlist 中每张壁纸的时长切换
   useEffect(() => {
     if (!rotateEnabled) return;
+    if (playlist.length === 0) return;
+
     let timer: ReturnType<typeof setTimeout> | null = null;
-    if (playlist.length > 0) {
-      const item = playlist[playlistIndex % playlist.length];
-      if (item) void applyWallpaper(item.path, -1, false);
-      timer = setTimeout(() => setTick((x) => x + 1), (item?.durationMinutes || 10) * 60 * 1000);
-    } else if (wallpapers.length > 1) {
-      rotateIndexRef.current = (rotateIndexRef.current + 1) % wallpapers.length;
-      const next = wallpapers[rotateIndexRef.current];
-      if (next) void applyWallpaper(next, rotateIndexRef.current, false);
-      timer = setTimeout(() => setTick((x) => x + 1), rotateInterval * 60 * 1000);
+    const item = playlist[playlistIndex % playlist.length];
+    if (item) {
+      void applyWallpaper(item.path, -1, false);
+      timer = setTimeout(() => setPlaylistIndex((i) => (i + 1) % playlist.length), (item.durationMinutes || 10) * 60 * 1000);
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rotateEnabled, playlist, playlistIndex, tick, wallpapers, rotateInterval]);
+  }, [rotateEnabled, playlist, playlistIndex]);
 
   // 保存轮换设置
   const persistRotate = useCallback((enabled: boolean, interval: number) => {
@@ -577,23 +625,8 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
                   {t("wallpaper.rotate")}
                 </Text>
                 <Switch size="sm" isChecked={rotateEnabled} onChange={handleRotateToggle} />
-                <NumberInput
-                  size="sm"
-                  width="110px"
-                  min={1}
-                  max={1440}
-                  value={rotateInterval}
-                  onChange={handleIntervalChange}
-                  isDisabled={!rotateEnabled}
-                >
-                  <NumberInputField />
-                  <NumberInputStepper>
-                    <NumberIncrementStepper />
-                    <NumberDecrementStepper />
-                  </NumberInputStepper>
-                </NumberInput>
                 <Text fontSize="xs" color={subTextColor}>
-                  {t("wallpaper.intervalUnit")}
+                  {t("wallpaper.playlist")}
                 </Text>
               </HStack>
             </HStack>
@@ -690,6 +723,15 @@ const [folders, setFolders] = useState<WallpaperFolder[]>(() => {
             </Text>
           </VStack>
         </LiquidGlassCard>
+
+        {/* 空列表提示 */}
+        {rotateEnabled && playlist.length === 0 && (
+          <LiquidGlassCard px={4} py={3}>
+            <Text fontSize="sm" color="orange.300" textAlign="center">
+              轮换已开启，请右键点击壁纸选择"加入轮换列表"
+            </Text>
+          </LiquidGlassCard>
+        )}
 
         {/* 循环播放列表 */}
         {playlist.length > 0 && (

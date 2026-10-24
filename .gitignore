@@ -102,6 +102,7 @@ artifacts/
 # Tauri 生成的 capability schema（构建时自动重建，不入库）
 installer/src-tauri/gen/
 uninstaller/src-tauri/gen/
+src-tauri/gen/
 
 # Resources（本地资源纳入版本库，防止误删丢失）
 
@@ -194,3 +195,6 @@ debug-*.png
 *.test.tsx
 *.spec.ts
 *.spec.tsx
+
+# DSH 面板本地状态（非源码）
+.dsh-ops/

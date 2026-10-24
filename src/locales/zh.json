@@ -2491,6 +2491,14 @@
     "samePath": "输出路径不能与输入相同",
     "autoSaveHint": "未选择保存位置时，将自动保存到输入文件所在目录（文件名加 _converted 后缀）"
   },
+  "audioReverse": {
+    "title": "音视频倒放",
+    "desc": "倒放音频或视频文件"
+  },
+  "audioSpeed": {
+    "title": "音视频加速/减速",
+    "desc": "调整音频或视频的播放速度（0.05x-100x）"
+  },
   "wallpaper": {
     "title": "壁纸管理",
     "selectFolderTitle": "选择壁纸文件夹（仅当前层）",

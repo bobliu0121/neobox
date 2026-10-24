@@ -12,7 +12,7 @@ mod cpu_scheduler;
 mod dattorro;
 mod disk_optimize;
 mod external_player;
-mod file_convert;
+pub mod file_convert;
 mod spectrum;
 mod display_cache;
 mod downloader;
@@ -963,6 +963,8 @@ pub fn run() {
         // === 文件格式转换（图片/音频） ===
         file_convert::convert_image,
         file_convert::convert_audio,
+        file_convert::reverse_media,
+        file_convert::change_media_speed,
         file_convert::convert_video,
         file_convert::mux_mka,
         file_convert::path_is_directory,

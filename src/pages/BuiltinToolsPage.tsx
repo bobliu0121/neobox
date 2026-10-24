@@ -27,6 +27,7 @@ import {
   FileAudio,
   Clapperboard,
   Layers,
+  Rewind,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -54,6 +55,8 @@ const defaultTools: ViewItem[] = [
   { id: "video-converter", path: "/video-converter", icon: Clapperboard, titleKey: "sidebar.videoConverter", descriptionKey: "builtinTools.videoConverterDesc", color: "#EC4899" },
   { id: "audio-eq", path: "/audio-eq", icon: Volume2, titleKey: "sidebar.audioEq", descriptionKey: "builtinTools.audioEqDesc", color: "#E74C3C" },
   { id: "audio-converter", path: "/audio-converter", icon: FileAudio, titleKey: "sidebar.audioConverter", descriptionKey: "builtinTools.audioConverterDesc", color: "#F59E0B" },
+  { id: "audio-reverse", path: "/audio-reverse", icon: Rewind, titleKey: "audioReverse.title", descriptionKey: "audioReverse.desc", color: "#EF4444" },
+  { id: "audio-speed", path: "/audio-speed", icon: Gauge, titleKey: "audioSpeed.title", descriptionKey: "audioSpeed.desc", color: "#8B5CF6" },
   { id: "mka-muxer", path: "/mka-muxer", icon: Layers, titleKey: "sidebar.mkaMuxer", descriptionKey: "builtinTools.mkaMuxerDesc", color: "#14B8A6", beta: true },
   { id: "nvidia-recording", path: "/nvidia-recording", icon: Video, titleKey: "sidebar.nvidiaRecording", descriptionKey: "builtinTools.nvidiaRecordingDesc", color: "#76B900" },
   { id: "autoclicker", path: "/autoclicker", icon: MousePointerClick, titleKey: "sidebar.autoclicker", descriptionKey: "builtinTools.autoclickerDesc", color: "#FF8C00" },

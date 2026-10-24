@@ -43,6 +43,8 @@ import WallpaperWindowPage from "./pages/WallpaperWindowPage";
 import BsodLogPage from "./pages/BsodLogPage";
 import ImageConverterPage from "./pages/ImageConverterPage";
 import AudioConverterPage from "./pages/AudioConverterPage";
+import AudioReversePage from "./pages/AudioReversePage";
+import AudioSpeedPage from "./pages/AudioSpeedPage";
 import VideoConverterPage from "./pages/VideoConverterPage";
 import MkaMuxerPage from "./pages/MkaMuxerPage";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -448,6 +450,18 @@ function App() {
                     path="/audio-converter"
                     element={
                       <AudioConverterPage />
+                    }
+                  />
+                  <Route
+                    path="/audio-reverse"
+                    element={
+                      <AudioReversePage />
+                    }
+                  />
+                  <Route
+                    path="/audio-speed"
+                    element={
+                      <AudioSpeedPage />
                     }
                   />
                   <Route

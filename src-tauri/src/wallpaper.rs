@@ -41,12 +41,14 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect, GetParent,
-    GetSystemMetrics, GetWindowLongPtrW, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, IsWindowVisible,
-    SendMessageTimeoutW, SetParent, SetWindowPos, SetWindowLongPtrW, SMTO_NORMAL, SM_CXSCREEN,
-    SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_CHILD,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect, GetDesktopWindow,
+    GetParent, GetSystemMetrics, GetWindowLongPtrW, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM,
+    IsWindow, IsWindowVisible, SendMessageTimeoutW, SetParent, SetWindowPos,
+    SetWindowLongPtrW, ShowWindow, SHOW_WINDOW_CMD, SMTO_NORMAL, SM_CXSCREEN,
+    SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_POPUP, HWND_TOP,
 };
 
 use crate::webview_args::BROWSER_ARGS;
@@ -139,57 +141,91 @@ unsafe fn client_size(host: HWND) -> (i32, i32) {
     }
 }
 
-/// 在枚举到的顶级窗口里找承载壁纸的 WorkerW：
-/// 先定位含 `SHELLDLL_DefView`（桌面图标层）的窗口，再取它后面那个 WorkerW。
+/// 枚举顶级窗口找承载壁纸的 WorkerW：先定位含 SHELLDLL_DefView（桌面图标层）
+/// 的窗口，再取它后面那个 WorkerW。
 unsafe extern "system" fn find_workerw_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if FindWindowExW(hwnd, None, w!("SHELLDLL_DefView"), None).is_ok() {
         if let Ok(worker) = FindWindowExW(None, hwnd, w!("WorkerW"), None) {
-            *(lparam.0 as *mut HWND) = worker;
-            return BOOL(0);
+            if IsWindowVisible(worker).as_bool() {
+                *(lparam.0 as *mut HWND) = worker;
+                return BOOL(0);
+            }
         }
     }
     BOOL(1)
 }
 
-/// 宿主机窗口：优先承载壁纸的 WorkerW（图标之下），没有则退回 Progman。
+/// 宿主机窗口：优先承载壁纸的 WorkerW（图标之下），没有则退回桌面窗口。
 unsafe fn find_wallpaper_host() -> Option<HWND> {
-    let progman = FindWindowW(w!("Progman"), PCWSTR::null()).ok()?;
-    // 请求 Explorer 创建/刷新壁纸层（Win10/11 通用做法，幂等）
-    let _ = SendMessageTimeoutW(
-        progman,
-        0x052C,
-        WPARAM(0xD),
-        LPARAM(0),
-        SMTO_NORMAL,
-        1000,
-        None,
-    );
-    // 等待 Explorer 处理消息并创建 WorkerW（某些 Win10 版本需要时间）
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    // 先尝试找顶级 Progman（标准 Windows）
+    let progman = FindWindowW(w!("Progman"), PCWSTR::null());
 
-    // Windows 11 24H2 起，壁纸层 WorkerW 是 Progman 的子窗口（与桌面图标层
-    // SHELLDLL_DefView 同级）；此时直接挂进去，z-order 天然位于图标之下。
-    // 不检查 IsWindowVisible——某些 Win10 上 WorkerW 存在但 z-order 在 Progman
-    // 之下，挂上去后会自动显示。
-    if let Ok(worker) = FindWindowExW(progman, None, w!("WorkerW"), None) {
+    if let Ok(progman) = progman {
+        // 请求 Explorer 创建/刷新壁纸层（Win10/11 通用做法，幂等）
+        let _ = SendMessageTimeoutW(
+            progman,
+            0x052C,
+            WPARAM(0xD),
+            LPARAM(0),
+            SMTO_NORMAL,
+            1000,
+            None,
+        );
+
+        // Win11 24H2：WorkerW 是 Progman 的子窗口
+        if let Ok(worker) = FindWindowExW(progman, None, w!("WorkerW"), None) {
+            if IsWindowVisible(worker).as_bool() {
+                return Some(worker);
+            }
+        }
+
+        // Win10：顶级 WorkerW，在含 SHELLDLL_DefView 的窗口之后
+        let mut worker = HWND(std::ptr::null_mut());
+        let _ = EnumWindows(
+            Some(find_workerw_proc),
+            LPARAM(&mut worker as *mut HWND as isize),
+        );
         if !worker.is_invalid() {
             return Some(worker);
         }
+
+        // 没有 WorkerW：挂到 Progman，但放在 SHELLDLL_DefView 下面
+        return Some(progman);
     }
 
-    // Windows 10 / 早期 Win11：壁纸层是顶级 WorkerW，位于含 SHELLDLL_DefView
-    // 的窗口之后。
-    let mut worker = HWND(std::ptr::null_mut());
-    let _ = EnumWindows(
-        Some(find_workerw_proc),
-        LPARAM(&mut worker as *mut HWND as isize),
-    );
-    if !worker.is_invalid() {
-        return Some(worker);
+    // 找不到顶级 Progman：从 GetDesktopWindow() 的子窗口里找
+    let desktop = GetDesktopWindow();
+    if !desktop.is_invalid() {
+        if let Ok(prog_child) = FindWindowExW(desktop, None, w!("Progman"), None) {
+            if !prog_child.is_invalid() {
+                log::info!("[Wallpaper] Found Progman as child of desktop: {:?}", prog_child);
+                // 发送 0x052C 创建壁纸层
+                let _ = SendMessageTimeoutW(
+                    prog_child,
+                    0x052C,
+                    WPARAM(0xD),
+                    LPARAM(0),
+                    SMTO_NORMAL,
+                    1000,
+                    None,
+                );
+                // 找可见的 WorkerW
+                if let Ok(worker) = FindWindowExW(prog_child, None, w!("WorkerW"), None) {
+                    if IsWindowVisible(worker).as_bool() {
+                        return Some(worker);
+                    }
+                }
+                // 没有 WorkerW：直接挂到桌面窗口 #32769 上（最底层）
+                log::info!("[Wallpaper] No WorkerW, using desktop window: {:?}", desktop);
+                return Some(desktop);
+            }
+        }
+        // 实在找不到就用桌面窗口本身
+        log::info!("[Wallpaper] Using GetDesktopWindow() as host: {:?}", desktop);
+        return Some(desktop);
     }
 
-    // 兜底：挂到 Progman，并插到图标层 SHELLDLL_DefView 之后（下方）。
-    Some(progman)
+    None
 }
 
 /// 把壁纸窗口挂到桌面壁纸层，并铺满宿主机客户区。
@@ -202,32 +238,28 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
 
     unsafe {
         // 鼠标穿透 + 不抢焦点 + 不出现在 Alt+Tab / 任务栏
-        let interactive = *lock(&INTERACTIVE);
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let ex = if interactive {
-            // HTML 交互模式：不穿透鼠标，去掉 NOACTIVATE 让窗口能获得焦点接收键盘事件；
-            // 保留 TOOLWINDOW 不出现在 Alt+Tab
-            (ex | WS_EX_TOOLWINDOW.0 as isize)
-                & !WS_EX_TRANSPARENT.0 as isize
-                & !WS_EX_NOACTIVATE.0 as isize
-        } else {
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
             ex | WS_EX_TRANSPARENT.0 as isize
                 | WS_EX_NOACTIVATE.0 as isize
-                | WS_EX_TOOLWINDOW.0 as isize
-        };
-        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+                | WS_EX_TOOLWINDOW.0 as isize,
+        );
 
         let Some(host) = find_wallpaper_host() else {
-            // 连 Progman 都找不到：保持顶级窗口，压到最底层
+            // 连 Progman 都找不到：保持顶级窗口，全屏大小，压到最底层
+            let (_, _, cw, ch) = virtual_bounds();
             let _ = SetWindowPos(
                 hwnd,
                 HWND_BOTTOM,
                 0,
                 0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                cw,
+                ch,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
             );
+            log::warn!("[Wallpaper] find_wallpaper_host returned None, using fullscreen fallback");
             return false;
         };
 
@@ -240,27 +272,61 @@ fn attach_to_desktop(win: &WebviewWindow) -> bool {    let Ok(raw) = win.hwnd() 
             ((style & !WS_POPUP.0) | WS_CHILD.0) as isize,
         );
 
-        if SetParent(hwnd, host).is_err() {
+        let parent_ok = SetParent(hwnd, host).is_ok();
+        if !parent_ok {
+            // SetParent 失败：恢复样式，保持顶级窗口
             let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-            return false;
+            log::warn!("[Wallpaper] SetParent failed, staying as top-level window");
         }
-        let (cw, ch) = client_size(host);
 
-        // 挂到 Progman 时插到图标层之后（下方），否则直接压到宿主窗口最底层。
-        let insert_after = FindWindowExW(host, None, w!("SHELLDLL_DefView"), None)
-            .unwrap_or(HWND_BOTTOM);
-        let _ = SetWindowPos(
-            hwnd,
-            insert_after,
-            0,
-            0,
-            cw,
-            ch,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-        );
+        // 获取大小：如果挂载成功用 host 客户区大小，否则用虚拟屏幕大小
+        let (cw, ch) = if parent_ok {
+            client_size(host)
+        } else {
+            let (_, _, w, h) = virtual_bounds();
+            (w, h)
+        };
+
+        // 关键：找到 SHELLDLL_DefView（图标层），把壁纸窗口放在它下面
+        // 这样壁纸就会显示在图标后面，而不是盖住图标
+        let shell_view = FindWindowExW(host, None, w!("SHELLDLL_DefView"), None);
+        if let Ok(sv) = shell_view {
+            // 把壁纸窗口放在 SHELLDLL_DefView 下面（hWndInsertAfter = SHELLDLL_DefView 表示放在它前面，即下面）
+            // 等等，SetWindowPos 的 hWndInsertAfter 参数：
+            // - HWND_TOP：放在最上面
+            // - HWND_BOTTOM：放在最下面
+            // - 其他窗口句柄：放在该窗口前面（z-order 中更靠上）
+            // 所以要放在 SHELLDLL_DefView 下面，应该用 HWND_BOTTOM，或者放在 SHELLDLL_DefView 的后面
+            // 实际上，要放在某个窗口下面，应该用 GetWindow 找到它下面的窗口，然后放在那个窗口后面
+            // 更简单的方法：直接放在 host 的最底部（HWND_BOTTOM）
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                cw,
+                ch,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE,
+            );
+            log::info!("[Wallpaper] Placed wallpaper below SHELLDLL_DefView: {:?}", sv);
+        } else {
+            // 找不到 SHELLDLL_DefView，就放在 host 的最底部
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                cw,
+                ch,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+            );
+            log::warn!("[Wallpaper] SHELLDLL_DefView not found, placed at HWND_BOTTOM");
+        }
+
         log::info!(
-            "[Wallpaper] 已挂载到桌面壁纸层 host={:?} size={}x{}",
+            "[Wallpaper] 壁纸窗口就绪 host={:?} parent_ok={} size={}x{}",
             host,
+            parent_ok,
             cw,
             ch
         );
@@ -336,10 +402,28 @@ fn ensure_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
     .map_err(|e| format!("创建动态壁纸窗口失败: {e}"))?;
 
     let (x, y, w, h) = virtual_bounds();
+
+    // 先用 Tauri API 设置
     win.set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| format!("设置动态壁纸窗口位置失败: {e}"))?;
     win.set_size(tauri::PhysicalSize::new(w as u32, h as u32))
         .map_err(|e| format!("设置动态壁纸窗口尺寸失败: {e}"))?;
+
+    // 再用 Win32 API 强制设置一遍（确保生效）
+    if let Ok(raw) = win.hwnd() {
+        let hwnd = HWND(raw.0);
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                x,
+                y,
+                w,
+                h,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+            );
+        }
+    }
 
     log::info!(
         "[Wallpaper] 创建动态壁纸窗口 bounds=({x},{y},{w},{h}) actual_size={:?} actual_pos={:?}",

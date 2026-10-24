@@ -1,27 +1,36 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DynamicWallpaperInfo } from "@/lib/dynamic-wallpaper";
 
 /**
- * 动态壁纸窗口页面（GIF / HTML），窗口本身是透明置底、鼠标穿透的。
- *
- * - GIF：`<img>` + `object-fit: cover` 铺满整块屏幕；
- * - HTML：全屏 `<iframe>` 加载 `http://asset.localhost/...`。
- *
- * 这里坚持用 iframe 而不是让窗口顶层导航到 asset URL：WebView2 的
- * `WebResourceRequested` 过滤器不覆盖顶层文档导航，Tauri 的 asset 协议
- * 拦不到这次请求，页面会是空白。iframe 属于子资源请求，能正常命中协议处理器。
+ * 动态壁纸窗口页面（GIF / HTML / 视频），窗口本身是透明置底、鼠标穿透的。
  */
 export default function WallpaperWindowPage() {
   const [info, setInfo] = useState<DynamicWallpaperInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
   // 读取壁纸交互设置（与壁纸管理页 localStorage 同步）
   const [settings, setSettings] = useState(() => ({
     mouse: localStorage.getItem("wp_html_mouse") !== "0",
     keyboard: localStorage.getItem("wp_html_keyboard") === "1",
     audio: localStorage.getItem("wp_html_audio") !== "0",
   }));
+
+  // 监听 localStorage 变化（用户在壁纸管理页修改设置时同步更新）
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "wp_html_audio" || e.key === "wp_html_mouse" || e.key === "wp_html_keyboard") {
+        setSettings({
+          mouse: localStorage.getItem("wp_html_mouse") !== "0",
+          keyboard: localStorage.getItem("wp_html_keyboard") === "1",
+          audio: localStorage.getItem("wp_html_audio") !== "0",
+        });
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   // 动态壁纸窗口必须整页透明：index.css 里 :root 的背景色会铺满整块画布，
   // 不覆盖的话置底窗口会变成一块不透明黑底，看起来就像“GIF 渲染失败”。
@@ -81,6 +90,14 @@ export default function WallpaperWindowPage() {
     invoke("set_wallpaper_interactive", { interactive: settings.mouse }).catch(() => {});
   }, [settings.mouse, info?.kind]);
 
+  // 音频设置变化时实时控制视频音量
+  useEffect(() => {
+    if (!info || info.kind !== "video") return;
+    if (videoRef.current) {
+      videoRef.current.muted = !settings.audio;
+    }
+  }, [settings.audio, info?.kind, loaded]);
+
   // 音频设置变化时控制 HTML iframe 内的媒体元素音量
   useEffect(() => {
     if (!info || info.kind !== "html") return;
@@ -131,6 +148,7 @@ export default function WallpaperWindowPage() {
   if (info.kind === "video") {
     return (
       <video
+        ref={videoRef}
         key={src}
         src={src}
         autoPlay
