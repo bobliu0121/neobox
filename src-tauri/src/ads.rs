@@ -153,9 +153,14 @@ pub async fn get_ad_image(app: tauri::AppHandle, url: String) -> Result<String, 
     let file = dir.join(format!("{}.img", hasher.finish()));
 
     if !file.exists() {
-        // 广告图下载复用共享连接池（20 秒整体 / 8 秒连接），
-        // 避免每张图都重做一次握手。
-        let client = crate::utils::http::client_for(20, Some(8));
+        // 广告图下载复用共享连接池（20 秒整体 / 8 秒连接），避免每张图都重做一次握手。
+        // UA 必须保留：部分图床/CDN 拒绝无 UA 或非浏览器 UA 的请求（reqwest 默认不发 UA），
+        // 丢掉它会表现为图片 403/404 而广告位变空。
+        let client = crate::utils::http::client_with_ua(
+            20,
+            Some(8),
+            Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 NeoBox"),
+        );
 
         let resp = client
             .get(&url)

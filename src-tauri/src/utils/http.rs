@@ -52,28 +52,45 @@ pub fn client_with_timeout(secs: u64) -> &'static reqwest::Client {
 /// 按超时**毫秒**取共享客户端。
 ///
 /// 探测类请求常用 2.5 秒这类非整秒超时，若统一归并到秒档会改变超时语义，
-/// 因此单独提供毫秒缓存，保证精确一致。
+/// 因此单独提供毫秒缓存。
+///
+/// ⚠️ **必须做档位量化**：调用方会传入按剩余时间动态算出的超时
+/// （例如 QQ 音乐探测用 `800ms.min(剩余时间)`，每次循环取值都不同）。
+/// 若按原始毫秒值做缓存键，每个不同取值都会 `Box::leak` 一个全新 Client
+/// （连同它自己的连接池），一首首换歌探测就会持续泄漏，永不回收。
+/// 因此这里把毫秒向上量化到 [`MS_GRANULARITY`] 的整数倍：
+/// 缓存条目数被限制在 (上限 / 粒度) 个，且超时只会略变长、不会变短，
+/// 既不破坏「超时不要过短」的语义，也杜绝无限增长。
 pub fn client_with_timeout_ms(millis: u64) -> &'static reqwest::Client {
+    /// 量化粒度（毫秒）。16 档覆盖 800ms 探测这类场景，误差 ≤ 粒度数。
+    const MS_GRANULARITY: u64 = 50;
+    /// 超过这个上限不再细分，直接按上限处理。
+    const MS_MAX: u64 = 60_000;
+
+    let quantized = millis.min(MS_MAX).div_ceil(MS_GRANULARITY) * MS_GRANULARITY;
+    // 保证至少 1 个粒度，避免 0 超时导致请求立即失败。
+    let quantized = quantized.max(MS_GRANULARITY);
+
     static CACHE: OnceLock<Mutex<HashMap<u64, &'static reqwest::Client>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     if let Ok(guard) = cache.lock() {
-        if let Some(client) = guard.get(&millis) {
+        if let Some(client) = guard.get(&quantized) {
             return client;
         }
     }
 
     let built: &'static reqwest::Client = Box::leak(Box::new(
         reqwest::Client::builder()
-            .timeout(Duration::from_millis(millis))
+            .timeout(Duration::from_millis(quantized))
             .build()
             .unwrap_or_else(|e| {
-                log::warn!("[http] 共享客户端构建失败(timeout={millis}ms)，退化为默认客户端: {e}");
+                log::warn!("[http] 共享客户端构建失败(timeout={quantized}ms)，退化为默认客户端: {e}");
                 reqwest::Client::new()
             }),
     ));
     if let Ok(mut guard) = cache.lock() {
-        return *guard.entry(millis).or_insert(built);
+        return *guard.entry(quantized).or_insert(built);
     }
     built
 }
@@ -82,10 +99,29 @@ pub fn client_with_timeout_ms(millis: u64) -> &'static reqwest::Client {
 ///
 /// 连接超时和整体超时都会影响连接池配置，故按 (整体秒数, 连接秒数) 二元组缓存。
 pub fn client_for(timeout_secs: u64, connect_timeout_secs: Option<u64>) -> &'static reqwest::Client {
-    static CACHE: OnceLock<Mutex<HashMap<(u64, Option<u64>), &'static reqwest::Client>>> =
-        OnceLock::new();
+    client_with_ua(timeout_secs, connect_timeout_secs, None)
+}
+
+/// 取带自定义 `User-Agent` 的共享客户端。
+///
+/// **为什么必须保留 UA**：`reqwest` **默认不发送 User-Agent 头**。
+/// 之前把各模块的 `Client::builder()` 统一替换成共享客户端时，顺手丢掉了
+/// `.user_agent(...)`，导致 GitHub API（强制要求 UA）直接返回 403，
+/// 「检查更新」与「公告」接口全部失效，只能回退到本地缓存。
+/// 因此这里把 UA 纳入缓存键：同 UA 复用连接池，不同 UA 各自独立实例。
+pub fn client_with_ua(
+    timeout_secs: u64,
+    connect_timeout_secs: Option<u64>,
+    user_agent: Option<&str>,
+) -> &'static reqwest::Client {
+    type Key = (u64, Option<u64>, Option<String>);
+    static CACHE: OnceLock<Mutex<HashMap<Key, &'static reqwest::Client>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (timeout_secs, connect_timeout_secs);
+    let key: Key = (
+        timeout_secs,
+        connect_timeout_secs,
+        user_agent.map(|s| s.to_string()),
+    );
 
     if let Ok(guard) = cache.lock() {
         if let Some(client) = guard.get(&key) {
@@ -93,16 +129,17 @@ pub fn client_for(timeout_secs: u64, connect_timeout_secs: Option<u64>) -> &'sta
         }
     }
 
-    let built: &'static reqwest::Client = Box::leak(Box::new(
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
-            .connect_timeout(Duration::from_secs(connect_timeout_secs.unwrap_or(10)))
-            .build()
-            .unwrap_or_else(|e| {
-                log::warn!("[http] 共享客户端构建失败(timeout={timeout_secs}s): {e}");
-                reqwest::Client::new()
-            }),
-    ));
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(connect_timeout_secs.unwrap_or(10)));
+    if let Some(ua) = user_agent {
+        builder = builder.user_agent(ua);
+    }
+
+    let built: &'static reqwest::Client = Box::leak(Box::new(builder.build().unwrap_or_else(|e| {
+        log::warn!("[http] 共享客户端构建失败(timeout={timeout_secs}s): {e}");
+        reqwest::Client::new()
+    })));
     if let Ok(mut guard) = cache.lock() {
         return *guard.entry(key).or_insert(built);
     }

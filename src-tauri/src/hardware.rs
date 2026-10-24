@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -691,7 +691,12 @@ pub(crate) struct GpuStaticInfo {
     video_memory_type: Option<String>,
 }
 
-static STATIC_HARDWARE_CACHE: Mutex<Option<StaticHardwareInfo>> = Mutex::new(None);
+/// 静态硬件信息缓存。
+///
+/// 内层 `bool` 语义：`true` = **暂存**（采集时 LHML 未就绪，GPU 列表可能不完整，
+/// 但仍用于避免重复全量重建）；`false` = 正式结果（不再重建）。
+/// 详见 `get_static_hardware_info` 末尾的写入逻辑说明。
+static STATIC_HARDWARE_CACHE: Mutex<Option<(bool, StaticHardwareInfo)>> = Mutex::new(None);
 static HARDWARE_INIT_LOCK: Mutex<()> = Mutex::new(());
 static CPU_SYSTEM: Mutex<Option<System>> = Mutex::new(None);
 
@@ -703,6 +708,16 @@ static CPU_USAGE_CACHE: Mutex<Option<(Instant, u16)>> = Mutex::new(None);
 /// CPU 采样单飞标志：保证同一时刻只有一个线程真正刷新 sysinfo。
 /// 抢不到标志的线程直接用上一次的结果返回，不在锁上阻塞等待。
 static CPU_SAMPLE_INFLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// CPU 采样「代号」。`cleanup_hardware_cache()` 每次执行都会 +1。
+///
+/// 为什么需要它：采样线程会把 `System` 从 `CPU_SYSTEM` 里 `take()` 出来，
+/// **在锁外**做 sysinfo 刷新（这是本次性能优化的核心，避免持锁做重活），
+/// 刷新完再写回。若这期间用户点了「清理硬件缓存」把槽位置成 `None`，
+/// 采样线程随后的写回就会把本该失效的旧 `System` 与旧读数「复活」，
+/// 表现为清理后立刻又看到清理前的 CPU 占用。
+/// 因此采样开始前记录代号、写回前校验代号未变，变了就丢弃本次结果。
+static CPU_SAMPLE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// CPU 使用率缓存 TTL，取 700ms 的理由：
 /// 1. 悬窗（overlay_panel）按 1s 周期调用，TTL 内命中即可避免同一周期内的重复采样；
@@ -1356,6 +1371,9 @@ pub(crate) fn get_cpu_dynamic_info() -> Option<u16> {
     }
     let _inflight = InflightGuard;
 
+    // 记录本次采样开始时的缓存代号。写回阶段用它判断期间是否被 cleanup 作废。
+    let sample_generation = CPU_SAMPLE_GENERATION.load(Ordering::Acquire);
+
     // 3) 取出已有 System。锁内只做一次 Option 的 take（纯内存移动），
     //    不做任何刷新、不做 I/O、不 sleep。
     //    因为上面已抢到单飞权，本线程是此刻唯一的采样者，构造新 System 也可以放心放在锁外。
@@ -1395,7 +1413,17 @@ pub(crate) fn get_cpu_dynamic_info() -> Option<u16> {
         }
     };
 
-    // 6) System 放回槽位、写入结果缓存。两把锁都是短临界区。
+    // 6) 写回前校验代号：若采样期间 `cleanup_hardware_cache()` 已把缓存作废，
+    //    本次结果就是「过期样本」，不能写回（否则清理后立刻又看到旧读数、
+    //    旧 System 也会被复活，让下一次清理形同失效）。
+    if CPU_SAMPLE_GENERATION.load(Ordering::Acquire) != sample_generation {
+        log::debug!("CPU 采样期间缓存已被清理，丢弃本次结果");
+        // 本次读数本身仍然有效（刚采到的），照样返回给调用方；
+        // 只是不写回缓存，避免把已清理的状态复活。
+        return usage;
+    }
+
+    // 7) System 放回槽位、写入结果缓存。两把锁都是短临界区。
     *CPU_SYSTEM.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
     if let Some(usage) = usage {
         *CPU_USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), usage));
@@ -1588,24 +1616,42 @@ fn chassis_type_name(codes: &Option<Vec<u16>>) -> String {
 }
 
 fn get_static_hardware_info() -> Result<StaticHardwareInfo, HardwareError> {
-    // Fast path: 先检查缓存，不加初始化锁
+    // Fast path: 先检查缓存，不加初始化锁。
+    // 暂存结果也走快速路径（否则启动窗口内每次进来都要重跑十余条 WMI 查询，约 2 秒）。
+    // 注意区分两种情况：
+    // - 正式缓存 → 直接返回；
+    // - 暂存缓存 + LHML 仍未就绪 → 继续沿用（避免重复采集）；
+    // - 暂存缓存 + LHML 已就绪 → **不能直接升级**，因为暂存那份数据的 GPU 列表
+    //   本来就是「LHML 未就绪时只靠 NVML/WMI 兜底」采的，直接升级会把不完整列表固化。
+    //   正确做法是往下走一次真实重建，用完整结果覆盖。
     {
         let cache = STATIC_HARDWARE_CACHE.lock().unwrap();
-        if let Some(ref info) = *cache {
-            log::debug!("从缓存获取静态硬件信息");
-            return Ok(info.clone());
+        if let Some((provisional, ref info)) = *cache {
+            if !provisional {
+                log::debug!("从缓存获取静态硬件信息");
+                return Ok(info.clone());
+            }
+            if !crate::sensor::LHM_EVER_SUCCEEDED.load(std::sync::atomic::Ordering::Relaxed) {
+                log::debug!("暂存缓存命中（LHML 未就绪，沿用上次采集结果）");
+                return Ok(info.clone());
+            }
+            log::info!("LHML 已就绪，将重建静态硬件信息以补全 GPU 列表");
         }
     }
 
     // 序列化首次初始化，防止并发重复获取
     let _init_guard = HARDWARE_INIT_LOCK.lock().unwrap();
 
-    // Double-check: 获取锁后再次检查缓存
+    // Double-check: 持有初始化锁后再看一次缓存。
+    // 这里必须是「正式缓存才返回」：并发线程刚完成的可能只是暂存结果，
+    // 而我们已经判定 LHML 就绪、需要重建，此时若返回暂存值就白等了锁也补不全显卡。
     {
         let cache = STATIC_HARDWARE_CACHE.lock().unwrap();
-        if let Some(ref info) = *cache {
-            log::debug!("从缓存获取静态硬件信息");
-            return Ok(info.clone());
+        if let Some((provisional, ref info)) = *cache {
+            if !provisional {
+                log::debug!("从缓存获取静态硬件信息（并发线程已完成初始化）");
+                return Ok(info.clone());
+            }
         }
     }
 
@@ -2022,15 +2068,42 @@ fn get_static_hardware_info() -> Result<StaticHardwareInfo, HardwareError> {
         monitor,
     };
 
-    // 仅在 LHML（NeoBoxMonitor）至少成功读取过一次后才写入静态缓存。
-    // 首次调用可能发生在启动头几秒：此时 NVML 可能只有 NVIDIA、LHML 未就绪只剩 WMI 兜底，
-    // 若把这份不完整的 GPU 列表缓存住，顶部状态卡后来出现的 AMD/核显在底部会整个会话缺失。
-    // 不写缓存时下次 get_hardware 会重新构建，自愈成完整列表。
-    if crate::sensor::LHM_EVER_SUCCEEDED.load(std::sync::atomic::Ordering::Relaxed) {
+    // 静态缓存分两级，兼顾「GPU 列表可能不完整」与「不要重复全量重建」：
+    //
+    // 背景：首次调用常发生在启动头几秒，此时 LHML(NeoBoxMonitor) 未就绪，
+    // GPU 只能靠 NVML/WMI 兜底，列表可能缺 AMD/核显。若把这份不完整结果当最终值
+    // 永久缓存，底部会整个会话缺失那些显卡。
+    //
+    // 但早先的做法是「未就绪就完全不缓存」，代价非常大：每次进入硬件页/主页
+    // 都会重新跑一遍全量采集（CPU/内存/磁盘/网卡/声卡/显示器 共十余条 WMI 查询，
+    // 实测约 2 秒）。日志里可见启动 6 秒内就这么重建了 3 次。
+    //
+    // 现在改为：
+    // - 未就绪 → 写入「暂存」槽位，仍然参与快速路径（避免重建），但标记为 provisional；
+    // - 就绪后 → 一旦可用，暂存结果被「升级」为正式缓存，并从此不再重建。
+    // 这样既不会因启动时序而永久丢失显卡，也不会在启动窗口内反复全量采集。
+    let lhm_ready = crate::sensor::LHM_EVER_SUCCEEDED.load(std::sync::atomic::Ordering::Relaxed);
+    {
         let mut cache = STATIC_HARDWARE_CACHE.lock().unwrap();
-        *cache = Some(static_info.clone());
-    } else {
-        log::info!("NeoBoxMonitor 尚未就绪，本次静态硬件信息不写入缓存");
+        match cache.as_ref() {
+            // 已有正式结果：正常情况下快速路径已经返回，这里只是兜底。
+            Some((false, _)) => {}
+            // 已有暂存结果：仅在 LHML 就绪时用本次完整结果升级它。
+            Some((true, _)) => {
+                if lhm_ready {
+                    *cache = Some((false, static_info.clone()));
+                    log::info!("LHML 已就绪，静态硬件信息由暂存升级为正式缓存");
+                }
+            }
+            None => {
+                *cache = Some((lhm_ready, static_info.clone()));
+                if lhm_ready {
+                    log::info!("静态硬件信息写入正式缓存");
+                } else {
+                    log::info!("NeoBoxMonitor 尚未就绪，静态硬件信息先写入暂存缓存（就绪后自动升级）");
+                }
+            }
+        }
     }
 
     log::info!("静态硬件信息并行获取完成");
@@ -2306,7 +2379,7 @@ pub fn is_nvidia_gpu() -> bool {
     let cache = STATIC_HARDWARE_CACHE.lock().unwrap();
     cache
         .as_ref()
-        .map(|c| c.gpu_static.iter().any(|g| g.vendor == GpuVendor::NVIDIA))
+        .map(|(_, c)| c.gpu_static.iter().any(|g| g.vendor == GpuVendor::NVIDIA))
         .unwrap_or(false)
 }
 
@@ -2872,6 +2945,11 @@ pub fn cleanup_hardware_cache() {
     // 让调用方误以为缓存没清掉。
     let mut cpu_usage = CPU_USAGE_CACHE.lock().unwrap();
     *cpu_usage = None;
-    
+
+    // 代号 +1：让「此刻正在锁外刷新 sysinfo」的采样线程在写回前发现缓存已作废，
+    // 从而丢弃它那份过期结果。顺序上必须在清空三处缓存之后再递增，
+    // 否则采样线程可能读到新代号却写入被它清空后又被自己填回的旧值。
+    CPU_SAMPLE_GENERATION.fetch_add(1, Ordering::AcqRel);
+
     log::info!("硬件信息缓存已清理");
 }

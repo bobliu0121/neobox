@@ -136,9 +136,14 @@ fn fallback_release() -> ReleaseInfo {
 }
 
 async fn fetch_releases() -> Result<Vec<ReleaseInfo>, String> {
-    // 复用全局连接池，并显式带 User-Agent（GitHub API 要求 UA，
-    // 共享客户端统一用同一 UA，避免各模块不一致）。
-    let client = crate::utils::http::client_for(REQUEST_TIMEOUT_SECS, Some(CONNECT_TIMEOUT_SECS));
+    // 复用全局连接池，同时**必须显式带 User-Agent**：GitHub API 对缺少 UA 的请求
+    // 直接返回 403。reqwest 默认不发 UA，所以 UA 要作为缓存键的一部分传进来，
+    // 否则「检查更新 / 公告」会永久回退到本地缓存（曾因统一共享客户端丢掉 UA 而出过此问题）。
+    let client = crate::utils::http::client_with_ua(
+        REQUEST_TIMEOUT_SECS,
+        Some(CONNECT_TIMEOUT_SECS),
+        Some("NeoBox/1.0 (+https://github.com/bobliu0121/neobox)"),
+    );
 
     let response = client
         .get(RELEASES_URL)

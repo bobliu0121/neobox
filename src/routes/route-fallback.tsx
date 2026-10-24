@@ -90,10 +90,36 @@ export class RouteErrorBoundary extends Component<ErrorBoundaryProps, ErrorBound
         <Text fontSize="xs" opacity={0.5}>
           可尝试切换到其它页面后返回，或重新启动 NeoBox。
         </Text>
-        <Button size="sm" onClick={() => this.setState({ error: null })}>
+        <Button size="sm" onClick={this.handleRetry}>
           重试
         </Button>
       </Center>
     );
   }
+
+  /**
+   * 重试。
+   *
+   * **为什么不能只 `setState({ error: null })`**：`React.lazy` 对失败的
+   * `import()` 会缓存 reject 结果（React 内部记 promise 状态），
+   * 同一个 lazy 组件再次渲染时直接复用那个已失败的 promise，
+   * 于是「清空错误 → 重新渲染」只会立刻抛同一个错，按钮点了没反应。
+   *
+   * 真正有效的重试有两条路：
+   * 1. 重新加载整个页面（`location.reload()`）：chunk 会重新请求，能恢复的都能恢复。
+   *    桌面端从本地磁盘取 chunk，正常情况几乎不会失败，走到这里基本意味着
+   *    安装不完整/文件被拦，重载是唯一可能自愈的办法。
+   * 2. 若重载后仍失败，说明文件确实缺失，只能提示用户。
+   *
+   * 先清空错误状态再重载：这样即使 reload 被拦截（极端情况），
+   * 用户也能看到页面重新尝试渲染，而不是停在一个"死"的按钮上。
+   */
+  private handleRetry = () => {
+    this.setState({ error: null });
+    try {
+      window.location.reload();
+    } catch {
+      /* reload 被阻止：保留已清空的状态，让用户可手动切页重试 */
+    }
+  };
 }
