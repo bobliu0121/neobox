@@ -9,17 +9,45 @@ use std::path::Path;
 
 use windows::core::{GUID, PCWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    MFShutdown, MFStartup, MFCreateAttributes, MFCreateMediaType, MFCreateSinkWriterFromURL,
+    MFShutdown, MFStartup, MFCreateAttributes, MFCreateCollection, MFCreateMediaType,
+    MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL,
     MFCreateSourceReaderFromURL, MFAudioFormat_AAC, MFAudioFormat_MP3,
-    MFAudioFormat_PCM, MFMediaType_Audio, MFSTARTUP_NOSOCKET,
+    MFAudioFormat_PCM, MFMediaType_Audio, MFMediaType_Video, MFSTARTUP_NOSOCKET,
     MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
-    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MFTranscodeContainerType_ADTS,
+    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MFTranscodeContainerType_ADTS, MFTranscodeContainerType_MPEG4,
     MF_TRANSCODE_CONTAINERTYPE,
+    MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_INTERLACE_MODE, MF_MT_MPEG2_PROFILE, MF_MT_MPEG2_LEVEL,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE,
-    MF_MT_SUBTYPE, MF_VERSION, IMFAttributes, IMFSample,
+    MF_MT_SUBTYPE, MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_VERSION, IMFAttributes, IMFMediaType, IMFSample, IMFTransform,
+    MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, CMSH264EncoderMFT,
 };
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
+use windows_sys::Win32::System::ProcessStatus::{
+    K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+};
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+/// 当前进程提交内存字节数（用于写帧节流：SinkWriter 对异步编码器不节流，
+/// 会把未编码样本全部缓存进内存，需在缓存超阈值时暂停写入让编码器消化）
+fn current_private_bytes() -> u64 {
+    unsafe {
+        let handle = GetCurrentProcess();
+        let mut pmc: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        if K32GetProcessMemoryInfo(handle, &mut pmc, size) != 0 {
+            pmc.PagefileUsage as u64
+        } else {
+            0
+        }
+    }
+}
 
 /// 图片格式转换：按目标格式解码并重新编码
 #[tauri::command]
@@ -563,4 +591,1781 @@ pub fn read_image_as_data_url(path: String) -> Result<String, String> {
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+/// 判断是否为视频文件（按扩展名）
+fn is_video_file(path: &str) -> bool {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    ["mp4", "webm", "mov", "mkv", "avi", "m4v"].contains(&ext.as_str())
+}
+
+/// 音视频倒放：视频同时倒放画面与声音，音频只倒放声音。
+/// 使用 Media Foundation，不依赖外部 ffmpeg。
+#[tauri::command]
+pub async fn reverse_media(input_path: String, output_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if is_video_file(&input_path) {
+            // 倒放不放大数据量，忽略提示
+            let _ = process_video_media(&input_path, &output_path, MediaOp::Reverse)?;
+            Ok(())
+        } else {
+            reverse_audio_mf(&input_path, &output_path)
+        }
+    })
+    .await
+    .map_err(|e| format!("倒放任务异常: {e}"))?
+}
+
+/// 媒体处理操作类型
+#[derive(Clone, Copy)]
+enum MediaOp {
+    /// 倒放：画面与声音均反转
+    Reverse,
+    /// 变速：按倍速抽帧/复制帧
+    Speed(f64),
+}
+
+/// 用 Media Foundation 实现音频倒放
+fn reverse_audio_mf(input: &str, output: &str) -> Result<(), String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("初始化 COM 失败: {e:?}"))?;
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
+            .map_err(|e| format!("初始化 Media Foundation 失败: {e}"))?;
+
+        let result = (|| -> Result<(), String> {
+            // 1. 打开输入文件
+            let input_w = wide(input);
+            let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
+                .map_err(|e| format!("打开输入音频失败: {e}"))?;
+
+            // 只选第一条音轨
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+
+            // 2. 设置输出为 PCM 16-bit
+            let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                    None,
+                    &pcm_req,
+                )
+                .map_err(|e| format!("设置音频解码失败: {e}"))?;
+
+            // 3. 读取 PCM 参数
+            let pcm_out = reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
+                .map_err(|e| format!("读取音频参数失败: {e}"))?;
+            let sample_rate = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                .unwrap_or(44100);
+            let channels = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                .unwrap_or(2);
+            let bits = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+                .unwrap_or(16);
+            if bits != 16 {
+                return Err(format!("仅支持 16-bit PCM 音频，当前位深: {}", bits));
+            }
+
+            // 4. 读取所有 PCM 采样到内存
+            let mut all_samples: Vec<i16> = Vec::new();
+            loop {
+                let mut flags: u32 = 0;
+                let mut timestamp: i64 = 0;
+                let mut sample: Option<IMFSample> = None;
+                reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("读取音频数据失败: {e}"))?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                if let Some(s) = sample {
+                    let buffer = s.ConvertToContiguousBuffer()
+                        .map_err(|e| format!("获取样本缓冲区失败: {e}"))?;
+                    let mut ptr: *mut u8 = std::ptr::null_mut();
+                    let mut max_len: u32 = 0;
+                    let mut current_len: u32 = 0;
+                    buffer.Lock(&mut ptr, Some(&mut max_len), Some(&mut current_len))
+                        .map_err(|e| format!("锁定缓冲区失败: {e}"))?;
+                    if !ptr.is_null() && current_len > 0 {
+                        let sample_bytes = std::slice::from_raw_parts(ptr as *const i16, (current_len / 2) as usize);
+                        all_samples.extend_from_slice(sample_bytes);
+                    }
+                    let _ = buffer.Unlock();
+                }
+            }
+
+            // 5. 倒放：按帧反转采样（编码时按映射取用，不预先复制整份采样，节省内存）
+            let samples_per_frame = channels as usize;
+            let frame_count = all_samples.len() / samples_per_frame;
+            write_audio_aac_mp4(
+                output,
+                &all_samples,
+                channels,
+                sample_rate,
+                frame_count,
+                |i| frame_count - 1 - i,
+            )?;
+            Ok(())
+        })();
+
+        let _ = MFShutdown();
+        CoUninitialize();
+        result.map_err(|e| format!("音频倒放失败: {e}"))
+    }
+}
+
+/// 音视频加速/减速：视频同时调整画面与声音，音频只调整声音。
+/// 使用 Media Foundation，不依赖外部 ffmpeg。
+/// 返回 Ok(Some(提示)) 表示处理成功但带有超限提示；Ok(None) 表示正常完成。
+#[tauri::command]
+pub async fn change_media_speed(input_path: String, output_path: String, speed: f64) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if is_video_file(&input_path) {
+            process_video_media(&input_path, &output_path, MediaOp::Speed(speed))
+        } else {
+            change_audio_speed_mf(&input_path, &output_path, speed)
+        }
+    })
+    .await
+    .map_err(|e| format!("速度调整任务异常: {e}"))?
+}
+
+/// 用 Media Foundation 实现音频加速/减速（调整采样率，会变调）
+/// 返回 Ok(Some(提示)) 表示成功但数据量较大；Ok(None) 表示正常完成。
+fn change_audio_speed_mf(input: &str, output: &str, speed: f64) -> Result<Option<String>, String> {
+    if speed <= 0.0 {
+        return Err("速度必须大于 0".to_string());
+    }
+
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("初始化 COM 失败: {e:?}"))?;
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
+            .map_err(|e| format!("初始化 Media Foundation 失败: {e}"))?;
+
+        let result = (|| -> Result<Option<String>, String> {
+            let mut warning: Option<String> = None;
+            // 1. 打开输入文件
+            let input_w = wide(input);
+            let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
+                .map_err(|e| format!("打开输入音频失败: {e}"))?;
+
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+
+            // 2. 设置输出为 PCM 16-bit
+            let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            pcm_req
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                    None,
+                    &pcm_req,
+                )
+                .map_err(|e| format!("设置音频解码失败: {e}"))?;
+
+            // 3. 读取 PCM 参数
+            let pcm_out = reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
+                .map_err(|e| format!("读取音频参数失败: {e}"))?;
+            let sample_rate = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                .unwrap_or(44100);
+            let channels = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                .unwrap_or(2);
+            let bits = pcm_out
+                .GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+                .unwrap_or(16);
+            if bits != 16 {
+                return Err(format!("仅支持 16-bit PCM 音频，当前位深: {}", bits));
+            }
+
+            // 4. 读取所有 PCM 采样到内存
+            let mut all_samples: Vec<i16> = Vec::new();
+            loop {
+                let mut flags: u32 = 0;
+                let mut timestamp: i64 = 0;
+                let mut sample: Option<IMFSample> = None;
+                reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("读取音频数据失败: {e}"))?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                if let Some(s) = sample {
+                    let buffer = s.ConvertToContiguousBuffer()
+                        .map_err(|e| format!("获取样本缓冲区失败: {e}"))?;
+                    let mut ptr: *mut u8 = std::ptr::null_mut();
+                    let mut max_len: u32 = 0;
+                    let mut current_len: u32 = 0;
+                    buffer.Lock(&mut ptr, Some(&mut max_len), Some(&mut current_len))
+                        .map_err(|e| format!("锁定缓冲区失败: {e}"))?;
+                    if !ptr.is_null() && current_len > 0 {
+                        let sample_bytes = std::slice::from_raw_parts(ptr as *const i16, (current_len / 2) as usize);
+                        all_samples.extend_from_slice(sample_bytes);
+                    }
+                    let _ = buffer.Unlock();
+                }
+            }
+
+            // 5. 加速/减速：通过抽样调整采样点数量，保持采样率不变
+            // 这样不受 MP3 编码器的采样率限制
+            let samples_per_frame = channels as usize;
+            let original_frame_count = all_samples.len() / samples_per_frame;
+
+            // 计算目标采样点数量
+            // speed = 2.0 表示 2 倍速度，即播放时间减半，采样点数量减半
+            let target_frame_count = (original_frame_count as f64 / speed) as usize;
+
+            // 数据量较大时仅提示，不中断处理
+            let target_bytes = target_frame_count
+                .saturating_mul(samples_per_frame)
+                .saturating_mul(2);
+            if target_bytes > 1_500_000_000usize {
+                warning = Some(format!(
+                    "倍速 {}x 将产生约 {} MB 的音频数据，数据量较大，处理与内存占用会明显增加，请耐心等待",
+                    speed,
+                    target_bytes / 1024 / 1024
+                ));
+            }
+
+            // 输出采样率保持不变
+            let new_sample_rate = sample_rate;
+
+            // 6. 按抽样映射编码为 AAC 并写入 MP4（内存仅占单块缓冲，不复制整份采样）
+            let samples_per_frame = channels as usize;
+            write_audio_aac_mp4(
+                output,
+                &all_samples,
+                channels,
+                sample_rate,
+                target_frame_count,
+                |i| {
+                    let src_pos = (i as f64 * speed) as usize;
+                    std::cmp::min(src_pos, original_frame_count - 1)
+                },
+            )?;
+            Ok(warning)
+        })();
+
+        let _ = MFShutdown();
+        CoUninitialize();
+        result.map_err(|e| format!("音频速度调整失败: {e}"))
+    }
+}
+
+/// 视频倒放 / 变速：用 Media Foundation 读取全部视频帧（NV12）与音轨（PCM），
+/// 处理后经 SinkWriter 编码为 H.264 + AAC 写入输出文件。
+/// 返回 Ok(Some(提示)) 表示成功但数据量较大；Ok(None) 表示正常完成。
+fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<String>, String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("初始化 COM 失败: {e:?}"))?;
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
+            .map_err(|e| format!("初始化 Media Foundation 失败: {e}"))?;
+
+        let result = (|| -> Result<Option<String>, String> {
+            let mut warning: Option<String> = None;
+            // 1. 打开输入文件
+            let input_w = wide(input);
+            let reader = MFCreateSourceReaderFromURL(PCWSTR(input_w.as_ptr()), None)
+                .map_err(|e| format!("打开输入视频失败: {e}"))?;
+
+            // 2. 关闭所有流，再选择性打开视频流
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)
+                .map_err(|e| format!("选择视频轨道失败: {e}（请确认文件包含视频流）"))?;
+
+            // 3. 视频输出设为 NV12（H.264 编码器标准输入格式）
+            let nv12_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            nv12_req
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            nv12_req
+                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                    None,
+                    &nv12_req,
+                )
+                .map_err(|e| format!("设置视频解码失败: {e}"))?;
+
+            // 4. 读取视频参数（宽高、帧率）
+            let video_type = reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+                .map_err(|e| format!("读取视频参数失败: {e}"))?;
+            let frame_size = video_type
+                .GetUINT64(&MF_MT_FRAME_SIZE)
+                .map_err(|e| format!("读取画面尺寸失败: {e}"))?;
+            // MF_MT_FRAME_SIZE 打包约定：高 32 位 = 宽，低 32 位 = 高
+            let vw = (frame_size >> 32) as u32;
+            let vh = (frame_size & 0xFFFF_FFFF) as u32;
+            if vw == 0 || vh == 0 {
+                return Err("无法读取视频画面尺寸".to_string());
+            }
+            let frame_rate = video_type.GetUINT64(&MF_MT_FRAME_RATE).unwrap_or(0);
+            // MF_MT_FRAME_RATE 打包约定：高 32 位 = 分子，低 32 位 = 分母
+            let fps_num = (frame_rate >> 32) as u32;
+            let fps_den = (frame_rate & 0xFFFF_FFFF) as u32;
+            let fps = if fps_num > 0 && fps_den > 0 {
+                fps_num as f64 / fps_den as f64
+            } else {
+                30.0
+            };
+            // NV12 紧凑帧大小（用于推算 stride）
+            let frame_bytes = (vw as usize) * (vh as usize) * 3 / 2;
+
+            // 5. 把全部视频帧写入临时原始文件（内存只保留单帧缓冲），
+            //    后续处理按偏移随机读取，避免整段视频驻留内存
+            let tmp_path = format!("{output}.neobox_tmpframes");
+            struct TmpGuard {
+                path: String,
+                file: Option<std::fs::File>,
+                armed: bool,
+            }
+            impl Drop for TmpGuard {
+                fn drop(&mut self) {
+                    if self.armed {
+                        self.file.take();
+                        let _ = std::fs::remove_file(&self.path);
+                    }
+                }
+            }
+            let mut _tmp_guard = TmpGuard {
+                path: tmp_path.clone(),
+                file: Some(std::fs::File::create(&tmp_path).map_err(|e| format!("创建临时帧文件失败: {e}"))?),
+                armed: true,
+            };
+
+            let mut frame_offsets: Vec<u64> = Vec::new();
+            let mut frame_sizes: Vec<u32> = Vec::new();
+            let mut cur_offset: u64 = 0;
+            let mut total_video_frames = 0usize;
+            loop {
+                let mut flags: u32 = 0;
+                let mut ts: i64 = 0;
+                let mut sample: Option<IMFSample> = None;
+                reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        Some(&mut ts),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("读取视频帧失败: {e}"))?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                if let Some(s) = sample {
+                    let buf = s
+                        .ConvertToContiguousBuffer()
+                        .map_err(|e| format!("获取帧缓冲区失败: {e}"))?;
+                    let mut ptr: *mut u8 = std::ptr::null_mut();
+                    let mut max_len: u32 = 0;
+                    let mut cur_len: u32 = 0;
+                    buf.Lock(&mut ptr, Some(&mut max_len), Some(&mut cur_len))
+                        .map_err(|e| format!("锁定帧缓冲区失败: {e}"))?;
+                    if !ptr.is_null() && cur_len > 0 {
+                        use std::io::Write;
+                        let data = std::slice::from_raw_parts(ptr, cur_len as usize);
+                        _tmp_guard
+                            .file
+                            .as_mut()
+                            .ok_or("临时帧文件不可用")?
+                            .write_all(data)
+                            .map_err(|e| format!("写入临时帧文件失败: {e}"))?;
+                        let _ = buf.Unlock();
+                        frame_offsets.push(cur_offset);
+                        frame_sizes.push(cur_len);
+                        cur_offset += cur_len as u64;
+                        total_video_frames += 1;
+                    } else {
+                        let _ = buf.Unlock();
+                    }
+                }
+            }
+            if total_video_frames == 0 {
+                return Err("未能读取到任何视频帧".to_string());
+            }
+            use std::io::Write;
+            _tmp_guard
+                .file
+                .as_mut()
+                .ok_or("临时帧文件不可用")?
+                .flush()
+                .map_err(|e| format!("刷新临时帧文件失败: {e}"))?;
+            use std::io::{Seek, SeekFrom};
+            let mut read_file = std::fs::File::open(&tmp_path)
+                .map_err(|e| format!("打开临时帧文件失败: {e}"))?;
+            let avg_frame_bytes = (cur_offset / total_video_frames as u64) as usize;
+            let out_bytes_hint = (total_video_frames as f64 / match op {
+                MediaOp::Reverse => 1.0,
+                MediaOp::Speed(s) => s,
+            } * avg_frame_bytes as f64) as usize;
+            if out_bytes_hint > 1_500_000_000usize {
+                warning = Some(format!(
+                    "处理后将产生约 {} MB 的视频数据，输出文件会较大，请耐心等待",
+                    out_bytes_hint / 1024 / 1024
+                ));
+            }
+
+            // 6. 检测并读取音轨（PCM 16-bit）
+            let mut has_audio = false;
+            let mut stream_idx = 0u32;
+            loop {
+                match reader.GetNativeMediaType(stream_idx, 0) {
+                    Ok(t) => {
+                        if let Ok(major) = t.GetGUID(&MF_MT_MAJOR_TYPE) {
+                            if major == MFMediaType_Audio {
+                                has_audio = true;
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+                stream_idx += 1;
+            }
+            let mut sample_rate: u32 = 44100;
+            let mut channels: u32 = 2;
+            let mut pcm_out = None;
+            let mut all_samples: Vec<i16> = Vec::new();
+            if has_audio {
+                let audio_input_w = wide(input);
+                let audio_reader = MFCreateSourceReaderFromURL(PCWSTR(audio_input_w.as_ptr()), None)
+                    .map_err(|e| format!("打开音频流失败: {e}"))?;
+                audio_reader
+                    .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                    .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
+                audio_reader
+                    .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
+                    .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+                let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+                pcm_req
+                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                    .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+                pcm_req
+                    .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                    .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+                audio_reader
+                    .SetCurrentMediaType(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        None,
+                        &pcm_req,
+                    )
+                    .map_err(|e| format!("设置音频解码失败: {e}"))?;
+                let pcm_type = audio_reader
+                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32)
+                    .map_err(|e| format!("读取音频参数失败: {e}"))?;
+                sample_rate = pcm_type
+                    .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                    .unwrap_or(44100);
+                channels = pcm_type
+                    .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                    .unwrap_or(2);
+                let bits = pcm_type
+                    .GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+                    .unwrap_or(16);
+                if bits != 16 {
+                    return Err(format!("仅支持 16-bit PCM 音频，当前位深: {}", bits));
+                }
+                pcm_out = Some(pcm_type);
+                loop {
+                    let mut flags: u32 = 0;
+                    let mut ts: i64 = 0;
+                    let mut sample: Option<IMFSample> = None;
+                    audio_reader
+                        .ReadSample(
+                            MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                            0,
+                            None,
+                            Some(&mut flags),
+                            Some(&mut ts),
+                            Some(&mut sample),
+                        )
+                        .map_err(|e| format!("读取音频数据失败: {e}"))?;
+                    if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                        break;
+                    }
+                    if let Some(s) = sample {
+                        let buf = s
+                            .ConvertToContiguousBuffer()
+                            .map_err(|e| format!("获取样本缓冲区失败: {e}"))?;
+                        let mut ptr: *mut u8 = std::ptr::null_mut();
+                        let mut max_len: u32 = 0;
+                        let mut cur_len: u32 = 0;
+                        buf.Lock(&mut ptr, Some(&mut max_len), Some(&mut cur_len))
+                            .map_err(|e| format!("锁定缓冲区失败: {e}"))?;
+                        if !ptr.is_null() && cur_len > 0 {
+                            let samples = std::slice::from_raw_parts(
+                                ptr as *const i16,
+                                (cur_len / 2) as usize,
+                            );
+                            all_samples.extend_from_slice(samples);
+                        }
+                        let _ = buf.Unlock();
+                    }
+                }
+            }
+
+            // 7. 计算输出帧总数与取帧映射
+            let out_frame_count = match op {
+                MediaOp::Reverse => total_video_frames,
+                MediaOp::Speed(s) => {
+                    if s <= 0.0 {
+                        return Err("速度必须大于 0".to_string());
+                    }
+                    (total_video_frames as f64 / s) as usize
+                }
+            };
+            let total_frames = total_video_frames;
+            let pick_frame = |i: usize| -> usize {
+                match op {
+                    MediaOp::Reverse => total_frames - 1 - i,
+                    MediaOp::Speed(s) => {
+                        std::cmp::min((i as f64 * s) as usize, total_frames - 1)
+                    }
+                }
+            };
+            let audio_total_frames = if has_audio {
+                all_samples.len() / channels as usize
+            } else {
+                0
+            };
+            let audio_out_frames = if has_audio {
+                match op {
+                    MediaOp::Reverse => audio_total_frames,
+                    MediaOp::Speed(s) => (audio_total_frames as f64 / s) as usize,
+                }
+            } else {
+                0
+            };
+            let pick_audio_frame = |i: usize| -> usize {
+                match op {
+                    MediaOp::Reverse => audio_total_frames - 1 - i,
+                    MediaOp::Speed(s) => {
+                        std::cmp::min((i as f64 * s) as usize, audio_total_frames - 1)
+                    }
+                }
+            };
+
+            // 8. H.264 编码器（IMFTransform 同步驱动；本机 SinkWriter 异步编码管线停滞，改为直驱）
+            let encoder: IMFTransform = CoCreateInstance(&CMSH264EncoderMFT, None, CLSCTX_ALL)
+                .map_err(|e| format!("系统缺少 H.264 编码器: {e}"))?;
+            let in_type = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+            in_type
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            in_type
+                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)
+                .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+            in_type
+                .SetUINT64(&MF_MT_FRAME_SIZE, frame_size)
+                .map_err(|e| format!("设置画面尺寸失败: {e}"))?;
+            in_type
+                .SetUINT64(&MF_MT_FRAME_RATE, frame_rate)
+                .map_err(|e| format!("设置帧率失败: {e}"))?;
+            in_type
+                .SetUINT32(&MF_MT_DEFAULT_STRIDE, vw)
+                .map_err(|e| format!("设置 stride 失败: {e}"))?;
+            in_type
+                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
+                .map_err(|e| format!("设置隔行模式失败: {e}"))?;
+            let mut chosen: Option<IMFMediaType> = None;
+            for t_idx in 0..8u32 {
+                match encoder.GetOutputAvailableType(0, t_idx) {
+                    Ok(t) => {
+                        if t.GetGUID(&MF_MT_SUBTYPE).unwrap_or_default() == MFVideoFormat_H264 {
+                            chosen = Some(t);
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let mut out_type = chosen.ok_or("系统缺少 H.264 编码器输出类型")?;
+            out_type
+                .SetUINT64(&MF_MT_FRAME_SIZE, frame_size)
+                .map_err(|e| format!("设置画面尺寸失败: {e}"))?;
+            out_type
+                .SetUINT64(&MF_MT_FRAME_RATE, frame_rate)
+                .map_err(|e| format!("设置帧率失败: {e}"))?;
+            out_type
+                .SetUINT32(&MF_MT_AVG_BITRATE, 8_000_000)
+                .map_err(|e| format!("设置码率失败: {e}"))?;
+            let _ = out_type.SetUINT32(&MF_MT_MPEG2_PROFILE, 66u32);
+            let _ = out_type.SetUINT32(&MF_MT_MPEG2_LEVEL, 40u32);
+            let _ = out_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32);
+            encoder
+                .SetOutputType(0, &out_type, 0)
+                .map_err(|e| format!("设置编码器输出类型失败: {e}"))?;
+            encoder
+                .SetInputType(0, &in_type, 0)
+                .map_err(|e| format!("设置编码器输入类型失败: {e}"))?;
+            encoder
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                .map_err(|e| format!("开始编码流失败: {e}"))?;
+            encoder
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                .map_err(|e| format!("启动编码流失败: {e}"))?;
+
+            // 9. AAC 音频编码器（系统自带 MF AAC encoder MFT；不再使用 Dolby AC-3）
+            let mut aac_enc: Option<IMFTransform> = None;
+            let mut audio_active = has_audio;
+            if audio_active {
+                aac_enc = Some(create_aac_encoder(sample_rate, channels)?);
+            }
+
+            // 10. 自写 MP4 muxer（不依赖 SinkWriter；H.264 avc1 + AAC mp4a）
+            let mut mux = Mp4Muxer::new(
+                output,
+                vw,
+                vh,
+                fps_num,
+                fps_den,
+                sample_rate,
+                channels,
+                audio_active,
+                aac_asc(sample_rate, channels),
+            )
+            .map_err(|e| format!("创建输出文件失败: {e}"))?;
+
+            // 11. 视频编码循环：按映射取帧 → 紧凑化 → 编码 → 写 muxer
+            let vw_usize = vw as usize;
+            let vh_usize = vh as usize;
+            let first_size = frame_sizes[0] as usize;
+            let raw_rows = if vw_usize > 0 && first_size % vw_usize == 0 && first_size * 2 % (vw_usize * 3) == 0 {
+                first_size * 2 / (vw_usize * 3)
+            } else {
+                vh_usize
+            };
+            let src_stride = if raw_rows > 0 && first_size * 2 % (raw_rows * 3) == 0 {
+                first_size * 2 / (raw_rows * 3)
+            } else {
+                vw_usize
+            };
+            let mut out_buf: Vec<u8> = Vec::new();
+            let mut compact_buf: Vec<u8> = Vec::new();
+            let mut video_out_frames = 0usize;
+            for i in 0..out_frame_count {
+                let src = pick_frame(i);
+                let size = frame_sizes[src] as usize;
+                if out_buf.len() < size {
+                    out_buf.resize(size, 0);
+                }
+                use std::io::Read;
+                read_file
+                    .seek(SeekFrom::Start(frame_offsets[src]))
+                    .map_err(|e| format!("定位临时帧文件失败: {e}"))?;
+                read_file
+                    .read_exact(&mut out_buf[..size])
+                    .map_err(|e| format!("读取临时帧文件失败: {e}"))?;
+                // 解码帧可能带 stride 对齐 padding，裁剪为紧凑 NV12 再喂编码器
+                let (feed_ptr, feed_len) = if size != frame_bytes
+                    && raw_rows >= vh_usize
+                    && src_stride > 0
+                {
+                    if compact_buf.len() < frame_bytes {
+                        compact_buf.resize(frame_bytes, 0);
+                    }
+                    let mut dst_off = 0usize;
+                    let mut src_off = 0usize;
+                    for _ in 0..vh_usize {
+                        compact_buf[dst_off..dst_off + vw_usize]
+                            .copy_from_slice(&out_buf[src_off..src_off + vw_usize]);
+                        dst_off += vw_usize;
+                        src_off += src_stride;
+                    }
+                    for _ in 0..(vh_usize / 2) {
+                        compact_buf[dst_off..dst_off + vw_usize]
+                            .copy_from_slice(&out_buf[src_off..src_off + vw_usize]);
+                        dst_off += vw_usize;
+                        src_off += src_stride;
+                    }
+                    (compact_buf.as_ptr(), frame_bytes)
+                } else {
+                    (out_buf.as_ptr(), size)
+                };
+                let sample = MFCreateSample().map_err(|e| format!("创建样本失败: {e}"))?;
+                let buffer = MFCreateMemoryBuffer(feed_len as u32)
+                    .map_err(|e| format!("创建缓冲区失败: {e}"))?;
+                let mut ptr: *mut u8 = std::ptr::null_mut();
+                let mut max_len: u32 = 0;
+                buffer
+                    .Lock(&mut ptr, Some(&mut max_len), None)
+                    .map_err(|e| format!("锁定缓冲区失败: {e}"))?;
+                std::ptr::copy_nonoverlapping(feed_ptr, ptr, feed_len);
+                buffer
+                    .SetCurrentLength(feed_len as u32)
+                    .map_err(|e| format!("设置缓冲区长度失败: {e}"))?;
+                let _ = buffer.Unlock();
+                sample
+                    .AddBuffer(&buffer)
+                    .map_err(|e| format!("添加缓冲区失败: {e}"))?;
+                let _ = sample.SetSampleTime(i as i64 * 333_333);
+                let _ = sample.SetSampleDuration(333_333);
+                encoder
+                    .ProcessInput(0, &sample, 0)
+                    .map_err(|e| format!("编码视频帧失败: {e}"))?;
+                // 同步 MFT：有输出立即取（内存恒定，无需节流）
+                loop {
+                    let st = encoder.GetOutputStatus().unwrap_or(0);
+                    if st == 0 {
+                        break;
+                    }
+                    let obuf = MFCreateMemoryBuffer(8_000_000)
+                        .map_err(|e| format!("创建输出缓冲区失败: {e}"))?;
+                    let mut op: *mut u8 = std::ptr::null_mut();
+                    let mut om: u32 = 0;
+                    let mut oc: u32 = 0;
+                    obuf
+                        .Lock(&mut op, Some(&mut om), Some(&mut oc))
+                        .map_err(|e| format!("锁定输出缓冲区失败: {e}"))?;
+                    let _ = obuf.Unlock();
+                    let out_sample = MFCreateSample().map_err(|e| format!("创建输出样本失败: {e}"))?;
+                    out_sample
+                        .AddBuffer(&obuf)
+                        .map_err(|e| format!("添加输出缓冲区失败: {e}"))?;
+                    let events = MFCreateCollection().map_err(|e| format!("创建事件集合失败: {e}"))?;
+                    let mut data = MFT_OUTPUT_DATA_BUFFER {
+                        dwStreamID: 0,
+                        pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+                        dwStatus: 0,
+                        pEvents: std::mem::ManuallyDrop::new(Some(events)),
+                    };
+                    let mut buffers = [data];
+                    let mut out_status: u32 = 0;
+                    match encoder.ProcessOutput(0, &mut buffers, &mut out_status) {
+                        Ok(()) => {
+                            if let Some(s) = buffers[0].pSample.take() {
+                                let b = s.ConvertToContiguousBuffer().map_err(|e| format!("获取编码输出失败: {e}"))?;
+                                let mut p2: *mut u8 = std::ptr::null_mut();
+                                let mut m2: u32 = 0;
+                                let mut c2: u32 = 0;
+                                b.Lock(&mut p2, Some(&mut m2), Some(&mut c2)).map_err(|e| format!("锁定编码输出失败: {e}"))?;
+                                let raw = std::slice::from_raw_parts(p2, c2 as usize);
+                                mux.add_video(raw)?;
+                                let _ = b.Unlock();
+                                video_out_frames += 1;
+                            }
+                        }
+                        Err(e) => {
+                            if e.code() == windows::core::HRESULT(0xC00D6D72u32 as i32) {
+                                break; // MF_E_TRANSFORM_NEED_MORE_INPUT
+                            }
+                            return Err(format!("编码输出失败: {e}"));
+                        }
+                    }
+                }
+                if i % 500 == 0 || i + 1 == out_frame_count {
+                    eprintln!("[media-debug] video frames encoded: {}/{}", i + 1, out_frame_count);
+                }
+            }
+            // 视频 drain
+            let _ = encoder.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+            loop {
+                let obuf = MFCreateMemoryBuffer(8_000_000)
+                    .map_err(|e| format!("创建输出缓冲区失败: {e}"))?;
+                let mut op: *mut u8 = std::ptr::null_mut();
+                let mut om: u32 = 0;
+                let mut oc: u32 = 0;
+                obuf
+                    .Lock(&mut op, Some(&mut om), Some(&mut oc))
+                    .map_err(|e| format!("锁定输出缓冲区失败: {e}"))?;
+                let _ = obuf.Unlock();
+                let out_sample = MFCreateSample().map_err(|e| format!("创建输出样本失败: {e}"))?;
+                out_sample
+                    .AddBuffer(&obuf)
+                    .map_err(|e| format!("添加输出缓冲区失败: {e}"))?;
+                let events = MFCreateCollection().map_err(|e| format!("创建事件集合失败: {e}"))?;
+                let mut data = MFT_OUTPUT_DATA_BUFFER {
+                    dwStreamID: 0,
+                    pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+                    dwStatus: 0,
+                    pEvents: std::mem::ManuallyDrop::new(Some(events)),
+                };
+                let mut buffers = [data];
+                let mut out_status: u32 = 0;
+                match encoder.ProcessOutput(0, &mut buffers, &mut out_status) {
+                    Ok(()) => {
+                        if let Some(s) = buffers[0].pSample.take() {
+                            let b = s.ConvertToContiguousBuffer().map_err(|e| format!("获取编码输出失败: {e}"))?;
+                            let mut p2: *mut u8 = std::ptr::null_mut();
+                            let mut m2: u32 = 0;
+                            let mut c2: u32 = 0;
+                            b.Lock(&mut p2, Some(&mut m2), Some(&mut c2)).map_err(|e| format!("锁定编码输出失败: {e}"))?;
+                            let raw = std::slice::from_raw_parts(p2, c2 as usize);
+                            mux.add_video(raw)?;
+                            let _ = b.Unlock();
+                            video_out_frames += 1;
+                        }
+                    }
+                    Err(e) => {
+                        if e.code() == windows::core::HRESULT(0xC00D6D72u32 as i32) {
+                            break;
+                        }
+                        return Err(format!("编码收尾失败: {e}"));
+                    }
+                }
+            }
+            eprintln!("[media-debug] video drain done: total out frames = {video_out_frames}");
+
+            // 12. 音频编码循环（系统 AAC 编码器，每块 1024 帧）
+            if let Some(aenc) = aac_enc.as_ref() {
+                let audio_out_count = encode_audio_aac_loop(
+                    aenc,
+                    &mut mux,
+                    &all_samples,
+                    channels,
+                    sample_rate,
+                    audio_out_frames,
+                    &pick_audio_frame,
+                )?;
+                eprintln!("[media-debug] audio done: out blocks = {audio_out_count}");
+            }
+
+            // 13. 完成 mux（写 moov）
+            mux.finish().map_err(|e| format!("写入输出文件失败: {e}"))?;
+            eprintln!("[media-debug] mux finished");
+            Ok(warning)
+        })();
+
+        let _ = MFShutdown();
+        CoUninitialize();
+        result.map_err(|e| format!("音视频处理失败: {e}"))
+    }
+}
+
+// ==================== 自写 MP4 muxer（H.264 avc1 + AAC mp4a） ====================
+
+fn be32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+fn be64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+fn be16(out: &mut Vec<u8>, v: u16) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+fn fourcc(out: &mut Vec<u8>, s: &[u8; 4]) {
+    out.extend_from_slice(s);
+}
+fn box_start(out: &mut Vec<u8>, t: &[u8; 4]) -> usize {
+    let pos = out.len();
+    be32(out, 0);
+    fourcc(out, t);
+    pos
+}
+fn box_end(out: &mut Vec<u8>, pos: usize) {
+    let size = (out.len() - pos) as u32;
+    out[pos..pos + 4].copy_from_slice(&size.to_be_bytes());
+}
+
+/// AAC AudioSpecificConfig（2 字节）：AAC-LC + 采样率索引 + 声道配置
+fn aac_asc(sr: u32, ch: u32) -> Vec<u8> {
+    let freq_idx = match sr {
+        96000 => 0,
+        88200 => 1,
+        64000 => 2,
+        48000 => 3,
+        44100 => 4,
+        32000 => 5,
+        24000 => 6,
+        22050 => 7,
+        16000 => 8,
+        12000 => 9,
+        11025 => 10,
+        8000 => 11,
+        7350 => 12,
+        _ => 3,
+    };
+    let ch_cfg = match ch {
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        4 => 4,
+        5 => 5,
+        6 => 6,
+        8 => 7,
+        _ => 2,
+    };
+    // objectType=2 (AAC LC)
+    let asc = (2u16 << 11) | ((freq_idx as u16) << 7) | ((ch_cfg as u16) << 3);
+    vec![(asc >> 8) as u8, (asc & 0xFF) as u8]
+}
+
+/// 创建系统 AAC 编码器 MFT（输入 PCM 16bit，输出 raw AAC）
+fn create_aac_encoder(sample_rate: u32, channels: u32) -> Result<IMFTransform, String> {
+    unsafe {
+        let aac_clsid = GUID::from_u128(0x93AF0C51_2275_45D2_A35B_F2BA21CAED00);
+        let aenc: IMFTransform = CoCreateInstance(&aac_clsid, None, CLSCTX_ALL)
+            .map_err(|e| format!("系统缺少 AAC 音频编码器: {e}"))?;
+        let mut a_chosen: Option<IMFMediaType> = None;
+        for t_idx in 0..8u32 {
+            match aenc.GetOutputAvailableType(0, t_idx) {
+                Ok(t) => {
+                    let sub = t.GetGUID(&MF_MT_SUBTYPE).unwrap_or_default();
+                    if a_chosen.is_none() {
+                        a_chosen = Some(t.clone());
+                    }
+                    if sub == MFAudioFormat_AAC {
+                        a_chosen = Some(t);
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let mut a_out = a_chosen.ok_or("系统缺少 AAC 音频编码器输出类型")?;
+        a_out
+            .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, sample_rate)
+            .map_err(|e| format!("设置采样率失败: {e}"))?;
+        a_out
+            .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels)
+            .map_err(|e| format!("设置声道数失败: {e}"))?;
+        // 192kbps 目标码率（字节/秒）
+        let _ = a_out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 192_000 / 8);
+        aenc
+            .SetOutputType(0, &a_out, 0)
+            .map_err(|e| format!("设置音频编码器输出失败: {e}"))?;
+        let mut pcm_in = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
+        pcm_in
+            .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+            .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+        pcm_in
+            .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+            .map_err(|e| format!("设置媒体类型失败: {e}"))?;
+        pcm_in
+            .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, sample_rate)
+            .map_err(|e| format!("设置采样率失败: {e}"))?;
+        pcm_in
+            .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels)
+            .map_err(|e| format!("设置声道数失败: {e}"))?;
+        pcm_in
+            .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)
+            .map_err(|e| format!("设置位深失败: {e}"))?;
+        pcm_in
+            .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, sample_rate * channels * 2)
+            .map_err(|e| format!("设置码率失败: {e}"))?;
+        let _ = pcm_in.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, channels * 2);
+        aenc
+            .SetInputType(0, &pcm_in, 0)
+            .map_err(|e| format!("设置音频编码器输入失败: {e}"))?;
+        aenc
+            .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+            .map_err(|e| format!("开始音频编码流失败: {e}"))?;
+        aenc
+            .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+            .map_err(|e| format!("启动音频编码流失败: {e}"))?;
+        Ok(aenc)
+    }
+}
+
+/// 若样本以 ADTS 同步字（0xFFF）开头则剥离 7 字节 ADTS 头，返回 raw AAC 帧
+fn strip_adts(raw: &[u8]) -> &[u8] {
+    if raw.len() > 9 && raw[0] == 0xFF && (raw[1] & 0xF0) == 0xF0 {
+        // ADTS 头长度：无 CRC 7 字节 / 有 CRC 9 字节
+        let has_crc = (raw[1] & 0x01) == 0;
+        let hdr = if has_crc { 9usize } else { 7usize };
+        if raw.len() > hdr {
+            return &raw[hdr..];
+        }
+    }
+    raw
+}
+
+/// 用系统 AAC 编码器把 PCM 采样按映射编码为 raw AAC 帧并写入 muxer（1024 采样/帧）
+fn encode_audio_aac_loop(
+    aenc: &IMFTransform,
+    mux: &mut Mp4Muxer,
+    all_samples: &[i16],
+    channels: u32,
+    sample_rate: u32,
+    target_frame_count: usize,
+    pick: impl Fn(usize) -> usize,
+) -> Result<usize, String> {
+    unsafe {
+        let spf = channels as usize;
+        let chunk_frames = 1024usize;
+        let chunk_bytes = chunk_frames * spf * 2;
+        let mut a_buf: Vec<i16> = vec![0i16; chunk_frames * spf];
+        let mut offset = 0usize;
+        let mut out_blocks = 0usize;
+        while offset < target_frame_count {
+            let count = std::cmp::min(chunk_frames, target_frame_count - offset);
+            for j in 0..count {
+                let src = pick(offset + j);
+                let start = src * spf;
+                let dst = j * spf;
+                a_buf[dst..dst + spf].copy_from_slice(&all_samples[start..start + spf]);
+            }
+            let a_sample = MFCreateSample().map_err(|e| format!("创建音频样本失败: {e}"))?;
+            let a_buffer = MFCreateMemoryBuffer(chunk_bytes as u32)
+                .map_err(|e| format!("创建音频缓冲区失败: {e}"))?;
+            let mut a_ptr: *mut u8 = std::ptr::null_mut();
+            let mut a_max: u32 = 0;
+            a_buffer
+                .Lock(&mut a_ptr, Some(&mut a_max), None)
+                .map_err(|e| format!("锁定音频缓冲区失败: {e}"))?;
+            std::ptr::copy_nonoverlapping(a_buf.as_ptr(), a_ptr as *mut i16, count * spf);
+            a_buffer
+                .SetCurrentLength((count * spf * 2) as u32)
+                .map_err(|e| format!("设置音频缓冲区长度失败: {e}"))?;
+            let _ = a_buffer.Unlock();
+            a_sample
+                .AddBuffer(&a_buffer)
+                .map_err(|e| format!("添加音频缓冲区失败: {e}"))?;
+            let _ = a_sample.SetSampleTime((offset as i64) * 1024 * 10_000_000 / (sample_rate as i64));
+            let _ = a_sample.SetSampleDuration(1024 * 10_000_000 / (sample_rate as i64));
+            aenc
+                .ProcessInput(0, &a_sample, 0)
+                .map_err(|e| format!("编码音频块失败: {e}"))?;
+            loop {
+                let obuf = MFCreateMemoryBuffer(64 * 1024)
+                    .map_err(|e| format!("创建音频输出缓冲区失败: {e}"))?;
+                let mut op: *mut u8 = std::ptr::null_mut();
+                let mut om: u32 = 0;
+                let mut oc: u32 = 0;
+                obuf
+                    .Lock(&mut op, Some(&mut om), Some(&mut oc))
+                    .map_err(|e| format!("锁定音频输出缓冲区失败: {e}"))?;
+                let _ = obuf.Unlock();
+                let out_sample = MFCreateSample().map_err(|e| format!("创建音频输出样本失败: {e}"))?;
+                out_sample
+                    .AddBuffer(&obuf)
+                    .map_err(|e| format!("添加音频输出缓冲区失败: {e}"))?;
+                let events = MFCreateCollection().map_err(|e| format!("创建事件集合失败: {e}"))?;
+                let mut data = MFT_OUTPUT_DATA_BUFFER {
+                    dwStreamID: 0,
+                    pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+                    dwStatus: 0,
+                    pEvents: std::mem::ManuallyDrop::new(Some(events)),
+                };
+                let mut buffers = [data];
+                let mut out_status: u32 = 0;
+                match aenc.ProcessOutput(0, &mut buffers, &mut out_status) {
+                    Ok(()) => {
+                        if let Some(s) = buffers[0].pSample.take() {
+                            let b = s.ConvertToContiguousBuffer().map_err(|e| format!("获取音频编码输出失败: {e}"))?;
+                            let mut p2: *mut u8 = std::ptr::null_mut();
+                            let mut m2: u32 = 0;
+                            let mut c2: u32 = 0;
+                            b.Lock(&mut p2, Some(&mut m2), Some(&mut c2)).map_err(|e| format!("锁定音频编码输出失败: {e}"))?;
+                            let raw = std::slice::from_raw_parts(p2, c2 as usize);
+                            let aac = strip_adts(raw);
+                            mux.add_audio(aac)?;
+                            let _ = b.Unlock();
+                            out_blocks += 1;
+                        }
+                    }
+                    Err(e) => {
+                        if e.code() == windows::core::HRESULT(0xC00D6D72u32 as i32) {
+                            break;
+                        }
+                        return Err(format!("音频编码输出失败: {e}"));
+                    }
+                }
+            }
+            offset += count;
+        }
+        // 音频 drain
+        let _ = aenc.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+        loop {
+            let obuf = MFCreateMemoryBuffer(64 * 1024)
+                .map_err(|e| format!("创建音频输出缓冲区失败: {e}"))?;
+            let mut op: *mut u8 = std::ptr::null_mut();
+            let mut om: u32 = 0;
+            let mut oc: u32 = 0;
+            obuf
+                .Lock(&mut op, Some(&mut om), Some(&mut oc))
+                .map_err(|e| format!("锁定音频输出缓冲区失败: {e}"))?;
+            let _ = obuf.Unlock();
+            let out_sample = MFCreateSample().map_err(|e| format!("创建音频输出样本失败: {e}"))?;
+            out_sample
+                .AddBuffer(&obuf)
+                .map_err(|e| format!("添加音频输出缓冲区失败: {e}"))?;
+            let events = MFCreateCollection().map_err(|e| format!("创建事件集合失败: {e}"))?;
+            let mut data = MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: 0,
+                pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+                dwStatus: 0,
+                pEvents: std::mem::ManuallyDrop::new(Some(events)),
+            };
+            let mut buffers = [data];
+            let mut out_status: u32 = 0;
+            match aenc.ProcessOutput(0, &mut buffers, &mut out_status) {
+                Ok(()) => {
+                    if let Some(s) = buffers[0].pSample.take() {
+                        let b = s.ConvertToContiguousBuffer().map_err(|e| format!("获取音频编码输出失败: {e}"))?;
+                        let mut p2: *mut u8 = std::ptr::null_mut();
+                        let mut m2: u32 = 0;
+                        let mut c2: u32 = 0;
+                        b.Lock(&mut p2, Some(&mut m2), Some(&mut c2)).map_err(|e| format!("锁定音频编码输出失败: {e}"))?;
+                        let raw = std::slice::from_raw_parts(p2, c2 as usize);
+                        let aac = strip_adts(raw);
+                        mux.add_audio(aac)?;
+                        let _ = b.Unlock();
+                        out_blocks += 1;
+                    }
+                }
+                Err(e) => {
+                    if e.code() == windows::core::HRESULT(0xC00D6D72u32 as i32) {
+                        break;
+                    }
+                    return Err(format!("音频编码收尾失败: {e}"));
+                }
+            }
+        }
+        Ok(out_blocks)
+    }
+}
+/// Annex B（起始码）→ AVCC（4 字节大端长度前缀）；跳过 AUD（nal_type 9）
+fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        let mut nal_start = i;
+        if data[i..].starts_with(&[0u8, 0, 0, 1]) {
+            nal_start = i + 4;
+        } else if data[i..].starts_with(&[0u8, 0, 1]) {
+            nal_start = i + 3;
+        }
+        let mut j = nal_start;
+        let mut next = data.len();
+        while j + 3 < data.len() {
+            if data[j] == 0
+                && data[j + 1] == 0
+                && (data[j + 2] == 1 || (data[j + 2] == 0 && data[j + 3] == 1))
+            {
+                next = j;
+                break;
+            }
+            j += 1;
+        }
+        let nal = &data[nal_start..next];
+        if !nal.is_empty() {
+            let nal_type = nal[0] & 0x1F;
+            if nal_type != 9 {
+                out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+                out.extend_from_slice(nal);
+            }
+        }
+        i = next;
+        if next >= data.len() {
+            break;
+        }
+    }
+    out
+}
+
+fn extract_sps_pps(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut sps: Vec<u8> = Vec::new();
+    let mut pps: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        let mut nal_start = i;
+        if data[i..].starts_with(&[0u8, 0, 0, 1]) {
+            nal_start = i + 4;
+        } else if data[i..].starts_with(&[0u8, 0, 1]) {
+            nal_start = i + 3;
+        }
+        let mut j = nal_start;
+        let mut next = data.len();
+        while j + 3 < data.len() {
+            if data[j] == 0
+                && data[j + 1] == 0
+                && (data[j + 2] == 1 || (data[j + 2] == 0 && data[j + 3] == 1))
+            {
+                next = j;
+                break;
+            }
+            j += 1;
+        }
+        let nal = &data[nal_start..next];
+        if !nal.is_empty() {
+            let t = nal[0] & 0x1F;
+            if t == 7 {
+                sps = nal.to_vec();
+            } else if t == 8 {
+                pps = nal.to_vec();
+            }
+        }
+        i = next;
+        if next >= data.len() {
+            break;
+        }
+    }
+    (sps, pps)
+}
+
+struct Mp4Muxer {
+    file: std::fs::File,
+    vw: u32,
+    vh: u32,
+    v_fps_num: u32,
+    v_fps_den: u32,
+    v_sps: Vec<u8>,
+    v_pps: Vec<u8>,
+    v_sample_sizes: Vec<u32>,
+    v_sample_offsets: Vec<u64>,
+    sr: u32,
+    ch: u32,
+    a_sample_sizes: Vec<u32>,
+    a_sample_offsets: Vec<u64>,
+    a_cfg: Vec<u8>,
+    ftyp_len: usize,
+    data_start: u64,
+    file_pos: u64,
+    has_audio: bool,
+}
+
+impl Mp4Muxer {
+    fn new(
+        path: &str,
+        vw: u32,
+        vh: u32,
+        fnum: u32,
+        fden: u32,
+        sr: u32,
+        ch: u32,
+        has_audio: bool,
+        a_cfg: Vec<u8>,
+    ) -> Result<Self, String> {
+        let mut file = std::fs::File::create(path).map_err(|e| format!("创建输出文件失败: {e}"))?;
+        let mut m = Mp4Muxer {
+            file,
+            vw,
+            vh,
+            v_fps_num: fnum,
+            v_fps_den: fden,
+            v_sps: Vec::new(),
+            v_pps: Vec::new(),
+            v_sample_sizes: Vec::new(),
+            v_sample_offsets: Vec::new(),
+            sr,
+            ch,
+            a_sample_sizes: Vec::new(),
+            a_sample_offsets: Vec::new(),
+            a_cfg,
+            ftyp_len: 0,
+            data_start: 0,
+            file_pos: 0,
+            has_audio,
+        };
+        m.write_ftyp();
+        m.write_mdat_header();
+        Ok(m)
+    }
+
+    fn write_ftyp(&mut self) {
+        let mut b = Vec::new();
+        box_start(&mut b, b"ftyp");
+        fourcc(&mut b, b"isom");
+        be32(&mut b, 0);
+        fourcc(&mut b, b"isom");
+        fourcc(&mut b, b"iso2");
+        fourcc(&mut b, b"avc1");
+        fourcc(&mut b, b"mp41");
+        box_end(&mut b, 0);
+        use std::io::Write;
+        let _ = self.file.write_all(&b);
+        self.file_pos += b.len() as u64;
+        self.ftyp_len = b.len();
+    }
+
+    fn write_mdat_header(&mut self) {
+        let mut b = Vec::new();
+        box_start(&mut b, b"mdat");
+        use std::io::Write;
+        let _ = self.file.write_all(&b);
+        self.file_pos += b.len() as u64;
+        self.data_start = self.file_pos;
+    }
+
+    fn add_video(&mut self, annexb: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        if self.v_sps.is_empty() {
+            let (s, p) = extract_sps_pps(annexb);
+            self.v_sps = s;
+            self.v_pps = p;
+        }
+        let avcc = annexb_to_avcc(annexb);
+        // co64/stco 要求相对文件开头的绝对偏移（不是相对 mdat data 的偏移）
+        let off = self.file_pos;
+        self.v_sample_offsets.push(off);
+        self.v_sample_sizes.push(avcc.len() as u32);
+        self.file
+            .write_all(&avcc)
+            .map_err(|e| format!("写入视频样本失败: {e}"))?;
+        self.file_pos += avcc.len() as u64;
+        Ok(())
+    }
+
+    fn add_audio(&mut self, raw: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        // co64/stco 要求相对文件开头的绝对偏移（不是相对 mdat data 的偏移）
+        let off = self.file_pos;
+        self.a_sample_offsets.push(off);
+        self.a_sample_sizes.push(raw.len() as u32);
+        self.file
+            .write_all(raw)
+            .map_err(|e| format!("写入音频样本失败: {e}"))?;
+        self.file_pos += raw.len() as u64;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        use std::io::{Seek, Write};
+        let mdat_size = (self.file_pos - self.data_start) + 8;
+        let mdat_size_pos = self.ftyp_len as u64;
+        self.file
+            .seek(std::io::SeekFrom::Start(mdat_size_pos))
+            .map_err(|e| format!("定位 mdat 失败: {e}"))?;
+        self.file
+            .write_all(&(mdat_size as u32).to_be_bytes())
+            .map_err(|e| format!("回填 mdat 失败: {e}"))?;
+        self.file
+            .seek(std::io::SeekFrom::Start(self.file_pos))
+            .map_err(|e| format!("定位末尾失败: {e}"))?;
+        let moov = self.build_moov();
+        self.file
+            .write_all(&moov)
+            .map_err(|e| format!("写 moov 失败: {e}"))?;
+        self.file.flush().map_err(|e| format!("刷新文件失败: {e}"))?;
+        Ok(())
+    }
+
+    fn build_moov(&self) -> Vec<u8> {
+        let mut moov = Vec::new();
+        let mpos = box_start(&mut moov, b"moov");
+        let v_dur = if self.v_fps_num > 0 {
+            (self.v_sample_sizes.len() as u64) * 10_000_000u64 * (self.v_fps_den as u64)
+                / (self.v_fps_num as u64)
+        } else {
+            0
+        };
+        let a_total_samples = (self.a_sample_sizes.len() as u64) * 1024u64;
+        let a_dur = if self.sr > 0 {
+            a_total_samples * 10_000_000u64 / (self.sr as u64)
+        } else {
+            0
+        };
+        let total_dur = v_dur.max(a_dur);
+        {
+            let p = box_start(&mut moov, b"mvhd");
+            be32(&mut moov, 0);
+            be32(&mut moov, 0);
+            be32(&mut moov, 0);
+            be32(&mut moov, 10_000_000);
+            be32(&mut moov, total_dur.min(0xFFFF_FFFF) as u32);
+            be32(&mut moov, 0x0001_0000);
+            be16(&mut moov, 0x0100);
+            be16(&mut moov, 0);
+            be32(&mut moov, 0);
+            be32(&mut moov, 0);
+            for &v in &[
+                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+            ] {
+                be32(&mut moov, v);
+            }
+            for _ in 0..6 {
+                be32(&mut moov, 0);
+            }
+            be32(&mut moov, if self.has_audio { 3 } else { 2 });
+            box_end(&mut moov, p);
+        }
+        if !self.v_sample_sizes.is_empty() {
+            self.build_video_trak(&mut moov, v_dur);
+        }
+        if !self.a_sample_sizes.is_empty() {
+            self.build_audio_trak(&mut moov, a_dur, a_total_samples);
+        }
+        box_end(&mut moov, mpos);
+        moov
+    }
+
+    fn build_video_trak(&self, moov: &mut Vec<u8>, v_dur: u64) {
+        let tpos = box_start(moov, b"trak");
+        {
+            let p = box_start(moov, b"tkhd");
+            be32(moov, 0x0000_0003);
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 1);
+            be32(moov, 0);
+            be32(moov, v_dur.min(0xFFFF_FFFF) as u32);
+            be32(moov, 0);
+            be32(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            for &v in &[
+                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+            ] {
+                be32(moov, v);
+            }
+            be32(moov, self.vw << 16);
+            be32(moov, self.vh << 16);
+            box_end(moov, p);
+        }
+        {
+            let p = box_start(moov, b"mdia");
+            let p2 = box_start(moov, b"mdhd");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 10_000_000);
+            be32(moov, v_dur.min(0xFFFF_FFFF) as u32);
+            be16(moov, 0x55C4);
+            be16(moov, 0);
+            box_end(moov, p2);
+            let p2 = box_start(moov, b"hdlr");
+            be32(moov, 0);
+            be32(moov, 0);
+            fourcc(moov, b"vide");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            moov.extend_from_slice(b"VideoHandler\0");
+            box_end(moov, p2);
+            let p2 = box_start(moov, b"minf");
+            let p3 = box_start(moov, b"vmhd");
+            be32(moov, 1);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            box_end(moov, p3);
+            let p3 = box_start(moov, b"dinf");
+            let p4 = box_start(moov, b"dref");
+            be32(moov, 0);
+            be32(moov, 1);
+            let p5 = box_start(moov, b"url ");
+            be32(moov, 1);
+            box_end(moov, p5);
+            box_end(moov, p4);
+            box_end(moov, p3);
+            let p3 = box_start(moov, b"stbl");
+            let p4 = box_start(moov, b"stsd");
+            be32(moov, 0);
+            be32(moov, 1);
+            let p5 = box_start(moov, b"avc1");
+            be32(moov, 0);
+            be32(moov, 1);
+            be16(moov, 0);
+            be16(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            be16(moov, self.vw as u16);
+            be16(moov, self.vh as u16);
+            be32(moov, 0x0048_0000);
+            be32(moov, 0x0048_0000);
+            be32(moov, 0);
+            be16(moov, 1);
+            for _ in 0..32 {
+                moov.push(0);
+            }
+            be16(moov, 0x18);
+            be16(moov, 0xFFFF);
+            let p6 = box_start(moov, b"avcC");
+            moov.push(1);
+            if self.v_sps.len() >= 4 {
+                moov.push(self.v_sps[1]);
+                moov.push(self.v_sps[2]);
+                moov.push(self.v_sps[3]);
+            } else {
+                moov.push(66);
+                moov.push(0);
+                moov.push(40);
+            }
+            moov.push(0xFC | 0x03);
+            moov.push(0xE0 | 1);
+            let sps_len = self.v_sps.len().min(0xFFFF) as u16;
+            be16(moov, sps_len);
+            moov.extend_from_slice(&self.v_sps);
+            moov.push(1);
+            let pps_len = self.v_pps.len().min(0xFFFF) as u16;
+            be16(moov, pps_len);
+            moov.extend_from_slice(&self.v_pps);
+            box_end(moov, p6);
+            box_end(moov, p5);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stts");
+            be32(moov, 0);
+            be32(moov, 1);
+            be32(moov, self.v_sample_sizes.len() as u32);
+            let v_delta = if self.v_fps_num > 0 {
+                (10_000_000u64 * (self.v_fps_den as u64) / (self.v_fps_num as u64)) as u32
+            } else {
+                333333
+            };
+            be32(moov, v_delta);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stsc");
+            be32(moov, 0);
+            be32(moov, 1);
+            be32(moov, 1);
+            be32(moov, self.v_sample_sizes.len() as u32);
+            be32(moov, 1);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stsz");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, self.v_sample_sizes.len() as u32);
+            for s in &self.v_sample_sizes {
+                be32(moov, *s);
+            }
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"co64");
+            be32(moov, 0);
+            be32(moov, self.v_sample_offsets.len() as u32);
+            for o in &self.v_sample_offsets {
+                be64(moov, *o);
+            }
+            box_end(moov, p4);
+            box_end(moov, p3);
+            box_end(moov, p2);
+            box_end(moov, p);
+        }
+        box_end(moov, tpos);
+    }
+
+    fn build_audio_trak(&self, moov: &mut Vec<u8>, a_dur: u64, a_total_samples: u64) {
+        let tpos = box_start(moov, b"trak");
+        {
+            let p = box_start(moov, b"tkhd");
+            be32(moov, 0x0000_0003);
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 2);
+            be32(moov, 0);
+            be32(moov, a_dur.min(0xFFFF_FFFF) as u32);
+            be32(moov, 0);
+            be32(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            for &v in &[
+                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+            ] {
+                be32(moov, v);
+            }
+            be32(moov, 0);
+            be32(moov, 0);
+            box_end(moov, p);
+        }
+        {
+            let p = box_start(moov, b"mdia");
+            let p2 = box_start(moov, b"mdhd");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, self.sr);
+            be32(moov, a_total_samples.min(0xFFFF_FFFF) as u32);
+            be16(moov, 0x55C4);
+            be16(moov, 0);
+            box_end(moov, p2);
+            let p2 = box_start(moov, b"hdlr");
+            be32(moov, 0);
+            be32(moov, 0);
+            fourcc(moov, b"soun");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, 0);
+            moov.extend_from_slice(b"SoundHandler\0");
+            box_end(moov, p2);
+            let p2 = box_start(moov, b"minf");
+            let p3 = box_start(moov, b"smhd");
+            be32(moov, 0);
+            be16(moov, 0);
+            be16(moov, 0);
+            box_end(moov, p3);
+            let p3 = box_start(moov, b"dinf");
+            let p4 = box_start(moov, b"dref");
+            be32(moov, 0);
+            be32(moov, 1);
+            let p5 = box_start(moov, b"url ");
+            be32(moov, 1);
+            box_end(moov, p5);
+            box_end(moov, p4);
+            box_end(moov, p3);
+            let p3 = box_start(moov, b"stbl");
+            let p4 = box_start(moov, b"stsd");
+            be32(moov, 0);
+            be32(moov, 1);
+            let p5 = box_start(moov, b"mp4a");
+            be32(moov, 0); // reserved 前 4 字节（共 6 字节 reserved + data_ref）
+            be16(moov, 0);
+            be16(moov, 1); // data_reference_index = 1（引用 dref 第 1 项；为 0 会被 SourceReader 丢弃音轨）
+            be16(moov, 0); // version
+            be16(moov, 0); // revision
+            be32(moov, 0); // vendor
+            be16(moov, self.ch as u16); // channelcount
+            be16(moov, 16); // samplesize
+            be16(moov, 0); // pre_defined
+            be16(moov, 0); // reserved
+            be32(moov, self.sr << 16); // samplerate
+            // esds box：ES_Descriptor → DecoderConfigDescriptor → AudioSpecificConfig
+            // 注意：descriptor 长度必须用多字节 7-bit 编码（0x80 0x80 0x80 xx），
+            // 与 Windows 自带 MP4 源文件一致；单字节长度（03 19）实测不被 Windows 解析器接受
+            let asc = if self.a_cfg.len() >= 2 {
+                self.a_cfg[..2].to_vec()
+            } else {
+                vec![0x13, 0x10]
+            };
+            let dsi_len = asc.len() as u32; // 2
+            // DCD payload = objectType(1)+streamType(1)+buffer(3)+max(4)+avg(4)+DSI(1+4+asc)=13+7=20
+            let dcd_content_len = 13u32 + (1 + 4 + dsi_len);
+            // ES payload = ES_ID(2)+flags(1)+DCD(1+4+20)+SL(1+4+1)=3+25+6=34
+            let esd_content_len = 3u32 + (1 + 4 + dcd_content_len) + 6;
+            let mut esds = Vec::new();
+            be32(&mut esds, 0); // version + flags
+            esds.push(0x03);
+            esds.extend_from_slice(&[0x80, 0x80, 0x80, esd_content_len as u8]);
+            be16(&mut esds, 2); // ES_ID（源文件为 0x0002）
+            esds.push(0); // flags
+            esds.push(0x04);
+            esds.extend_from_slice(&[0x80, 0x80, 0x80, dcd_content_len as u8]);
+            esds.push(0x40); // objectTypeIndication: MPEG-4 Audio
+            esds.push(0x15); // streamType: audio (0x15)
+            esds.extend_from_slice(&[0, 0, 0]); // bufferSizeDB
+            esds.extend_from_slice(&[0x00, 0x02, 0xee, 0x00]); // maxBitrate = 192000
+            esds.extend_from_slice(&[0x00, 0x02, 0xee, 0x00]); // avgBitrate = 192000
+            esds.push(0x05); // DecoderSpecificInfo
+            esds.extend_from_slice(&[0x80, 0x80, 0x80, dsi_len as u8]);
+            esds.extend_from_slice(&asc);
+            esds.push(0x06); // SLConfigDescriptor
+            esds.extend_from_slice(&[0x80, 0x80, 0x80, 0x01]);
+            esds.push(0x02);
+            let p6 = box_start(moov, b"esds");
+            moov.extend_from_slice(&esds);
+            box_end(moov, p6);
+            box_end(moov, p5);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stts");
+            be32(moov, 0);
+            be32(moov, 1);
+            be32(moov, self.a_sample_sizes.len() as u32);
+            be32(moov, 1024);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stsc");
+            be32(moov, 0);
+            be32(moov, 1);
+            be32(moov, 1);
+            be32(moov, self.a_sample_sizes.len() as u32);
+            be32(moov, 1);
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"stsz");
+            be32(moov, 0);
+            be32(moov, 0);
+            be32(moov, self.a_sample_sizes.len() as u32);
+            for s in &self.a_sample_sizes {
+                be32(moov, *s);
+            }
+            box_end(moov, p4);
+            let p4 = box_start(moov, b"co64");
+            be32(moov, 0);
+            be32(moov, self.a_sample_offsets.len() as u32);
+            for o in &self.a_sample_offsets {
+                be64(moov, *o);
+            }
+            box_end(moov, p4);
+            box_end(moov, p3);
+            box_end(moov, p2);
+            box_end(moov, p);
+        }
+        box_end(moov, tpos);
+    }
+}
+
+
+/// 把 PCM 采样按映射编码为 AAC 并写入自写 MP4（仅音轨；系统 MF AAC 编码器，不再使用 Dolby AC-3）
+fn write_audio_aac_mp4(
+    output: &str,
+    all_samples: &[i16],
+    channels: u32,
+    sample_rate: u32,
+    target_frame_count: usize,
+    pick: impl Fn(usize) -> usize,
+) -> Result<(), String> {
+    unsafe {
+        let aenc = create_aac_encoder(sample_rate, channels)?;
+        let mut mux = Mp4Muxer::new(
+            output,
+            0,
+            0,
+            0,
+            0,
+            sample_rate,
+            channels,
+            true,
+            aac_asc(sample_rate, channels),
+        )
+        .map_err(|e| format!("创建输出文件失败: {e}"))?;
+        encode_audio_aac_loop(
+            &aenc,
+            &mut mux,
+            all_samples,
+            channels,
+            sample_rate,
+            target_frame_count,
+            &pick,
+        )?;
+        mux.finish().map_err(|e| format!("写入输出文件失败: {e}"))
+    }
 }
