@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { store } from "@/lib/store";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import {
@@ -350,6 +351,8 @@ export default function NetworkOptimizerPage() {
   // DNS 延迟自动测速:每 1s 对所有预设的首选 DNS 发起真实查询,按卡片展示
   const [dnsLatency, setDnsLatency] = useState<Record<string, DnsLatency>>({});
   const dnsLatencyInFlight = useRef<Set<string>>(new Set());
+  // 测速实体放进 ref：useVisibleInterval 只负责调度（不可见时停表）
+  const probeAllRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     let cancelled = false;
@@ -379,13 +382,19 @@ export default function NetworkOptimizerPage() {
         });
     };
     const probeAll = () => dnsPresets.forEach(probe);
-    probeAll();
-    const timer = setInterval(probeAll, 1000);
+    probeAllRef.current = probeAll;
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      probeAllRef.current = () => {};
     };
   }, []);
+
+  /**
+   * DNS 延迟测速的调度：交给 useVisibleInterval（页面不可见时停表，恢复可见立刻补测一轮）。
+   * 每轮会给每个预设 DNS 发一次真实查询（IPC + 真实网络请求），
+   * 用户看不到页面时继续 1s 一轮纯属白烧网络与 CPU。
+   */
+  useVisibleInterval(() => probeAllRef.current(), 1000);
 
   const headingColor = useColorModeValue("gray.900", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");

@@ -10,7 +10,8 @@
  *
  * 性能策略（三层解耦）：
  * 1. ExpandedPlayer 不再因 timeupdate 而重渲染（进度条独立组件）
- * 2. 本组件用低频定时器（~250ms）检查 activeIndex，仅在行变化时 setState
+ * 2. 本组件以 audio 事件（timeupdate/seeked/play/pause）驱动 activeIndex，
+ *    1s 定时器仅作兜底（页面不可见时停表），且仅在行变化时 setState
  * 3. KaraokeLyricLine 内部 RAF 直接读 audioRef，60fps 仅操作 DOM
  * 三层完全独立，播放期间 ExpandedPlayer 零 re-render
  */
@@ -20,6 +21,13 @@ import { Box, VStack, Spinner, Text } from "@chakra-ui/react";
 import { Music as MusicIcon } from "lucide-react";
 import type { KaraokeLine } from "@/types/music";
 import { KaraokeLyricLine } from "./KaraokeLyricLine";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
+
+/**
+ * activeIndex 兜底检查间隔：主路径已改为 audio 事件驱动，这里只兜「事件丢失」，
+ * 1s 足以保证歌词不长期卡住，同时把定时唤醒从 4 次/秒降到 1 次/秒
+ */
+const FALLBACK_CHECK_MS = 1000;
 
 interface KaraokeLyricsViewProps {
   lines: KaraokeLine[];
@@ -93,8 +101,14 @@ function KaraokeLyricsViewInner({
     }
   }, [lines]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 低频定时器（~250ms）检查 activeIndex，仅在行变化时 setState
-  // 避免依赖外部 currentTime prop 导致整个组件树重渲染
+  /**
+   * activeIndex 推进：事件驱动 + 1s 兜底（与 ImmersiveLyricsView 保持一致）。
+   *
+   * checkActive 只读本地 audioRef.currentTime（无 IPC），原来 250ms 轮询只是
+   * 「为了跟上播放进度」。改为监听 audio 事件（timeupdate 约 4 次/秒且仅播放时
+   * 触发，暂停后彻底静默），再加 1s 兜底定时器覆盖丢事件的情况。
+   */
+  const checkActiveRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!audioRef) return;
 
@@ -118,12 +132,20 @@ function KaraokeLyricsViewInner({
       setActiveIndex((prev) => (prev !== newIdx ? newIdx : prev));
     };
 
+    checkActiveRef.current = checkActive;
     // 立即检查一次
     checkActive();
 
-    const interval = setInterval(checkActive, 250);
-    return () => clearInterval(interval);
+    const events = ["timeupdate", "seeked", "play", "pause"] as const;
+    events.forEach((ev) => audioRef.addEventListener(ev, checkActive));
+    return () => {
+      events.forEach((ev) => audioRef.removeEventListener(ev, checkActive));
+      checkActiveRef.current = () => {};
+    };
   }, [audioRef]);
+
+  // 兜底定时器：包装一层，保证永远调用到最新的 checkActive
+  useVisibleInterval(() => checkActiveRef.current(), FALLBACK_CHECK_MS, Boolean(audioRef));
 
   // 自动滚动到当前行
   useEffect(() => {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sysinfo::{Pid, ProcessRefreshKind, System};
+use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, System};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 use log;
@@ -329,7 +329,11 @@ fn get_cpu_topology_win32() -> Result<CpuTopology, String> {
 }
 
 fn get_cpu_name() -> String {
-    let sys = System::new_all();
+    // 只需要 CPU 品牌名，用 `System::new()` + 仅刷新 CPU 列表即可。
+    // 原实现用 `System::new_all()`：它会枚举**全部进程**并逐个读取内存/CPU 等字段，
+    // 对本函数来说是纯浪费（进程数越多越慢），而 CPU 调度页每次进入都会调用这里。
+    let mut sys = System::new();
+    sys.refresh_cpu_specifics(CpuRefreshKind::new());
     let cpus = sys.cpus();
     if !cpus.is_empty() {
         return cpus[0].brand().to_string();

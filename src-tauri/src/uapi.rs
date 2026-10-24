@@ -11,7 +11,6 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
-use std::time::Duration;
 
 /// 随机图片接口完整 API 地址（文档标注的完整地址，含 /api/v1 前缀）
 const RANDOM_IMAGE_URL: &str = "https://uapis.cn/api/v1/random/image";
@@ -112,11 +111,8 @@ pub async fn get_random_image(
     let key = resolve_api_key(api_key);
 
     // ---- 构建 HTTP 客户端（连接/总超时） ----
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("CLIENT_ERROR|创建 HTTP 客户端失败: {e}"))?;
+    // 复用全局连接池，避免每次取图都重建 Client。
+    let client = crate::utils::http::client_for(REQUEST_TIMEOUT_SECS, Some(CONNECT_TIMEOUT_SECS));
 
     let mut request = client.get(RANDOM_IMAGE_URL);
     if let Some(c) = category.as_deref().map(str::trim) {

@@ -18,6 +18,7 @@ import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { useNavigate } from "react-router-dom";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useNavPosition } from "@/components/ui/main-layout";
 
 interface NtpQueryResult {
@@ -77,12 +78,10 @@ export default function TimeSyncPage() {
   const subColor = useColorModeValue("gray.500", "#888888");
   const mainTextColor = useColorModeValue("#000000", "#ffffff");
 
-  // 实时系统时钟（每秒跳动）
+  // 实时系统时钟（每秒跳动）：纯本地 state 更新，但同样没必要在页面不可见时每秒唤醒，
+  // 交给 useVisibleInterval（不可见停表，切回来立刻校准一次，不会显示过期时间）
   const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  useVisibleInterval(() => setNow(new Date()), 1000);
 
   // 每个时间服务器一张卡片
   const [cards, setCards] = useState<ServerCardData[]>([]);
@@ -151,7 +150,8 @@ export default function TimeSyncPage() {
         }));
         cardsRef.current = mapped;
         setCards(mapped);
-        fireBatch();
+        // 首轮检测交给下面的 useVisibleInterval：cards 从空变为非空会触发它立即执行一次，
+        // 这里再调 fireBatch 会让同一毫秒内发两轮 NTP 查询
       })
       .catch((err) => console.error("load ntp servers failed:", err));
     invoke<boolean>("is_app_admin")
@@ -162,12 +162,13 @@ export default function TimeSyncPage() {
     };
   }, [fireBatch]);
 
-  // 实时轮询：每 1s 并发检测一轮
-  useEffect(() => {
-    if (cards.length === 0) return;
-    const id = setInterval(() => fireBatch(), POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [cards.length, fireBatch]);
+  // 实时轮询：每 1s 并发检测一轮。交给 useVisibleInterval 调度：
+  // 页面不可见时（用户看不到偏差数值）停止发 NTP 查询，切回来立刻补一轮。
+  useVisibleInterval(
+    () => fireBatch(),
+    POLL_INTERVAL_MS,
+    cards.length > 0,
+  );
 
   // 校准：直接用最近一次检测到的偏差（毫秒），无需重新联网，秒级完成
   const handleApply = useCallback(

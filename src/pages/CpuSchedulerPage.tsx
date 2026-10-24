@@ -26,6 +26,7 @@ import {
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
 import { useDynamicIsland } from "@/components/ui/dynamic-island";
 import { useProcessIcons } from "@/hooks/use-process-icons";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
@@ -175,8 +176,6 @@ export default function CpuSchedulerPage() {
   const [isApplying, setIsApplying] = useState(false);
   const [isSavingRule, setIsSavingRule] = useState(false);
 
-  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // ── Data Loading ────────────────────────────────────────
 
   const loadTopology = useCallback(async () => {
@@ -216,19 +215,26 @@ export default function CpuSchedulerPage() {
     loadRules();
   }, [loadTopology, loadProcesses, loadRules]);
 
-  // Auto-refresh process list
-  useEffect(() => {
-    if (searchQuery) return;
-    refreshTimerRef.current = setInterval(() => {
-      invoke<ProcessInfo[]>("get_process_list")
-        .then(data => {
-          setProcesses(data);
-          ensureIcons(data.map(p => p.exe_path));
-        })
-        .catch(() => {});
-    }, 3000);
-    return () => { if (refreshTimerRef.current) clearInterval(refreshTimerRef.current); };
-  }, [searchQuery, ensureIcons]);
+  // Auto-refresh process list：3s 一次 get_process_list（IPC + 图标批量拉取）。
+  // 交给 useVisibleInterval 调度（页面不可见时停表，切回来立刻补一次）；
+  // 搜索框有内容时暂停（原语义：用户正在筛选，列表不该跳动）
+  const skipFirstRefreshRef = useRef(true);
+  const refreshProcesses = useCallback(() => {
+    // 挂载时 hook 会立即跑一次，而上面已用 loadProcesses() 拉过一遍，
+    // 这里跳过首轮，避免进页面瞬间发两次 get_process_list
+    if (skipFirstRefreshRef.current) {
+      skipFirstRefreshRef.current = false;
+      return;
+    }
+    invoke<ProcessInfo[]>("get_process_list")
+      .then(data => {
+        setProcesses(data);
+        ensureIcons(data.map(p => p.exe_path));
+      })
+      .catch(() => {});
+  }, [ensureIcons]);
+
+  useVisibleInterval(refreshProcesses, 3000, !searchQuery);
 
   // ── Process Selection ───────────────────────────────────
 

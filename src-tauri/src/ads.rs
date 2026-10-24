@@ -86,11 +86,9 @@ fn get_memory_cache() -> Arc<RwLock<MemoryCache>> {
 }
 
 async fn fetch_ads() -> Result<AdsConfig, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    // 复用全局连接池：原先每次拉广告都新建 Client（重做 TCP/TLS 握手），
+    // 而广告是启动即拉取的高频小请求，连接复用收益直接体现在启动耗时上。
+    let client = crate::utils::http::client_for(REQUEST_TIMEOUT_SECS, Some(CONNECT_TIMEOUT_SECS));
 
     let response = client
         .get(ADS_URL)
@@ -155,12 +153,9 @@ pub async fn get_ad_image(app: tauri::AppHandle, url: String) -> Result<String, 
     let file = dir.join(format!("{}.img", hasher.finish()));
 
     if !file.exists() {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(20))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 NeoBox")
-            .build()
-            .map_err(|e| format!("client error: {e}"))?;
+        // 广告图下载复用共享连接池（20 秒整体 / 8 秒连接），
+        // 避免每张图都重做一次握手。
+        let client = crate::utils::http::client_for(20, Some(8));
 
         let resp = client
             .get(&url)

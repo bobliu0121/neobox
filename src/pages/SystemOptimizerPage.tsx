@@ -37,6 +37,7 @@ import {
   type OptimizerCategory,
 } from "@/config/system-optimizer";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 const STORE_KEY = "system_optimizer_states";
 const NOTICE_KEY = "system_optimizer_notice_agreed";
@@ -391,14 +392,29 @@ export default function SystemOptimizerPage() {
     };
   }, [setSavedStates]);
 
-  // 5 秒倒计时
+  /**
+   * 5 秒倒计时：交给 useVisibleInterval 托管（页面不可见时自动暂停倒计时）。
+   * 原实现把 noticeCountdown 放进依赖数组，每秒都会 clear + 重建一次 interval。
+   *
+   * 首次立即执行的抑制：hook 在「启用瞬间」会先跑一次回调，若直接递减会让倒计时
+   * 一出现就跳到 4 秒。这里用时间戳门槛跳过这一次（取 800ms 而非 1000ms，
+   * 是为了容忍定时器轻微提前触发，不至于多跳一轮导致倒计时卡顿）。
+   */
+  const lastNoticeTickAtRef = useRef(0);
   useEffect(() => {
-    if (!showNotice || noticeCountdown <= 0) return;
-    const timer = setInterval(() => {
+    // 提示刚出现时重置基准，让 hook 的立即执行落在门槛之内（被跳过一次）
+    if (showNotice) lastNoticeTickAtRef.current = Date.now();
+  }, [showNotice]);
+  useVisibleInterval(
+    () => {
+      const now = Date.now();
+      if (now - lastNoticeTickAtRef.current < 800) return;
+      lastNoticeTickAtRef.current = now;
       setNoticeCountdown((c) => Math.max(0, c - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [showNotice, noticeCountdown]);
+    },
+    1000,
+    showNotice && noticeCountdown > 0,
+  );
 
   const handleNoticeConfirm = async () => {
     try {

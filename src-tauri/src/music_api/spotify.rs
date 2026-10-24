@@ -48,7 +48,7 @@ async fn fetch_access_token(app: &AppHandle) -> Result<String, String> {
     let (client_id, client_secret) = read_credentials(app)
         .ok_or_else(|| "Spotify 未配置：请先在登录面板填写 Client ID 与 Client Secret（developer.spotify.com 免费创建应用）".to_string())?;
     let basic = B64.encode(format!("{client_id}:{client_secret}"));
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .post(TOKEN_URL)
         .header("Authorization", format!("Basic {basic}"))
@@ -89,7 +89,7 @@ pub async fn spotify_search(app: AppHandle, keywords: String, limit: Option<u32>
 
 async fn search_impl(app: &AppHandle, keywords: &str, limit: u32) -> Result<Vec<Song>, String> {
     let token = get_access_token(app).await?;
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get(format!("{API_BASE}/search"))
         .header("Authorization", format!("Bearer {token}"))
@@ -181,7 +181,7 @@ pub async fn spotify_song_url(app: AppHandle, id: String) -> Result<SongUrlResul
 
 async fn song_url_impl(app: &AppHandle, id: &str) -> Result<SongUrlResult, String> {
     let token = get_access_token(app).await?;
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get(format!("{API_BASE}/tracks/{id}"))
         .header("Authorization", format!("Bearer {token}"))

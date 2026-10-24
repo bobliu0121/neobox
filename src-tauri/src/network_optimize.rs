@@ -766,10 +766,9 @@ fn extract_ipv4(text: &str, provider: PublicIpProvider) -> Option<String> {
 /// 获取当前网络的公网 IPv4 地址（多 API 顺序 fallback，国内可访问）
 #[tauri::command]
 pub async fn get_public_ip() -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("初始化 HTTP 客户端失败: {}", e))?;
+    // 复用全局连接池（5 秒档）：公网 IP 查询会对多个 API 顺序 fallback，
+    // 复用连接能让后续尝试直接走 keep-alive，显著缩短 fallback 链路耗时。
+    let client = crate::utils::http::client_with_timeout(5);
 
     for &(url, provider) in PUBLIC_IP_PROVIDERS {
         if let Ok(resp) = client.get(url).send().await {

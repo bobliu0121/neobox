@@ -38,6 +38,7 @@ import {
   Thermometer, Gauge, Fan, Zap, Clock, Activity, RefreshCw, ChevronDown,
 } from "lucide-react";
 import type { SensorReading, SensorsResponse } from "@/lib/sensors";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 // ===== 常量 =====
 
@@ -456,10 +457,12 @@ export default function SensorMonitorPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const isMounted = useRef(true);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchingRef = useRef(false);
   const sensorsRef = useRef<SensorReading[]>([]);
   const visibleRef = useRef(true);
+  // 可见性状态（驱动 useVisibleInterval 的启停）：Rust 侧的 window-visibility-changed
+  // 与 document.visibilitychange 都会更新它，比单一信号更可靠
+  const [pageVisible, setPageVisible] = useState(true);
 
   const bg = useColorModeValue("#111111", "#0a0a0a");
   const textColor = useColorModeValue("#e0e0e0", "#ffffff");
@@ -476,29 +479,24 @@ export default function SensorMonitorPage() {
     });
   }, []);
 
-  // 监听窗口可见性变化，隐藏时暂停轮询并释放 GPU 资源
+  // 监听窗口可见性变化：隐藏时停轮询（由 useVisibleInterval 统一管理）并释放 GPU 资源。
+  // 两个信号都要听：Rust 侧 window-visibility-changed（窗口被别的窗口遮挡时由后端判定）
+  // 与标准 document.visibilitychange（最小化/被完全遮挡）。任一判定隐藏即视为隐藏。
   useEffect(() => {
     const updateVisible = (visible: boolean) => {
       visibleRef.current = visible;
+      // 驱动 useVisibleInterval 启停：不可见时彻底不注册定时器，零唤醒
+      setPageVisible(visible);
       if (!visible) {
-        // 隐藏时：暂停轮询 + 停止 WebView2 GPU 渲染
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
         // content-visibility: hidden 让 Chromium 跳过该元素渲染，
         // 从而释放 WebView2 GPU 进程的 GPU 占用
         document.body.style.contentVisibility = "hidden";
         document.body.style.overflow = "hidden";
       } else {
-        // 恢复时：恢复渲染 + 拉取最新数据 + 恢复轮询
+        // 恢复渲染；数据刷新由 useVisibleInterval 的「转为可见立刻执行一次」负责，
+        // 不在本 effect 里手动调 fetch，避免两处同时发起 IPC
         document.body.style.contentVisibility = "";
         document.body.style.overflow = "";
-        if (isMounted.current) {
-          const fetchData = createFetchFn();
-          fetchData();
-          intervalRef.current = setInterval(fetchData, POLL_INTERVAL_MS);
-        }
       }
     };
 
@@ -549,22 +547,26 @@ export default function SensorMonitorPage() {
     };
   }, []);
 
-  // 轮询传感器数据（仅在窗口可见时运行）
+  // 轮询实体：放进 ref，交给 useVisibleInterval 调度（不可见自动停表）
+  const fetchDataRef = useRef<() => Promise<void>>(async () => {});
+
   useEffect(() => {
     isMounted.current = true;
-
-    const fetchData = createFetchFn();
-    fetchData();
-    intervalRef.current = setInterval(fetchData, POLL_INTERVAL_MS);
+    fetchDataRef.current = createFetchFn();
 
     return () => {
       isMounted.current = false;
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      fetchDataRef.current = async () => {};
     };
   }, [createFetchFn]);
+
+  // 传感器轮询（1s）：页面不可见时不跑；转为可见时立刻补一次最新数据。
+  // 挂载时 hook 本身会立即执行一次，因此这里不再另写首拉（避免同一时刻两次 IPC）
+  useVisibleInterval(
+    () => void fetchDataRef.current(),
+    POLL_INTERVAL_MS,
+    pageVisible,
+  );
 
   // 筛选逻辑（过滤掉虚拟内存传感器）
   const filtered = useMemo(() => sensors.filter((s) => {

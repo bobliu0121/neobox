@@ -15,6 +15,7 @@ import {
   Tooltip,
 } from "@chakra-ui/react";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useDynamicIsland } from "@/components/ui/dynamic-island";
 import { useAppStartup } from "@/contexts/app-startup-context";
 import { useBackground } from "@/contexts/background-context";
@@ -424,7 +425,11 @@ export default function HardwarePage() {
   };
 
   const isMounted = useRef(true);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  /**
+   * 轮询实体放进 ref：useVisibleInterval 只负责「什么时候跑」，
+   * 刷新逻辑（含 isMounted 守卫与并行 IPC）保持原样，避免语义漂移
+   */
+  const fetchSensorDataRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     isMounted.current = true;
@@ -499,17 +504,18 @@ export default function HardwarePage() {
       }
     };
 
-    fetchSensorData();
-    intervalRef.current = setInterval(fetchSensorData, 2000);
+    fetchSensorDataRef.current = fetchSensorData;
 
     return () => {
       isMounted.current = false;
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      fetchSensorDataRef.current = async () => {};
     };
   }, []); // 不依赖 hardwareInfo，立即开始轮询
+
+  // 页面级轮询：2s 一次；不可见时彻底停表，切回来立刻补一次最新数据。
+  // 注意这里每轮是 3 个串行 IPC（overlay/memory/disk），隐藏页面时停掉性价比很高。
+  // 挂载时 useVisibleInterval 会立即执行一次，所以不需要在这里另写首拉
+  useVisibleInterval(() => void fetchSensorDataRef.current(), 2000);
 
   // 从多 GPU 列表中取当前活跃 GPU 的数据
   const activeGpuData = gpuSensors.length > 0 ? (gpuSensors[activeGpuIndex] ?? gpuSensors[0]) : null;

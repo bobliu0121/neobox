@@ -136,12 +136,9 @@ fn fallback_release() -> ReleaseInfo {
 }
 
 async fn fetch_releases() -> Result<Vec<ReleaseInfo>, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .user_agent("NeoBox/1.0 (+https://github.com/bobliu0121/neobox)")
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    // 复用全局连接池，并显式带 User-Agent（GitHub API 要求 UA，
+    // 共享客户端统一用同一 UA，避免各模块不一致）。
+    let client = crate::utils::http::client_for(REQUEST_TIMEOUT_SECS, Some(CONNECT_TIMEOUT_SECS));
 
     let response = client
         .get(RELEASES_URL)

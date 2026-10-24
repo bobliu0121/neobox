@@ -4,7 +4,7 @@
 //!
 //! 所有 API 端点、签名算法、请求参数、降级策略均与 server.js 完全一致。
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
@@ -54,18 +54,19 @@ const AUDIO_URL_PROBE_BYTES: usize = 8192;
 //  HTTP 请求工具
 // ============================================================
 
-fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("Failed to build HTTP client")
+/// 返回全局共享的 HTTP 客户端（15 秒超时）。
+///
+/// 原先每请求新建 Client，连接池无法复用；改为共享单例后 keep-alive 生效。
+fn build_client() -> &'static reqwest::Client {
+    crate::utils::http::client()
 }
 
-pub(crate) fn build_client_with_timeout(timeout_ms: u64) -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .build()
-        .expect("Failed to build HTTP client")
+/// 按时长（毫秒）取共享客户端。
+///
+/// 用毫秒级缓存，保证探测类请求（如 2.5 秒）的超时与原先完全一致，
+/// 同时仍能复用连接池，省掉重复重建 Client 的开销。
+pub(crate) fn build_client_with_timeout(timeout_ms: u64) -> &'static reqwest::Client {
+    crate::utils::http::client_with_timeout_ms(timeout_ms)
 }
 
 /// 发送请求并返回文本 (对照 requestText)

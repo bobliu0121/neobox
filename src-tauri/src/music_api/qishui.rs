@@ -613,7 +613,7 @@ async fn qishui_luna_get(
         params.push((k.to_string(), v.clone()));
     }
     let url = format!("https://api.qishui.com{path}");
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get(&url)
         .query(&params)
@@ -1828,7 +1828,7 @@ pub async fn qishui_search_artists(
 /// 公开目录搜索：api-vehicle.volcengine.com/v2/search/type
 async fn qishui_public_search(keywords: &str, limit: u32) -> Result<Vec<Song>, String> {
     let request_limit = (limit.saturating_mul(3)).clamp(36, 100).to_string();
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get("https://api-vehicle.volcengine.com/v2/search/type")
         .query(&[
@@ -2078,7 +2078,8 @@ async fn install_qishui_deps(app: &AppHandle) -> Result<(), String> {
     }
 
     log::info!("[Qishui] 开始下载签名依赖包: {}", QISHUI_DEPS_URL);
-    let mut resp = reqwest::Client::new()
+    // 签名依赖包体积较大且是长时下载：复用 900 秒档位的共享客户端，避免重建连接池。
+    let mut resp = crate::utils::http::client_with_timeout(900)
         .get(QISHUI_DEPS_URL)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
         .timeout(Duration::from_secs(900))
@@ -2409,7 +2410,7 @@ pub async fn qishui_song_url(
     }
 
     // 方案一：免签名 H5 SEO（明文音频；免费歌全曲、VIP 歌 30 秒试听）
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get("https://beta-luna.douyin.com/luna/h5/seo_track")
         .query(&[("track_id", id.clone()), ("device_platform", "web".to_string())])
@@ -2594,7 +2595,7 @@ pub async fn qishui_lyric(app: AppHandle, id: String) -> Result<Lyrics, String> 
     if id.is_empty() {
         return Ok(Lyrics::default());
     }
-    let client = reqwest::Client::new();
+    let client = crate::utils::http::client();
     let resp = client
         .get("https://beta-luna.douyin.com/luna/h5/seo_track")
         .query(&[("track_id", id.clone()), ("device_platform", "web".to_string())])

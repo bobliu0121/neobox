@@ -15,6 +15,7 @@ import { CustomSelect } from "@/components/special/custom-select";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 interface MemoryData {
   physical_total: number; physical_used: number; physical_available: number;
@@ -131,11 +132,9 @@ export default function MemoryCleanupPage() {
     })();
   }, []);
 
-  useEffect(() => {
-    fetchMemoryData();
-    const interval = setInterval(fetchMemoryData, 2000);
-    return () => clearInterval(interval);
-  }, [fetchMemoryData]);
+  // 内存数据轮询：2s 一次；页面不可见时停表，切回来立刻刷新一次
+  // （原实现是固定 setInterval，隐藏时仍在跑 1 次/2s 的 IPC）
+  useVisibleInterval(() => void fetchMemoryData(), 2000);
 
   // Start/stop auto-clean when switch changes
   useEffect(() => {

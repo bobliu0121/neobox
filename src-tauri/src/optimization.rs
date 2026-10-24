@@ -578,8 +578,13 @@ pub struct MemoryLimitResult {
 }
 
 fn get_physical_memory_mb() -> u64 {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    // 原实现用的是 System::new_all() + refresh_all()：new_all() 本身就会枚举全部进程，
+    // refresh_all() 又全量刷新一遍（进程 + CPU + 内存），而本函数只读 total_memory()。
+    // 现在降级为 System::new() + refresh_memory()（一次 GlobalMemoryStatusEx），
+    // 不做进程枚举，也不碰 CPU 采样。调用方有 4 处（内存限制状态/设置、页面文件状态/设置），
+    // 每次进入设置页都会走到，降级后开销可忽略。
+    let mut sys = System::new();
+    sys.refresh_memory();
     sys.total_memory() / 1024 / 1024
 }
 

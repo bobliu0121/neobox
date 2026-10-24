@@ -103,11 +103,8 @@ fn get_memory_cache() -> Arc<RwLock<MemoryCache>> {
 }
 
 async fn fetch_thanks() -> Result<Vec<ThanksItem>, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    // 复用全局连接池，省掉每次拉取都重建 Client 的开销。
+    let client = crate::utils::http::client_for(REQUEST_TIMEOUT_SECS, Some(CONNECT_TIMEOUT_SECS));
 
     let response = client
         .get(THANKS_URL)

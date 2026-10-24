@@ -5,7 +5,7 @@
 //! 所有签名算法、API 端点、请求参数、降级策略均与 kugou-api.js 完全一致。
 
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
@@ -481,11 +481,9 @@ pub fn build_request_cookie(cookie: &str) -> String {
 //  HTTP 请求 (对照 kugou-api.js)
 // ============================================================
 
-fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("Failed to build HTTP client")
+/// 返回全局共享的 HTTP 客户端（15 秒超时），复用连接池。
+fn build_client() -> &'static reqwest::Client {
+    crate::utils::http::client()
 }
 
 /// 发送请求并返回 JSON

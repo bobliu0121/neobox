@@ -27,13 +27,14 @@ import {
   useDisclosure,
 } from "@chakra-ui/react";
 import { useDynamicIsland } from "@/components/ui/dynamic-island";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, ArrowLeft, Trash2, Plus, Move, RotateCcw, Settings } from "lucide-react";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
 import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useBackground } from "@/contexts/background-context";
 import { useAppStartup } from "@/contexts/app-startup-context";
 import { useNavigate } from "react-router-dom";
@@ -312,6 +313,8 @@ export default function OverlayPanelPage() {
   const [isDragMode, setIsDragMode] = useState(false);
   const [autoApplyOnStartup, setAutoApplyOnStartup] = useState(false);
   const [isNvidia, setIsNvidia] = useState(true);
+  // 硬件数据刷新的请求序号（用 ref 递增，避免把序号放进 state 触发额外渲染）
+  const hardwareRequestIdRef = useRef(0);
 
   const headingColor = useColorModeValue("gray.900", "#ffffff");
   const subTextColor = useColorModeValue("gray.600", "gray.400");
@@ -333,7 +336,8 @@ export default function OverlayPanelPage() {
 
   useEffect(() => {
     loadStatus();
-    loadHardwareData(0);
+    // 硬件数据的首拉交给下面的 useVisibleInterval（挂载时它会立即执行一次），
+    // 这里不再重复调用，避免同一时刻发两次同样的 IPC
     invoke<boolean>("is_nvidia_gpu").then(setIsNvidia).catch(() => setIsNvidia(false));
   }, []);
 
@@ -351,14 +355,13 @@ export default function OverlayPanelPage() {
     };
   }, []);
 
-  useEffect(() => {
-    let requestId = 0;
-    const interval = setInterval(() => {
-      const currentRequestId = ++requestId;
-      loadHardwareData(currentRequestId);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // 悬窗硬件数据刷新：1s 一次 get_overlay_hardware_data（IPC）。
+  // 交给 useVisibleInterval 调度：页面不可见时停表（用户看不到数值），
+  // 切回来立刻刷新一次，避免看到暂停期间的陈旧数据。
+  useVisibleInterval(() => {
+    const currentRequestId = ++hardwareRequestIdRef.current;
+    void loadHardwareData(currentRequestId);
+  }, 1000);
 
   const loadStatus = async () => {
     try {

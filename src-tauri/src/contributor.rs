@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Contributor {
@@ -15,9 +14,8 @@ pub struct Contributor {
 async fn fetch_contributors() -> Result<Vec<Contributor>, reqwest::Error> {
     let url = "https://gitee.com/muliuawa/neobox/raw/master/contributors.json";
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    // 复用全局连接池（5 秒超时档），避免每次请求重建 Client。
+    let client = crate::utils::http::client_with_timeout(5);
 
     let resp = client.get(url).send().await?;
     let data = resp.json::<Vec<Contributor>>().await?;

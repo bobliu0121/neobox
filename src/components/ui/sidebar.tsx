@@ -8,6 +8,7 @@ import { getBorderGlowStyle } from "@/hooks/use-glow-effect";
 import { useLiquidGlassRefraction } from "@/components/special/liquid-glass-svg-filter";
 import { store } from "@/lib/store";
 import { DEFAULT_NAV_ORDER, HIDEABLE_NAV_PATHS, normalizeNavOrder } from "@/config/nav-order";
+import { preloadRouteChunk } from "@/routes/lazy-pages";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 
 const getNavStorageKey = (path: string) => `neobox_nav_visible_${path.replace(/\//g, "").replace(/-/g, "_")}`;
@@ -109,6 +110,11 @@ function NavButton({ item, isActive, isDropTarget, hoverBg, iconColor, activeIco
       className="jelly-bounce-nav-button"
       draggable={false}
       onDragStart={(e) => e.preventDefault()}
+      // hover / focus 时预取目标页 chunk：页面已改为懒加载，首次点击要等一次本地读文件；
+      // 鼠标移到按钮上到真正点击之间通常有几百毫秒，足够把 chunk 取进缓存，
+      // 点击时 Suspense 直接命中，用户感觉不到 fallback。失败静默忽略（不影响导航本身）。
+      onPointerEnter={() => preloadRouteChunk(item.path)}
+      onFocus={() => preloadRouteChunk(item.path)}
       onPointerDown={onPointerDown}
       onClick={(e) => {
         // 拖动中 / 松手派生点击 / 刚完成 drop 的短时间窗内：拦截导航避免误触

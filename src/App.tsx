@@ -2,52 +2,65 @@ import { Routes, Route, useLocation, Navigate } from "react-router-dom";
 import { Box } from "@chakra-ui/react";
 import { MainLayout } from "./components/ui/main-layout";
 import HomePage from "./pages/HomePage";
-import HardwarePage from "./pages/HardwarePage";
-import SearchPage from "./pages/SearchPage";
-import OptimizePage from "./pages/OptimizePage";
-import MemoryLimitPage from "./pages/MemoryLimitPage";
-import MemoryCleanupPage from "./pages/MemoryCleanupPage";
-import SettingsPage from "./pages/SettingsPage";
-import DiskHealthPage from "./pages/DiskHealthPage";
-import OverlayPanelPage from "./pages/OverlayPanelPage";
-import BuiltinToolsPage from "./pages/BuiltinToolsPage";
-import ResolutionConverterPage from "./pages/ResolutionConverterPage";
-import ShaderCachePage from "./pages/ShaderCachePage";
-import PowerManagementPage from "./pages/PowerManagementPage";
-import StorageCleanPage from "./pages/StorageCleanPage";
-import StartupManagerPage from "./pages/StartupManagerPage";
-import ContextMenuManagerPage from "./pages/ContextMenuManagerPage";
-import DownloadAcceleratorPage from "./pages/DownloadAcceleratorPage";
-import SystemOptimizerPage from "./pages/SystemOptimizerPage";
-import NetworkOptimizerPage from "./pages/NetworkOptimizerPage";
-import PeripheralOptimizePage from "./pages/PeripheralOptimizePage";
-import WindowsUpdatePage from "./pages/WindowsUpdatePage";
-import DesktopLyricsPage from "./pages/DesktopLyricsPage";
-import DynamicIslandWindowPage from "./pages/DynamicIslandWindowPage";
-import VerticalOverlayPage from "./pages/VerticalOverlayPage";
-import SensorMonitorPage from "./pages/SensorMonitorPage";
-import RuntimeRepairPage from "./pages/RuntimeRepairPage";
-import AppManagerPage from "./pages/AppManagerPage";
-import VtxVirtualizationPage from "./pages/VtxVirtualizationPage";
-import HiddenFeaturesPage from "./pages/HiddenFeaturesPage";
-import AudioEqPage from "./pages/AudioEqPage";
-import AutoClickerPage from "./pages/AutoClickerPage";
-import CpuSchedulerPage from "./pages/CpuSchedulerPage";
-import SpeedTestPage from "./pages/SpeedTestPage";
-import CustomPage from "./pages/CustomPage";
-import NvidiaRecordingPage from "./pages/NvidiaRecordingPage";
-import TimeSyncPage from "./pages/TimeSyncPage";
-import ScreenTestPage from "./pages/ScreenTestPage";
-import WallpaperPage from "./pages/WallpaperPage";
-import WallpaperWindowPage from "./pages/WallpaperWindowPage";
-import BsodLogPage from "./pages/BsodLogPage";
-import ImageConverterPage from "./pages/ImageConverterPage";
-import AudioConverterPage from "./pages/AudioConverterPage";
-import AudioReversePage from "./pages/AudioReversePage";
-import AudioSpeedPage from "./pages/AudioSpeedPage";
-import VideoConverterPage from "./pages/VideoConverterPage";
-import MkaMuxerPage from "./pages/MkaMuxerPage";
-import { useState, useEffect, useCallback, useRef } from "react";
+// 除 HomePage 外的路由页面全部改为懒加载（定义集中在 routes/lazy-pages.ts）：
+// 之前这 46 个页面被静态导入，导致启动时 WebView2 必须先解析完 MusicPage / SettingsPage
+// 这类数千行的重型模块才能画出第一帧；改成按需 import 后，首屏只解析真正用到的代码。
+import {
+  HardwarePage,
+  SearchPage,
+  OptimizePage,
+  MemoryLimitPage,
+  MemoryCleanupPage,
+  SettingsPage,
+  DiskHealthPage,
+  OverlayPanelPage,
+  BuiltinToolsPage,
+  ResolutionConverterPage,
+  ShaderCachePage,
+  PowerManagementPage,
+  StorageCleanPage,
+  StartupManagerPage,
+  ContextMenuManagerPage,
+  DownloadAcceleratorPage,
+  SystemOptimizerPage,
+  NetworkOptimizerPage,
+  PeripheralOptimizePage,
+  WindowsUpdatePage,
+  DesktopLyricsPage,
+  DynamicIslandWindowPage,
+  VerticalOverlayPage,
+  SensorMonitorPage,
+  RuntimeRepairPage,
+  AppManagerPage,
+  VtxVirtualizationPage,
+  HiddenFeaturesPage,
+  AudioEqPage,
+  AutoClickerPage,
+  CpuSchedulerPage,
+  SpeedTestPage,
+  CustomPage,
+  NvidiaRecordingPage,
+  TimeSyncPage,
+  ScreenTestPage,
+  WallpaperPage,
+  WallpaperWindowPage,
+  BsodLogPage,
+  ImageConverterPage,
+  AudioConverterPage,
+  AudioReversePage,
+  AudioSpeedPage,
+  VideoConverterPage,
+  MkaMuxerPage,
+  MusicPage,
+  preloadMusicPage,
+} from "./routes/lazy-pages";
+import {
+  RouteErrorBoundary,
+  RouteFallback,
+  TransparentWindowFallback,
+  WindowFallback,
+} from "./routes/route-fallback";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -59,7 +72,6 @@ import { StartupAdModal } from "./components/ads/startup-ad-popup";
 import { useAds } from "./hooks/use-ads";
 import { useAppStartup } from "./contexts/app-startup-context";
 import { MusicProvider } from "./contexts/music-context";
-import MusicPage from "./pages/MusicPage";
 
 import { DynamicIslandHost } from "./components/ui/dynamic-island";
 import { AccelIslandBridge } from "./components/ui/accel-island-bridge";
@@ -106,6 +118,9 @@ function MainWindowEffects() {
         return;
       }
       // 先进入音乐页并等待音频元素挂载，否则 playSong 会因 audioRef 为空直接返回
+      // MusicPage 现在是懒加载：先把 chunk 取回来再 navigate，避免「取 chunk + 挂载」两段耗时
+      // 把后面的 2 秒等待预算挤爆（冷启动机械盘上尤其明显）。
+      void preloadMusicPage().catch(() => {});
       navigate("/music", { state: { expandPlayer: true } });
       for (let i = 0; i < 40 && !useMusicStore.getState().audioRef; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -177,31 +192,53 @@ function App() {
   const { isStartupComplete } = useAppStartup();
   const location = useLocation();
 
+  // 独立窗口页同样懒加载：主窗口的启动流程不解析它们，每个窗口只付自己那份 chunk 的代价。
+  // fallback 按窗口底色区分——透明窗口不能画 Spinner（见 route-fallback.tsx 的说明）。
   // 桌面灵动岛独立窗口：只负责渲染，状态真源在主窗口（见 IslandRemoteBridge）
   if (location.pathname === "/dynamic-island") {
-    return <DynamicIslandWindowPage />;
+    return (
+      <Suspense fallback={<TransparentWindowFallback />}>
+        <DynamicIslandWindowPage />
+      </Suspense>
+    );
   }
 
   // Desktop lyrics window: render standalone, no main layout
   if (location.pathname === "/desktop-lyrics") {
-    return <DesktopLyricsPage />;
+    return (
+      <Suspense fallback={<TransparentWindowFallback />}>
+        <DesktopLyricsPage />
+      </Suspense>
+    );
   }
 
   // 解锁按钮已内嵌到桌面歌词窗口,不再使用独立窗口
 
   // Vertical overlay window: standalone, no main layout
   if (location.pathname === "/vertical-overlay") {
-    return <VerticalOverlayPage />;
+    return (
+      <Suspense fallback={<TransparentWindowFallback />}>
+        <VerticalOverlayPage />
+      </Suspense>
+    );
   }
 
   // Sensor monitor window: standalone, no main layout
   if (location.pathname === "/sensor-monitor") {
-    return <SensorMonitorPage />;
+    return (
+      <Suspense fallback={<WindowFallback />}>
+        <SensorMonitorPage />
+      </Suspense>
+    );
   }
 
   // Dynamic wallpaper window: standalone, transparent, no main layout
   if (location.pathname === "/wallpaper-window") {
-    return <WallpaperWindowPage />;
+    return (
+      <Suspense fallback={<TransparentWindowFallback />}>
+        <WallpaperWindowPage />
+      </Suspense>
+    );
   }
 
   return (
@@ -216,7 +253,14 @@ function App() {
             <HomePage />
           </Box>
           {location.pathname !== "/" && (
-              <Routes location={location}>
+            // Suspense 只包住内容区，不包 MainLayout：取页面 chunk 期间标题栏与侧边栏仍然在位，
+            // 用户看到的是「框架 + 内容区转圈」，而不是整窗退回白屏。
+            // 占位高度固定（route-fallback.tsx），chunk 到达后不会出现内容塌陷再撑开的跳动。
+            // ErrorBoundary 在 Suspense 外层：某个页面 chunk 取失败时只坏内容区，
+            // 侧边栏仍能切走（没有边界会卸载整棵树，变成整窗白屏且无法自救）。
+            <RouteErrorBoundary area="该页面">
+              <Suspense fallback={<RouteFallback />}>
+                <Routes location={location}>
                   <Route
                     path="/search"
                     element={
@@ -477,6 +521,8 @@ function App() {
                     }
                   />
                 </Routes>
+              </Suspense>
+            </RouteErrorBoundary>
           )}
         </MainLayout>
 

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use sysinfo::System;
 
@@ -693,6 +695,27 @@ static STATIC_HARDWARE_CACHE: Mutex<Option<StaticHardwareInfo>> = Mutex::new(Non
 static HARDWARE_INIT_LOCK: Mutex<()> = Mutex::new(());
 static CPU_SYSTEM: Mutex<Option<System>> = Mutex::new(None);
 
+/// CPU 使用率结果缓存 `(采样时刻, 使用率)`。
+/// 刻意与 `CPU_SYSTEM` 分开：读缓存只短暂持有这把小锁，
+/// 不必等正在刷新 sysinfo 的采样线程，热路径才不会串行排队。
+static CPU_USAGE_CACHE: Mutex<Option<(Instant, u16)>> = Mutex::new(None);
+
+/// CPU 采样单飞标志：保证同一时刻只有一个线程真正刷新 sysinfo。
+/// 抢不到标志的线程直接用上一次的结果返回，不在锁上阻塞等待。
+static CPU_SAMPLE_INFLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// CPU 使用率缓存 TTL，取 700ms 的理由：
+/// 1. 悬窗（overlay_panel）按 1s 周期调用，TTL 内命中即可避免同一周期内的重复采样；
+/// 2. sysinfo 的 `MINIMUM_CPU_UPDATE_INTERVAL` 是 200ms，两次刷新的间隔必须大于它才能算出
+///    准确的使用率；700ms 远大于 200ms，缓存每次 miss 时都是有效的新采样；
+/// 3. 相对 1s 渲染周期最多滞后 0.7s，悬窗读数不会有可感知的延迟。
+const CPU_USAGE_TTL: Duration = Duration::from_millis(700);
+
+/// 首次初始化时给 sysinfo 留的采样间隔。
+/// 原实现在持有 `CPU_SYSTEM` 锁的情况下 sleep 这段时间，其它线程全被卡住；
+/// 现在改为在锁外等待（见 `get_cpu_dynamic_info`）。
+const CPU_WARMUP_WAIT: Duration = Duration::from_millis(50);
+
 fn detect_gpu_vendor(name: &str) -> GpuVendor {
     let name_lower = name.to_lowercase();
     if name_lower.contains("nvidia") || name_lower.contains("geforce") || 
@@ -1281,39 +1304,104 @@ fn get_gpu_dynamic_info(gpu_static: &[GpuStaticInfo]) -> Vec<(Option<f64>, Optio
 }
 
 // 获取CPU的动态数据（占用）- 使用 sysinfo 库
+//
+// 性能要点（原实现在每次调用时都持着 CPU_SYSTEM 锁做 sysinfo 刷新，
+// 且首次初始化还在锁内 sleep 50ms，导致悬窗 1s 循环、硬件命令、sensor 轮询互相排队）：
+// 1. 结果缓存 + TTL：TTL 内直接返回缓存值，只短暂持有小锁，不碰 sysinfo；
+// 2. 单飞（single-flight）：同一时刻只允许一个线程真正采样，其它线程立刻返回上一次的值，
+//    绝不在锁上阻塞等别人采样；
+// 3. 刷新一律在锁外进行，锁内只做 System 的取出/放回和缓存赋值。
 pub(crate) fn get_cpu_dynamic_info() -> Option<u16> {
     use sysinfo::CpuRefreshKind;
-    use std::thread;
-    use std::time::Duration;
-    
-    let mut cpu_system = CPU_SYSTEM.lock().unwrap();
-    
-    if cpu_system.is_none() {
-        let mut sys = System::new();
-        // 第一次刷新：初始化
-        sys.refresh_cpu_specifics(CpuRefreshKind::everything());
-        // 短暂等待，让 sysinfo 有时间采集第一个样本
-        thread::sleep(Duration::from_millis(50));
-        // 第二次刷新：获取准确的 CPU 使用率
-        sys.refresh_cpu_specifics(CpuRefreshKind::everything());
-        *cpu_system = Some(sys);
-    } else {
-        // 正常情况下只需要刷新一次
-        let sys = cpu_system.as_mut().unwrap();
-        sys.refresh_cpu_specifics(CpuRefreshKind::everything());
+
+    // 单飞标志的守卫：保证任何退出路径（包括提前 return）都会复位标志，
+    // 否则一次异常退出就会让采样永久停摆。
+    struct InflightGuard;
+    impl Drop for InflightGuard {
+        fn drop(&mut self) {
+            CPU_SAMPLE_INFLIGHT.store(false, Ordering::Release);
+        }
     }
-    
-    let sys = cpu_system.as_ref().unwrap();
-    let cpus = sys.cpus();
-    if cpus.is_empty() {
-        return None;
+
+    // 1) 快路径：读缓存。持锁时间只是拷贝一个 (Instant, u16)，与 sysinfo 刷新无关。
+    let cached: Option<(Instant, u16)> = {
+        let guard = CPU_USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *guard
+    };
+    if let Some((sampled_at, usage)) = cached {
+        if sampled_at.elapsed() < CPU_USAGE_TTL {
+            return Some(usage);
+        }
     }
-    
-    let total_usage: f32 = cpus.iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / cpus.len() as f32;
-    let usage = total_usage.round() as u16;
-    
-    log::debug!("CPU占用 (sysinfo): {}%", usage);
-    Some(usage)
+
+    // 2) 单飞：抢不到采样权的线程立刻返回，绝不在锁上排队等别人采样。
+    //    若已有缓存值，直接回上一次的读数（旧值也远好于让调用方干等）；
+    //    若还没有任何缓存值（多个线程的首次调用重叠），短暂让出 CPU 等采样者完成，
+    //    以保留旧实现"首次调用必得值"的语义。等待有上限、不持任何锁。
+    if CPU_SAMPLE_INFLIGHT.swap(true, Ordering::AcqRel) {
+        if let Some((_, usage)) = cached {
+            return Some(usage);
+        }
+        // 用有界的小步 wait 而不是自旋：调用方本来就在阻塞线程池里，
+        // 让出 CPU 比空转更划算。总等待上限约等于一次首次采样的耗时。
+        let deadline = Instant::now() + CPU_WARMUP_WAIT + Duration::from_millis(20);
+        while Instant::now() < deadline && CPU_SAMPLE_INFLIGHT.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let retry = {
+            let guard = CPU_USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            *guard
+        };
+        return retry.map(|(_, usage)| usage);
+    }
+    let _inflight = InflightGuard;
+
+    // 3) 取出已有 System。锁内只做一次 Option 的 take（纯内存移动），
+    //    不做任何刷新、不做 I/O、不 sleep。
+    //    因为上面已抢到单飞权，本线程是此刻唯一的采样者，构造新 System 也可以放心放在锁外。
+    let existing = {
+        let mut slot = CPU_SYSTEM.lock().unwrap_or_else(|e| e.into_inner());
+        slot.take()
+    };
+    let (mut sys, fresh) = match existing {
+        Some(system) => (system, false),
+        None => {
+            let mut system = System::new();
+            // 首次建 System 必须先把 CPU 列表立起来。everything() 只在这里用一次
+            // （保证 cpus 就绪、行为与旧实现一致），后续高频刷新只用最小子集。
+            system.refresh_cpu_specifics(CpuRefreshKind::everything());
+            (system, true)
+        }
+    };
+
+    // 4) 等待与刷新都在锁外进行。首次采样需要一段间隔：
+    //    sysinfo 用前后两次采样的差值算使用率，间隔太短会得到失真值。
+    //    旧实现在持锁状态下 sleep，把其它线程全卡住；现在只有本线程持单飞权，
+    //    其它调用方走上面的缓存/兜底分支，完全不受影响。
+    if fresh {
+        thread::sleep(CPU_WARMUP_WAIT);
+    }
+    sys.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
+
+    // 5) 算平均使用率。作用域收窄，让 cpus 的借用先结束，再移动 sys。
+    let usage = {
+        let cpus = sys.cpus();
+        if cpus.is_empty() {
+            None
+        } else {
+            let total_usage: f32 =
+                cpus.iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / cpus.len() as f32;
+            Some(total_usage.round() as u16)
+        }
+    };
+
+    // 6) System 放回槽位、写入结果缓存。两把锁都是短临界区。
+    *CPU_SYSTEM.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
+    if let Some(usage) = usage {
+        *CPU_USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), usage));
+        log::debug!("CPU占用 (sysinfo): {}%", usage);
+    }
+    usage
 }
 
 /// 免驱动读取当前 CPU 频率（MHz），取所有逻辑处理器的最大值。
@@ -2779,6 +2867,11 @@ pub fn cleanup_hardware_cache() {
 
     let mut cpu_system = CPU_SYSTEM.lock().unwrap();
     *cpu_system = None;
+
+    // 结果缓存也必须一起失效：否则清理之后 TTL 内仍会返回清理前的旧读数，
+    // 让调用方误以为缓存没清掉。
+    let mut cpu_usage = CPU_USAGE_CACHE.lock().unwrap();
+    *cpu_usage = None;
     
     log::info!("硬件信息缓存已清理");
 }

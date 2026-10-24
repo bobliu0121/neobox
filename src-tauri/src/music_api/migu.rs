@@ -18,11 +18,9 @@ pub const RANK_HOT: &str = "27186466";
 pub const RANK_NEW: &str = "27553319";
 pub const RANK_ORIGINAL: &str = "27553408";
 
-fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("Failed to build HTTP client")
+/// 返回全局共享的 HTTP 客户端（15 秒超时），复用连接池。
+fn build_client() -> &'static reqwest::Client {
+    crate::utils::http::client()
 }
 
 /// 发送 GET 请求并返回 JSON

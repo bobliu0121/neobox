@@ -112,7 +112,8 @@ pub async fn update_rules(window: Option<Window>) -> Result<RuleDatabaseInfo, St
     };
 
     emit_progress("正在连接规则库源(MoscaDotTo/Winapp2)...".to_string());
-    let client = reqwest::Client::new();
+    // 规则库下载需要长超时：复用 300 秒档位共享客户端。
+    let client = crate::utils::http::client_with_timeout(300);
     let mut last_error: Option<String> = None;
 
     for url in DOWNLOAD_SOURCES {

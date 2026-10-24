@@ -1,4 +1,3 @@
-use std::time::Duration;
 
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde_json::{json, Value};
@@ -9,11 +8,13 @@ use super::models::*;
 const NETEASE_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 9; PCT-AL10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.64 HuaweiBrowser/10.0.3.311 Mobile Safari/537.36";
 const EAPI_BASE: &str = "https://interface3.music.163.com/eapi";
 
-fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("Failed to build HTTP client")
+/// 返回**全局共享**的 HTTP 客户端（15 秒超时）。
+///
+/// 原先每个请求都新建 `reqwest::Client`，等于每发一次请求重建连接池 +
+/// 重新做 TCP/TLS 握手。音乐接口一次操作会打十几个请求，这部分开销可观。
+/// 现在统一复用 `utils::http` 里的单例，keep-alive 才能真正生效。
+fn build_client() -> &'static reqwest::Client {
+    crate::utils::http::client()
 }
 
 /// 发送普通 POST 请求 (带 Cookie, 不加密)

@@ -12,7 +12,8 @@
  * 铺满整个展开播放器，不受本组件布局区域限制。
  *
  * 性能策略：
- * - 低频定时器（~250ms）检查 activeIndex，仅在行变化时 setState
+ * - activeIndex 推进以 audio 事件（timeupdate/seeked/play/pause）为主路径，
+ *   1s 定时器仅作兜底（页面不可见时停表），且只在行变化时 setState
  * - blur 只在入场/出场短暂运行，hold 期间无 filter
  */
 
@@ -20,6 +21,7 @@ import { useEffect, useRef, useState, memo } from "react";
 import { Box, Text, Spinner, VStack } from "@chakra-ui/react";
 import { Music as MusicIcon } from "lucide-react";
 import type { KaraokeLine } from "@/types/music";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 // 动画时长（ms）：旧句退场与新句入场并行播放，入场最晚 800ms（重影）
 const EXIT_MS = 520;
@@ -29,6 +31,11 @@ const ENTER_MS = 860;
 const LEAD_MS = 350;
 // 歌词字体（index.css 中注册；系统缺少该字体时回退到宋体/衬线字体）
 const LYRIC_FONT = '"NotoSerifSC-900", "Songti SC", "SimSun", serif';
+/**
+ * activeIndex 兜底检查间隔：主路径已改为 audio 事件驱动，这里只兜「事件丢失」，
+ * 1s 足以保证歌词不长期卡住，同时把定时唤醒从 4 次/秒降到 1 次/秒
+ */
+const FALLBACK_CHECK_MS = 1000;
 
 type Phase = "enter" | "hold" | "exit";
 
@@ -195,7 +202,20 @@ function ImmersiveLyricsViewInner({
     };
   }, []);
 
-  // 低频定时器（~250ms）检查 activeIndex，仅在行变化时 setState
+  /**
+   * activeIndex 推进：事件驱动 + 1s 兜底。
+   *
+   * checkActive 只读本地 <audio> 元素的 currentTime（完全不涉及 IPC），
+   * 原来的 250ms 轮询纯属「为了跟上播放进度」。现在改为：
+   * - 主路径：监听 audio 的 timeupdate / seeked / play / pause。timeupdate 由浏览器
+   *   按进度推进派发（约 4 次/秒）且只在播放时触发，暂停后彻底静默，
+   *   切换时机也比固定定时器更贴近真实播放位置；
+   * - 兜底：1s 低频（不可见时自动停表），覆盖个别 WebView2 场景下 timeupdate
+   *   被节流或丢事件，避免歌词长期卡在旧句。
+   * 相比固定 250ms 轮询：播放中唤醒次数基本持平（由 timeupdate 驱动），
+   * 暂停后从 4 次/秒降到 0；页面不可见时也彻底停表。
+   */
+  const checkActiveRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!audioRef) return;
 
@@ -222,10 +242,18 @@ function ImmersiveLyricsViewInner({
       setActiveIndex((prev) => (prev !== newIdx ? newIdx : prev));
     };
 
+    checkActiveRef.current = checkActive;
     checkActive();
-    const interval = setInterval(checkActive, 250);
-    return () => clearInterval(interval);
+    const events = ["timeupdate", "seeked", "play", "pause"] as const;
+    events.forEach((ev) => audioRef.addEventListener(ev, checkActive));
+    return () => {
+      events.forEach((ev) => audioRef.removeEventListener(ev, checkActive));
+      checkActiveRef.current = () => {};
+    };
   }, [audioRef]);
+
+  // 兜底定时器：包装一层，保证 useVisibleInterval 永远调用到最新的 checkActive
+  useVisibleInterval(() => checkActiveRef.current(), FALLBACK_CHECK_MS, Boolean(audioRef));
 
   // 歌词状态机：activeIndex 变化 → 旧句转 outgoing 退场（与正在入场的下一句并行播放）
   useEffect(() => {
