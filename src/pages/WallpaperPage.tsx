@@ -223,10 +223,44 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [dynamic, setDynamic] = useState<DynamicWallpaperInfo | null>(null);
   const [dynamicBusy, setDynamicBusy] = useState(false);
-  // HTML 壁纸交互设置（持久化到 localStorage）
-  const [htmlMouse, setHtmlMouse] = useState(() => localStorage.getItem("wp_html_mouse") !== "0");
-  const [htmlKeyboard, setHtmlKeyboard] = useState(() => localStorage.getItem("wp_html_keyboard") === "1");
-  const [htmlAudio, setHtmlAudio] = useState(() => localStorage.getItem("wp_html_audio") !== "0");
+  // HTML 壁纸交互设置：真实状态由后端保管（壁纸窗口是独立 WebView，
+  // 与主窗口的 localStorage 不共享），这里只做 UI 镜像。
+  const [htmlMouse, setHtmlMouse] = useState(true);
+  const [htmlKeyboard, setHtmlKeyboard] = useState(false);
+  const [htmlAudio, setHtmlAudio] = useState(true);
+
+  // 从后端读取当前设置
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await invoke<{ mouse: boolean; keyboard: boolean; audio: boolean }>(
+          "get_html_interaction",
+        );
+        if (s) {
+          setHtmlMouse(s.mouse);
+          setHtmlKeyboard(s.keyboard);
+          setHtmlAudio(s.audio);
+        }
+      } catch (e) {
+        console.error("[Wallpaper] 读取 HTML 交互设置失败:", e);
+      }
+    })();
+  }, []);
+
+  /** 同步一组交互开关到后端（后端据此调整窗口穿透/焦点并广播给壁纸窗口）。 */
+  const applyHtmlInteraction = useCallback(
+    (next: { mouse?: boolean; keyboard?: boolean; audio?: boolean }) => {
+      const payload = {
+        mouse: next.mouse ?? htmlMouse,
+        keyboard: next.keyboard ?? htmlKeyboard,
+        audio: next.audio ?? htmlAudio,
+      };
+      invoke("set_html_interaction", payload).catch((e) => {
+        console.error("[Wallpaper] 保存 HTML 交互设置失败:", e);
+      });
+    },
+    [htmlMouse, htmlKeyboard, htmlAudio],
+  );
   const rotateIndexRef = useRef(0);
 
   // 读取持久化状态
@@ -707,15 +741,39 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
             <HStack spacing={4} mt={2} fontSize="xs" flexWrap="wrap">
               <HStack spacing={1}>
                 <Text color={subTextColor}>鼠标</Text>
-                <Switch size="sm" isChecked={htmlMouse} onChange={(e) => { setHtmlMouse(e.target.checked); localStorage.setItem("wp_html_mouse", e.target.checked ? "1" : "0"); }} />
+                <Switch
+                  size="sm"
+                  isChecked={htmlMouse}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setHtmlMouse(v);
+                    applyHtmlInteraction({ mouse: v });
+                  }}
+                />
               </HStack>
               <HStack spacing={1}>
                 <Text color={subTextColor}>键盘</Text>
-                <Switch size="sm" isChecked={htmlKeyboard} onChange={(e) => { setHtmlKeyboard(e.target.checked); localStorage.setItem("wp_html_keyboard", e.target.checked ? "1" : "0"); }} />
+                <Switch
+                  size="sm"
+                  isChecked={htmlKeyboard}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setHtmlKeyboard(v);
+                    applyHtmlInteraction({ keyboard: v });
+                  }}
+                />
               </HStack>
               <HStack spacing={1}>
                 <Text color={subTextColor}>音频</Text>
-                <Switch size="sm" isChecked={htmlAudio} onChange={(e) => { setHtmlAudio(e.target.checked); localStorage.setItem("wp_html_audio", e.target.checked ? "1" : "0"); }} />
+                <Switch
+                  size="sm"
+                  isChecked={htmlAudio}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setHtmlAudio(v);
+                    applyHtmlInteraction({ audio: v });
+                  }}
+                />
               </HStack>
             </HStack>
             <Text fontSize="xs" color={subTextColor} isTruncated title={dynamic?.path}>

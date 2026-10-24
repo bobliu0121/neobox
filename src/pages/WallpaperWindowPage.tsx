@@ -10,26 +10,57 @@ export default function WallpaperWindowPage() {
   const [info, setInfo] = useState<DynamicWallpaperInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  // 读取壁纸交互设置（与壁纸管理页 localStorage 同步）
+  // HTML 交互设置由后端保管（主窗口写入、本窗口读取）。
+  //
+  // 注意：不能用 localStorage —— 壁纸窗口是独立 WebView 页面，与主窗口的
+  // localStorage 并不共享，读到的永远是空值，会导致设置页开关对壁纸无效。
   const [settings, setSettings] = useState(() => ({
-    mouse: localStorage.getItem("wp_html_mouse") !== "0",
-    keyboard: localStorage.getItem("wp_html_keyboard") === "1",
-    audio: localStorage.getItem("wp_html_audio") !== "0",
+    mouse: true,
+    keyboard: false,
+    audio: true,
   }));
 
-  // 监听 localStorage 变化（用户在壁纸管理页修改设置时同步更新）
+  // 挂载时从后端拉取当前设置
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === "wp_html_audio" || e.key === "wp_html_mouse" || e.key === "wp_html_keyboard") {
-        setSettings({
-          mouse: localStorage.getItem("wp_html_mouse") !== "0",
-          keyboard: localStorage.getItem("wp_html_keyboard") === "1",
-          audio: localStorage.getItem("wp_html_audio") !== "0",
-        });
+    let disposed = false;
+    (async () => {
+      try {
+        const s = await invoke<{ mouse: boolean; keyboard: boolean; audio: boolean }>(
+          "get_html_interaction",
+        );
+        if (!disposed && s) setSettings({ mouse: s.mouse, keyboard: s.keyboard, audio: s.audio });
+      } catch (e) {
+        console.error("[Wallpaper] 读取 HTML 交互设置失败:", e);
       }
+    })();
+    return () => {
+      disposed = true;
     };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  // 主窗口改动设置时实时同步（后端 set_html_interaction 会广播该事件）
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const stop = await listen<{ mouse: boolean; keyboard: boolean; audio: boolean }>(
+          "wallpaper:interaction",
+          (event) => {
+            const s = event.payload;
+            if (s) setSettings({ mouse: s.mouse, keyboard: s.keyboard, audio: s.audio });
+          },
+        );
+        if (disposed) stop();
+        else unlisten = stop;
+      } catch (e) {
+        console.error("[Wallpaper] 监听交互设置失败:", e);
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   // 动态壁纸窗口必须整页透明：index.css 里 :root 的背景色会铺满整块画布，
@@ -84,11 +115,19 @@ export default function WallpaperWindowPage() {
     });
   }, [info, loaded]);
 
-  // 鼠标设置变化时动态切换窗口穿透样式（仅 HTML 壁纸生效）
+  // 交互设置变化时交给后端应用（仅 HTML 壁纸生效）。
+  //
+  // 后端 `set_html_interaction` 会同时处理：窗口穿透样式、祖先窗口启用、
+  // 键盘焦点。这里保留一次兜底调用，覆盖「壁纸窗口比设置先就绪」的时序。
   useEffect(() => {
     if (!info || info.kind !== "html") return;
-    invoke("set_wallpaper_interactive", { interactive: settings.mouse }).catch(() => {});
-  }, [settings.mouse, info?.kind]);
+    invoke("set_wallpaper_interactive", {
+      mouse: settings.mouse,
+      keyboard: settings.keyboard,
+    }).catch((e) => {
+      console.error("[Wallpaper] 应用交互设置失败:", e);
+    });
+  }, [settings.mouse, settings.keyboard, info?.kind]);
 
   // 音频设置变化时实时控制视频音量
   useEffect(() => {

@@ -46,6 +46,11 @@ fn main() {
         make_ref_aac(&input, &output);
         return;
     }
+    if mode == "frame" {
+        let want: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+        frame_probe(&input, &output, want);
+        return;
+    }
 
     let t0 = Instant::now();
     let r = tauri::async_runtime::block_on(async move {
@@ -2347,6 +2352,84 @@ fn make_ref_aac(input: &str, output: &str) {
             Ok(())
         })();
         eprintln!("[mkref] RESULT: {r:?}");
+        let _ = MFShutdown();
+        CoUninitialize();
+    }
+}
+
+// ==================== frame: 导出解码帧的原始 NV12 用于像素分析 ====================
+// 用法: media_debug frame <input> <output_raw> [frame_index]
+// 输出: <output_raw> 第一行是 "WxH size"，随后是帧的 NV12 原始字节
+fn frame_probe(path: &str, out_path: &str, want: usize) {
+    use windows::Win32::Media::MediaFoundation::*;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+    use std::io::Write;
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let _ = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+        let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        let reader = MFCreateSourceReaderFromURL(windows::core::PCWSTR(wide.as_ptr()), None)
+            .expect("open reader");
+        let _ = reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false);
+        reader
+            .SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)
+            .expect("select video");
+        let mut req = MFCreateMediaType().expect("create type");
+        req.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).expect("major");
+        req.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).expect("sub");
+        reader
+            .SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &req)
+            .expect("set nv12");
+        let cur = reader
+            .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+            .expect("get type");
+        let fs = cur.GetUINT64(&MF_MT_FRAME_SIZE).expect("frame size");
+        let vw = (fs >> 32) as u32;
+        let vh = (fs & 0xFFFF_FFFF) as u32;
+        eprintln!("[frame] source {vw}x{vh}");
+
+        let mut idx = 0usize;
+        loop {
+            let mut flags: u32 = 0;
+            let mut ts: i64 = 0;
+            let mut sample: Option<IMFSample> = None;
+            if reader
+                .ReadSample(
+                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    Some(&mut ts),
+                    Some(&mut sample),
+                )
+                .is_err()
+            {
+                eprintln!("[frame] read error at {idx}");
+                break;
+            }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                eprintln!("[frame] EOF at {idx}");
+                break;
+            }
+            if let Some(s) = sample {
+                if idx == want {
+                    let b = s.ConvertToContiguousBuffer().expect("contig");
+                    let mut p: *mut u8 = std::ptr::null_mut();
+                    let mut ml: u32 = 0;
+                    let mut cl: u32 = 0;
+                    b.Lock(&mut p, Some(&mut ml), Some(&mut cl)).expect("lock");
+                    let data = std::slice::from_raw_parts(p, cl as usize);
+                    let mut f = std::fs::File::create(out_path).expect("create out");
+                    writeln!(f, "{}x{} {}", vw, vh, cl).expect("w");
+                    f.write_all(data).expect("write");
+                    let _ = b.Unlock();
+                    eprintln!("[frame] wrote frame {idx}: {cl} bytes -> {out_path}");
+                    break;
+                }
+                idx += 1;
+            }
+        }
         let _ = MFShutdown();
         CoUninitialize();
     }

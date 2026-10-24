@@ -981,6 +981,8 @@ pub fn run() {
         wallpaper::stop_dynamic_wallpaper,
         wallpaper::get_dynamic_wallpaper,
         wallpaper::wallpaper_window_ready,
+        wallpaper::set_html_interaction,
+        wallpaper::get_html_interaction,
         wallpaper::set_wallpaper_interactive,
 
         // === 本地文件快速搜索 ===
@@ -1021,6 +1023,9 @@ pub fn run() {
                         let _ = w.hide();
                     }
                 }
+                // 动态壁纸窗口占着 Explorer 的壁纸层，销毁后桌面背景没人绘制会黑屏，
+                // 这里主动销毁并重设系统壁纸，保证退出后桌面恢复正常（含托盘退出）。
+                wallpaper::cleanup_on_exit(&app_handle);
             }
             tauri::RunEvent::Exit => {
                 // 退出前兜底保存主窗口位置（与竖排悬浮窗 cleanup 对齐）
@@ -1037,6 +1042,10 @@ pub fn run() {
                 hotkey::cleanup(app_handle);
                 nvapi::cleanup();
                 hardware_report::stop_recording();
+                // 兜底：ExitRequested 被其他逻辑跳过时（如进程被优雅终止），
+                // 这里再保证一次壁纸窗口已销毁、系统壁纸已恢复。
+                // 该函数幂等，已清理过不会重复触发重绘。
+                wallpaper::cleanup_on_exit(app_handle);
             }
             _ => {}
         }

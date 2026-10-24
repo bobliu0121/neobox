@@ -1285,6 +1285,18 @@ fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<
             // 11. 视频编码循环：按映射取帧 → 紧凑化 → 编码 → 写 muxer
             let vw_usize = vw as usize;
             let vh_usize = vh as usize;
+
+            // 解码帧的真实几何：Media Foundation 解出的 NV12 高度会按 16 对齐
+            // （1920x1080 → 1920x1088），即 Y 平面比画面多出 `raw_rows - vh` 行，
+            // 而**UV 平面紧跟在完整 raw_rows 行 Y 平面之后**。
+            //
+            // 旧代码逐行累加 src_stride，Y 只拷了 vh 行就把 src_off 停在
+            // `vh * src_stride`，直接当作 UV 起点 —— 比真实 UV 起点早了
+            // `(raw_rows - vh) * src_stride` 字节（1080p 上是 8 行 = 15360 字节）。
+            // 于是前 8 个色度行读到的是 Y 平面的尾部数据，色度整体上移
+            // 16 个亮度行，表现为**画面上方绿条 + 整体颜色错位**。
+            //
+            // 正确做法：Y 只取前 vh 行，UV 必须从 `raw_rows * src_stride` 开始。
             let first_size = frame_sizes[0] as usize;
             let raw_rows = if vw_usize > 0 && first_size % vw_usize == 0 && first_size * 2 % (vw_usize * 3) == 0 {
                 first_size * 2 / (vw_usize * 3)
@@ -1296,6 +1308,7 @@ fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<
             } else {
                 vw_usize
             };
+            let uv_plane_offset = raw_rows.saturating_mul(src_stride);
             let mut out_buf: Vec<u8> = Vec::new();
             let mut compact_buf: Vec<u8> = Vec::new();
             let mut video_out_frames = 0usize;
@@ -1312,22 +1325,27 @@ fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<
                 read_file
                     .read_exact(&mut out_buf[..size])
                     .map_err(|e| format!("读取临时帧文件失败: {e}"))?;
-                // 解码帧可能带 stride 对齐 padding，裁剪为紧凑 NV12 再喂编码器
-                let (feed_ptr, feed_len) = if size != frame_bytes
+                // 解码帧可能带 stride / 高度对齐 padding，裁剪为紧凑 NV12 再喂编码器
+                let need_compact = size != frame_bytes
                     && raw_rows >= vh_usize
-                    && src_stride > 0
-                {
+                    && src_stride >= vw_usize
+                    // UV 区必须真的够长，否则说明布局判断有误，宁可原样交给编码器
+                    && uv_plane_offset + (vh_usize / 2) * src_stride <= size;
+                let (feed_ptr, feed_len) = if need_compact {
                     if compact_buf.len() < frame_bytes {
                         compact_buf.resize(frame_bytes, 0);
                     }
                     let mut dst_off = 0usize;
                     let mut src_off = 0usize;
+                    // Y 平面：取前 vh 行（丢弃末尾 raw_rows - vh 行对齐填充）
                     for _ in 0..vh_usize {
                         compact_buf[dst_off..dst_off + vw_usize]
                             .copy_from_slice(&out_buf[src_off..src_off + vw_usize]);
                         dst_off += vw_usize;
                         src_off += src_stride;
                     }
+                    // UV 平面：定位到完整 Y 平面之后，而不是 vh * stride
+                    src_off = uv_plane_offset;
                     for _ in 0..(vh_usize / 2) {
                         compact_buf[dst_off..dst_off + vw_usize]
                             .copy_from_slice(&out_buf[src_off..src_off + vw_usize]);
@@ -1354,8 +1372,15 @@ fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<
                 sample
                     .AddBuffer(&buffer)
                     .map_err(|e| format!("添加缓冲区失败: {e}"))?;
-                let _ = sample.SetSampleTime(i as i64 * 333_333);
-                let _ = sample.SetSampleDuration(333_333);
+                // 时间戳按源帧率计算（100ns 单位）。旧代码硬编码 333_333，
+                // 源是 25/60fps 时输出会变成 30fps，播放速度与实际时长都不对。
+                let frame_dur_100ns = if fps_num > 0 && fps_den > 0 {
+                    (10_000_000i64 * fps_den as i64) / fps_num as i64
+                } else {
+                    333_333
+                };
+                let _ = sample.SetSampleTime(i as i64 * frame_dur_100ns);
+                let _ = sample.SetSampleDuration(frame_dur_100ns);
                 encoder
                     .ProcessInput(0, &sample, 0)
                     .map_err(|e| format!("编码视频帧失败: {e}"))?;
