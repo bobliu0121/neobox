@@ -22,7 +22,8 @@ import {
   AlertIcon,
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, Link2, Film, Music, X, Square } from "lucide-react";
+import { ArrowLeft, Download, Link2, Film, Music, X, Square, LogIn, LogOut, User } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LiquidGlassCard } from "@/components/special/liquid-glass-card";
@@ -78,6 +79,20 @@ interface BiliItemResult {
   path?: string;
   quality?: string;
   error?: string;
+}
+
+
+interface BiliLoginState {
+  logged_in: boolean;
+  mid?: number;
+  uname?: string;
+  face?: string;
+  error?: string;
+}
+
+interface BiliQrData {
+  qrcode_key: string;
+  qr_url: string;
 }
 
 /** 解析后的条目：视频信息 + 该视频当前选择的状态 */
@@ -136,6 +151,11 @@ export default function BilibiliDownloadPage() {
   const [outputDir, setOutputDir] = useState<string>("");
   const [audioOnly, setAudioOnly] = useState(false);
 
+  // ── 登录（B 站官方二维码）──
+  const [login, setLogin] = useState<BiliLoginState>({ logged_in: false });
+  const [qr, setQr] = useState<BiliQrData | null>(null);
+  const [loginMsg, setLoginMsg] = useState<string>("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<BiliProgress | null>(null);
   const [results, setResults] = useState<BiliItemResult[]>([]);
@@ -167,6 +187,84 @@ export default function BilibiliDownloadPage() {
       unlistenItem?.();
     };
   }, []);
+
+
+  /* ────────── 登录：官方二维码，轮询扫码状态 ────────── */
+  // 进入页面先查登录态（cookie 持久化在本地，重启也还在）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const st = await invoke<BiliLoginState>("bilibili_login_status");
+        if (!cancelled) setLogin(st);
+      } catch {
+        /* 未登录或网络失败都按未登录处理 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const startLogin = useCallback(async () => {
+    setLoggingIn(true);
+    setLoginMsg("");
+    try {
+      const d = await invoke<BiliQrData>("bilibili_login_qrcode");
+      setQr(d);
+      // 轮询扫码状态，直到成功/过期/用户离开
+      const alive = true;
+      const started = Date.now();
+      while (alive && Date.now() - started < 180_000) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const r = await invoke<{
+            code: number;
+            message?: string;
+            logged_in: boolean;
+            mid?: number;
+            uname?: string;
+            face?: string;
+          }>("bilibili_login_poll", { qrcodeKey: d.qrcode_key });
+          if (r.logged_in) {
+            setLogin({ logged_in: true, mid: r.mid, uname: r.uname, face: r.face });
+            setQr(null);
+            setLoginMsg("");
+            toast({
+              title: `登录成功${r.uname ? `：${r.uname}` : ""}`,
+              status: "success",
+              duration: 3000,
+            });
+            return;
+          }
+          // 86101=未扫码 86090=已扫码待确认 86038=已失效
+          if (r.code === 86090) setLoginMsg("已扫码，请在手机上确认登录");
+          else if (r.code === 86038) {
+            setLoginMsg("二维码已过期，请重新获取");
+            setQr(null);
+            return;
+          } else setLoginMsg("请使用 B 站 App 扫码");
+        } catch (e) {
+          setLoginMsg(`轮询失败: ${e}`);
+        }
+      }
+      setQr(null);
+    } catch (e) {
+      toast({ title: `获取二维码失败: ${e}`, status: "error", duration: 4000 });
+    } finally {
+      setLoggingIn(false);
+    }
+  }, [toast]);
+
+  const doLogout = useCallback(async () => {
+    try {
+      await invoke("bilibili_logout");
+      setLogin({ logged_in: false });
+      toast({ title: "已退出登录", status: "info", duration: 2000 });
+    } catch (e) {
+      toast({ title: String(e), status: "error", duration: 3000 });
+    }
+  }, [toast]);
 
   /** 解析文本里所有链接/BV 号 */
   const handleParse = useCallback(async () => {
@@ -227,7 +325,8 @@ export default function BilibiliDownloadPage() {
       for (const p of entry.info.pages) {
         if (updates[p.cid]) continue;
         try {
-          const info = await invoke<BiliPlayInfo>("bilibili_qualities", {
+          // 用认证接口：未登录时它同样可用（返回 480P），登录后能返回 720P/1080P
+          const info = await invoke<BiliPlayInfo>("bilibili_qualities_authed", {
             bvid: entry.info.bvid,
             cid: p.cid,
           });
@@ -360,6 +459,94 @@ export default function BilibiliDownloadPage() {
       </HStack>
 
       <VStack spacing={4} align="stretch" maxW="860px">
+        {/* 登录状态 */}
+        <LiquidGlassCard p={4}>
+          <HStack justify="space-between" flexWrap="wrap" gap={2}>
+            <HStack spacing={3}>
+              {login.logged_in ? (
+                <>
+                  <Box
+                    boxSize="32px"
+                    borderRadius="full"
+                    overflow="hidden"
+                    bg={themeColorRgba(0.12)}
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                    flexShrink={0}
+                  >
+                    {login.face ? (
+                      <Image
+                        src={login.face}
+                        alt=""
+                        boxSize="32px"
+                        objectFit="cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <User size={16} />
+                    )}
+                  </Box>
+                  <Box>
+                    <Text fontSize="sm" fontWeight="bold" color={headingColor}>
+                      {login.uname || "已登录"}
+                    </Text>
+                    <Text fontSize="xs" color={subTextColor}>
+                      已登录 · 可下载更高清晰度
+                    </Text>
+                  </Box>
+                </>
+              ) : (
+                <>
+                  <LogIn size={18} />
+                  <Box>
+                    <Text fontSize="sm" fontWeight="bold" color={headingColor}>
+                      未登录
+                    </Text>
+                    <Text fontSize="xs" color={subTextColor}>
+                      未登录最高仅 480P；登录后可下载 720P/1080P
+                    </Text>
+                  </Box>
+                </>
+              )}
+            </HStack>
+            <HStack spacing={2}>
+              {login.logged_in ? (
+                <Button leftIcon={<LogOut size={14} />} size="sm" variant="outline" onClick={doLogout}>
+                  退出登录
+                </Button>
+              ) : (
+                <Button
+                  leftIcon={loggingIn ? <Spinner size="sm" /> : <LogIn size={14} />}
+                  size="sm"
+                  onClick={startLogin}
+                  isDisabled={loggingIn}
+                  bg={themeColorHex}
+                  color="#fff"
+                  _hover={{ bg: themeColorRgba(0.85) }}
+                >
+                  {loggingIn ? "登录中..." : "扫码登录"}
+                </Button>
+              )}
+            </HStack>
+          </HStack>
+
+          {/* 二维码 / 提示 */}
+          {qr && (
+            <VStack mt={3} spacing={2}>
+              <Box p={3} bg="white" borderRadius="lg">
+                <QRCodeSVG value={qr.qr_url} size={180} />
+              </Box>
+              <Text fontSize="sm" color={headingColor}>
+                {loginMsg || "请使用 B 站手机 App 扫码"}
+              </Text>
+              <Text fontSize="xs" color={subTextColor}>
+                扫码后请在手机上确认登录，二维码 3 分钟内有效
+              </Text>
+            </VStack>
+          )}
+        </LiquidGlassCard>
+
         {/* 免登录说明 */}
         <Alert status="info" borderRadius="lg" bg={themeColorRgba(0.08)}>
           <AlertIcon color={themeColorHex} />

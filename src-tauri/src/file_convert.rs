@@ -614,6 +614,7 @@ fn is_video_file(path: &str) -> bool {
 /// * `fps_num/fps_den` —— 用于写 stts；B 站常用 30000/1001 或 30/1
 /// * `sr/ch` —— 音频采样率与声道数
 /// * `audio_asc` —— AAC 的 AudioSpecificConfig（来自 m4s 的 esds，否则按 sr/ch 生成）
+#[allow(clippy::too_many_arguments)]
 pub fn remux_av_to_mp4(
     output: &str,
     video_frames: &[Vec<u8>],
@@ -625,6 +626,10 @@ pub fn remux_av_to_mp4(
     sr: u32,
     ch: u32,
     audio_asc: Option<Vec<u8>>,
+    // 可选的真实 SPS/PPS。B 站 fMP4 的帧里不含参数集（它们在初始化段 avcC 中），
+    // 必须由调用方从 moov 读出后传入；否则 avcC 会退化成兜底假值，
+    // 播放器无法建解码器 —— 实测表现为「只有声音没有画面」。
+    sps_pps: Option<(Vec<u8>, Vec<u8>)>,
 ) -> Result<(), String> {
     let has_audio = !audio_frames.is_empty();
     let asc = audio_asc.unwrap_or_else(|| aac_asc(sr, ch));
@@ -639,6 +644,14 @@ pub fn remux_av_to_mp4(
         has_audio,
         asc,
     )?;
+    // 优先用调用方给的参数集：add_video 内部「第一帧为空才提取」，
+    // 预先填好 v_sps/v_pps 就能让它跳过那段徒劳的提取。
+    if let Some((sps, pps)) = sps_pps {
+        if !sps.is_empty() && !pps.is_empty() {
+            mux.v_sps = sps;
+            mux.v_pps = pps;
+        }
+    }
     for f in video_frames {
         mux.add_video(f)?;
     }

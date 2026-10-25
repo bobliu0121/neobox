@@ -25,7 +25,6 @@
 //! 纯音频模式则只下 audio.m4s，转封装成 .m4a。
 
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// 与项目其它模块一致的 UA。B 站会对异常 UA 返回 412。
@@ -363,6 +362,27 @@ struct Durl {
     backup_url: Option<Vec<String>>,
 }
 
+
+/// B 站 DASH 的 `codecid` 含义与我们的选择优先级。
+///
+/// **这里踩过一个严重 bug**：最初把 12 当成"最优先"，理由是"数字大=更好"。
+/// 实际上：
+///   - 7  = AVC / H.264（`avc1.*`）—— 兼容性最好，我们的 muxer 直接支持
+///   - 12 = HEVC / H.265（`hev1.*`）—— 需要 `hvc1`+`hvcC` 容器，当前 muxer 不支持
+///   - 13 = AV1（`av01.*`）—— 需要 `av01`+`av1C`
+///
+/// 选到 HEVC 后再按 AVC 的方式封装，会让播放器拿不到可解码的 SPS/PPS，
+/// 表现就是**只有声音没有画面**（用户实际反馈的现象）。
+/// 因此必须优先 AVC：宁可清晰度相同但编码兼容，也不要"看起来更好"却放不出来。
+fn codec_priority(codecid: Option<i64>) -> i32 {
+    match codecid {
+        Some(7) => 30,  // AVC：唯一被当前 muxer 完整支持
+        Some(12) => 20, // HEVC：能下载但不能直接封装成 avc1
+        Some(13) => 10, // AV1：同上
+        _ => 0,
+    }
+}
+
 /// qn → 面向用户的标签。B 站官方描述有时缺失，这里兜底。
 fn qn_label(qn: i64) -> &'static str {
     match qn {
@@ -428,21 +448,11 @@ pub async fn fetch_play_info(
         if !has_url {
             continue;
         }
-        let prio = match v.codecid {
-            Some(12) => 3,
-            Some(13) => 2,
-            Some(7) => 1,
-            _ => 0,
-        };
+        let prio = codec_priority(v.codecid);
         by_qn
             .entry(v.id)
             .and_modify(|cur| {
-                let cur_prio = match cur.codecid {
-                    Some(12) => 3,
-                    Some(13) => 2,
-                    Some(7) => 1,
-                    _ => 0,
-                };
+                let cur_prio = codec_priority(cur.codecid);
                 if prio > cur_prio {
                     *cur = v;
                 }
@@ -501,12 +511,7 @@ fn pick_video_stream(dash: &Dash, qn: i64) -> Option<&DashVideo> {
         if !has_url {
             continue;
         }
-        let prio = match v.codecid {
-            Some(12) => 3,
-            Some(13) => 2,
-            Some(7) => 1,
-            _ => 0,
-        };
+        let prio = codec_priority(v.codecid);
         if prio > best_prio {
             best_prio = prio;
             best = Some(v);
@@ -572,6 +577,127 @@ async fn download_to_vec(urls: &[String]) -> Result<Vec<u8>, String> {
         }
     }
     Err(format!("所有下载地址均失败（最后一次: {last_err}）"))
+}
+
+
+/// 从 m4s 的 moov→stsd→avc1→avcC 里读出真实的 SPS / PPS。
+///
+/// ## 为什么必须从 moov 读，而不是从帧里找
+///
+/// B 站 fMP4 的**视频样本里不含 SPS/PPS**（它们只存在于初始化段 moov 的 avcC 中）。
+/// 现有 muxer 的 `add_video` 逻辑是「从第一帧的 Annex-B 里提取 SPS/PPS」，
+/// 对 B 站这种输入永远提取不到 → `v_sps` 为空 → 写出的 avcC 退化成硬编码的
+/// 兜底值（66/0/40），解码器拿不到真实的 profile/level 与参数集，**结果就是只有声音没有画面**。
+///
+/// 正确做法：解析初始化段的 avcC，拿到真正的 SPS/PPS，再连同帧一起交给 muxer。
+pub fn read_sps_pps_from_moov(fmp4: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut pos = 0usize;
+    while pos + 8 <= fmp4.len() {
+        let size =
+            u32::from_be_bytes([fmp4[pos], fmp4[pos + 1], fmp4[pos + 2], fmp4[pos + 3]]) as usize;
+        let typ = &fmp4[pos + 4..pos + 8];
+        if size < 8 || pos + size > fmp4.len() {
+            return None;
+        }
+        if typ == b"moov" {
+            return find_avcc(&fmp4[pos + 8..pos + size]);
+        }
+        pos += size;
+    }
+    None
+}
+
+/// 递归在 trak/mdia/minf/stbl/stsd 中找到 avcC 并解析。
+fn find_avcc(node: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut p = 8usize;
+    while p + 8 <= node.len() {
+        let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
+        let typ = &node[p + 4..p + 8];
+        if size < 8 || p + size > node.len() {
+            break;
+        }
+        match typ {
+            b"trak" | b"mdia" | b"minf" | b"stbl" => {
+                if let Some(r) = find_avcc(&node[p..p + size]) {
+                    return Some(r);
+                }
+            }
+            b"stsd" => {
+                // stsd: ver/flags(4)+entry_count(4)，随后是 sample entry
+                // sample entry: 8(boxhdr)+6(reserved)+2(data_ref)+16(visual fields)+...
+                // 我们只需在其内部继续找 avcC，所以直接扫这段
+                if let Some(r) = find_avcc(&node[p..p + size]) {
+                    return Some(r);
+                }
+            }
+            b"avc1" | b"avc3" => {
+                // avc1 内部：8 + 6 + 2 + 16 + 2(width) + 2(height) ... 直接在其 body 里找 avcC
+                if let Some(r) = find_avcc(&node[p..p + size]) {
+                    return Some(r);
+                }
+            }
+            b"avcC" => {
+                return parse_avcc_body(&node[p..p + size]);
+            }
+            _ => {}
+        }
+        p += size;
+    }
+    None
+}
+
+/// 解析 avcC（AVCDecoderConfigurationRecord）的 body，取出首组 SPS/PPS。
+fn parse_avcc_body(avcc: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    // body: 8(box header) + configurationVersion(1) profile(1) compat(1) level(1)
+    //       + 0xFC|reserved+numSPS(1) + [len(2)+sps]* + numPPS(1) + [len(2)+pps]*
+    if avcc.len() < 12 {
+        return None;
+    }
+    let b = &avcc[8..];
+    if b.len() < 6 {
+        return None;
+    }
+    let num_sps = (b[5] & 0x1F) as usize;
+    let mut off = 6usize;
+    let mut sps_out: Option<Vec<u8>> = None;
+    for _ in 0..num_sps {
+        if off + 2 > b.len() {
+            return None;
+        }
+        let l = u16::from_be_bytes([b[off], b[off + 1]]) as usize;
+        off += 2;
+        if off + l > b.len() {
+            return None;
+        }
+        if sps_out.is_none() {
+            sps_out = Some(b[off..off + l].to_vec());
+        }
+        off += l;
+    }
+    if off + 1 > b.len() {
+        return None;
+    }
+    let num_pps = b[off] as usize;
+    off += 1;
+    let mut pps_out: Option<Vec<u8>> = None;
+    for _ in 0..num_pps {
+        if off + 2 > b.len() {
+            return None;
+        }
+        let l = u16::from_be_bytes([b[off], b[off + 1]]) as usize;
+        off += 2;
+        if off + l > b.len() {
+            return None;
+        }
+        if pps_out.is_none() {
+            pps_out = Some(b[off..off + l].to_vec());
+        }
+        off += l;
+    }
+    match (sps_out, pps_out) {
+        (Some(s), Some(p)) => Some((s, p)),
+        _ => None,
+    }
 }
 
 /// fMP4（m4s）解析：按 `moof`+`mdat` 分片取出每个 sample 的原始字节。
@@ -770,6 +896,8 @@ pub async fn download_one(
     req: &BiliDownloadRequest,
     total_pages: i64,
     app: Option<&tauri::AppHandle>,
+    // 登录 cookie：为空表示免登录（最高 480P）；非空则能取到 720P/1080P
+    cookie: Option<&str>,
 ) -> Result<BiliDownloadResult, String> {
     // 直接 emit 而不走闭包回调：`&mut dyn FnMut` 不是 Send，
     // 会污染整个 future 导致 Tauri 命令编译失败。
@@ -788,7 +916,7 @@ pub async fn download_one(
         total: 0,
         stage: "解析播放地址".to_string(),
     });
-    let (info, dash) = fetch_play_info(&req.bvid, req.cid, None).await?;
+    let (info, dash) = fetch_play_info(&req.bvid, req.cid, cookie).await?;
 
     if req.audio_only {
         let audio = pick_audio_stream(&dash)
@@ -914,6 +1042,12 @@ pub async fn download_one(
     let (fps_num, fps_den) =
         read_video_fps(&vbytes, vframes.len()).unwrap_or((30, 1));
 
+    // 从初始化段读真实 SPS/PPS：B 站 fMP4 的帧里不含参数集，
+    // 读不到就会写出假 avcC，播放器表现为只有声音没有画面。
+    let sps_pps = read_sps_pps_from_moov(&vbytes);
+    if sps_pps.is_none() {
+        log::warn!("[bilibili] 未能从 m4s 的 moov 读取 SPS/PPS，画面可能无法解码");
+    }
     crate::file_convert::remux_av_to_mp4(
         &req.output_path,
         &vframes,
@@ -925,6 +1059,7 @@ pub async fn download_one(
         sr,
         ch,
         None,
+        sps_pps,
     )?;
 
     let size = std::fs::metadata(&req.output_path).map(|m| m.len()).unwrap_or(0);
@@ -1035,11 +1170,283 @@ fn split_aac_frames(raw: &[u8]) -> Vec<Vec<u8>> {
     }
 }
 
+
+
+// ════════════════════════════════════════════════════════════════════
+//  登录（B 站官方二维码登录）
+// ════════════════════════════════════════════════════════════════════
+//
+// 为什么要做登录：未登录时 B 站只下发 480P（见文件头说明）。
+// 登录后可拿到 720P/1080P，这也是用户提出该需求的直接原因。
+//
+// 采用**官方 passport 二维码登录**（与 B 站网页端同一套接口）：
+//   1. GET  generate -> 拿到 qrcode_key + 二维码 URL（前端用 qrcode.react 绘制）
+//   2. GET  poll     -> 轮询扫码状态；成功后响应里带 Set-Cookie
+//   3. 保存 cookie   -> 复用 music_api::cookie 的持久化（与音乐模块同一套存储）
+//
+// 不采用"内嵌浏览器窗口"方案：那需要用户手动登录并抓 cookie，
+// 且窗口参数必须与 tauri.conf.json 逐字一致否则 WebView2 会创建失败，
+// 官方扫码接口更简单可靠，也不涉及跨域/签名问题。
+
+/// 二维码登录状态。
+#[derive(Debug, Clone, Serialize)]
+pub struct BiliLoginStatus {
+    /// 0=成功 1=等待扫码 2=已扫码待确认 3=已过期（与 B 站接口 code 对齐）
+    pub code: i64,
+    pub message: String,
+    /// 是否已登录（cookie 里含 SESSDATA 且有效）
+    pub logged_in: bool,
+}
+
+/// 登录信息（成功后回给前端展示）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BiliLoginInfo {
+    pub mid: i64,
+    pub uname: String,
+    pub face: String,
+}
+
+#[derive(Deserialize)]
+struct QrGenResp {
+    code: i64,
+    message: String,
+    data: Option<QrGenData>,
+}
+
+#[derive(Deserialize)]
+struct QrGenData {
+    url: String,
+    qrcode_key: String,
+}
+
+#[derive(Deserialize)]
+struct QrPollResp {
+    code: i64,
+    message: String,
+    data: Option<QrPollData>,
+}
+
+#[derive(Deserialize)]
+struct QrPollData {
+    url: Option<String>,
+    refresh_token: Option<String>,
+    timestamp: Option<i64>,
+    /// 接口自身的状态码：0 成功 / 86101 未扫码 / 86090 已扫码未确认 / 86038 已失效
+    code: i64,
+    message: Option<String>,
+}
+
+/// 生成登录二维码。返回 (qrcode_key, 二维码内容 URL)。
+pub async fn login_qrcode() -> Result<(String, String), String> {
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let resp = client
+        .get("https://passport.bilibili.com/x/passport-login/web/qrcode/generate")
+        .header("Referer", REFERER)
+        .send()
+        .await
+        .map_err(|e| format!("获取登录二维码失败: {e}"))?;
+    let body: QrGenResp = resp.json().await.map_err(|e| format!("解析二维码失败: {e}"))?;
+    if body.code != 0 {
+        return Err(format!("B 站返回错误 {}: {}", body.code, body.message));
+    }
+    let d = body.data.ok_or("二维码数据为空")?;
+    Ok((d.qrcode_key, d.url))
+}
+
+/// 轮询扫码结果。成功时返回 (cookie 字符串, 登录信息)。
+pub async fn login_poll(qrcode_key: &str) -> Result<(Option<String>, BiliLoginStatus), String> {
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let url = format!(
+        "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}"
+    );
+    let resp = client
+        .get(&url)
+        .header("Referer", REFERER)
+        .send()
+        .await
+        .map_err(|e| format!("轮询登录状态失败: {e}"))?;
+
+    // 关键：登录成功时 cookie 在响应头 Set-Cookie 里，而不是 body。
+    // reqwest 未启用 cookie store，需自行拼接。
+    let cookies: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .filter_map(|s| s.split(';').next().map(|x| x.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let body: QrPollResp = resp.json().await.map_err(|e| format!("解析轮询结果失败: {e}"))?;
+    if body.code != 0 {
+        return Err(format!("B 站返回错误 {}: {}", body.code, body.message));
+    }
+    let d = body.data.ok_or("轮询数据为空")?;
+
+    let mut status = BiliLoginStatus {
+        code: d.code,
+        message: d.message.clone().unwrap_or_default(),
+        logged_in: false,
+    };
+    if d.code == 0 {
+        // 拼接 cookie：优先用 Set-Cookie 里的（含 SESSDATA）
+        let cookie = cookies
+            .iter()
+            .filter(|c| {
+                let lower = c.to_lowercase();
+                lower.starts_with("sessdata=")
+                    || lower.starts_with("bili_jct=")
+                    || lower.starts_with("dedeuserid=")
+                    || lower.starts_with("buvid3=")
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        if !cookie.to_lowercase().contains("sessdata=") {
+            return Err("登录成功但未获取到 SESSDATA，请重试".to_string());
+        }
+        status.logged_in = true;
+        return Ok((Some(cookie), status));
+    }
+    Ok((None, status))
+}
+
+/// 用 cookie 校验登录态并取用户信息。cookie 无效时返回 Err。
+pub async fn login_check(cookie: &str) -> Result<BiliLoginInfo, String> {
+    if !cookie_has_login(cookie) {
+        return Err("未登录".to_string());
+    }
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let resp = client
+        .get("https://api.bilibili.com/x/web-interface/nav")
+        .header("Referer", REFERER)
+        .header("Cookie", cookie)
+        .send()
+        .await
+        .map_err(|e| format!("校验登录态失败: {e}"))?;
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("解析失败: {e}"))?;
+    let code = v.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        // -101 表示未登录/cookie 失效
+        let msg = v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("登录态无效");
+        return Err(format!("登录态无效（{code}: {msg}）"));
+    }
+    let d = v.get("data").ok_or("用户信息为空")?;
+    let is_login = d.get("isLogin").and_then(|x| x.as_bool()).unwrap_or(false);
+    if !is_login {
+        return Err("登录态已失效，请重新登录".to_string());
+    }
+    Ok(BiliLoginInfo {
+        mid: d.get("mid").and_then(|x| x.as_i64()).unwrap_or(0),
+        uname: d
+            .get("uname")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        face: d
+            .get("face")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// cookie 里是否含 SESSDATA（B 站登录态凭据）。
+pub fn cookie_has_login(cookie: &str) -> bool {
+    cookie
+        .to_lowercase()
+        .contains("sessdata=")
+}
+
+/// 从持久化存储读取 cookie（复用音乐模块的 provider 存储).
+pub fn load_saved_cookie(app: &tauri::AppHandle) -> String {
+    crate::music_api::cookie::load_cookie(app, "bilibili").unwrap_or_default()
+}
+
+
 // ════════════════════════════════════════════════════════════════════
 //  Tauri 命令
 // ════════════════════════════════════════════════════════════════════
 
 use tauri::{AppHandle, Emitter};
+
+
+/// 生成登录二维码：返回 { qrcode_key, qr_url }。
+/// 前端用 qrcode.react 把 qr_url 画成二维码给用户扫。
+#[tauri::command]
+pub async fn bilibili_login_qrcode() -> Result<serde_json::Value, String> {
+    let (key, url) = login_qrcode().await?;
+    Ok(serde_json::json!({ "qrcode_key": key, "qr_url": url }))
+}
+
+/// 轮询扫码结果。登录成功时自动保存 cookie 并返回用户信息。
+#[tauri::command]
+pub async fn bilibili_login_poll(app: AppHandle, qrcode_key: String) -> Result<serde_json::Value, String> {
+    let (cookie, status) = login_poll(&qrcode_key).await?;
+    if let Some(c) = cookie {
+        // 复用音乐模块的持久化（同一套加密存储，provider=bilibili）
+        crate::music_api::cookie::save_cookie(&app, "bilibili", &c)
+            .map_err(|e| format!("保存登录凭据失败: {e}"))?;
+        let info = login_check(&c).await.unwrap_or(BiliLoginInfo {
+            mid: 0,
+            uname: String::new(),
+            face: String::new(),
+        });
+        return Ok(serde_json::json!({
+            "code": status.code,
+            "message": status.message,
+            "logged_in": true,
+            "mid": info.mid,
+            "uname": info.uname,
+            "face": info.face,
+        }));
+    }
+    Ok(serde_json::json!({
+        "code": status.code,
+        "message": status.message,
+        "logged_in": false,
+    }))
+}
+
+/// 查询当前登录状态与用户信息。
+#[tauri::command]
+pub async fn bilibili_login_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    let cookie = load_saved_cookie(&app);
+    if cookie.is_empty() {
+        return Ok(serde_json::json!({ "logged_in": false }));
+    }
+    match login_check(&cookie).await {
+        Ok(info) => Ok(serde_json::json!({
+            "logged_in": true,
+            "mid": info.mid,
+            "uname": info.uname,
+            "face": info.face,
+        })),
+        Err(e) => Ok(serde_json::json!({ "logged_in": false, "error": e })),
+    }
+}
+
+/// 退出登录（清除凭据）。
+#[tauri::command]
+pub async fn bilibili_logout(app: AppHandle) -> Result<(), String> {
+    crate::music_api::cookie::clear_cookie(&app, "bilibili")
+        .map_err(|e| format!("清除登录凭据失败: {e}"))
+}
+
+/// 带登录态获取清晰度：登录后应能看到 720P/1080P。
+#[tauri::command]
+pub async fn bilibili_qualities_authed(
+    app: AppHandle,
+    bvid: String,
+    cid: i64,
+) -> Result<BiliPlayInfo, String> {
+    let cookie = load_saved_cookie(&app);
+    let (info, _) = fetch_play_info(&bvid, cid, if cookie.is_empty() { None } else { Some(&cookie) }).await?;
+    Ok(info)
+}
 
 /// 解析输入（链接/BV/av），返回视频信息。不做下载。
 #[tauri::command]
@@ -1098,7 +1505,8 @@ pub async fn bilibili_download(
             results.push(Err("已取消".to_string()));
             continue;
         }
-        let r = download_one(req, total, Some(&app)).await;
+        let cookie = load_saved_cookie(&app);
+        let r = download_one(req, total, Some(&app), if cookie.is_empty() { None } else { Some(&cookie) }).await;
         // 逐项上报，让界面能立即标记该分P 完成/失败
         let _ = app.emit(
             "bilibili:item",
@@ -1137,12 +1545,144 @@ pub async fn bilibili_download(
 ///   fps = 总帧数 / 总时长
 /// 再约分成整数分数交给 muxer。这样对 25 / 29.97 / 30 / 60 都成立。
 fn read_video_fps(fmp4: &[u8], total_samples: usize) -> Option<(u32, u32)> {
+    // 两条路径，按可靠性排序：
+    //
+    // A) trex.default_sample_duration —— 首选。
+    //    B 站的 AVC 流 mvhd.duration 是 **0**（fragmented MP4 常见），
+    //    但 moov→mvex→trex 里的 default_sample_duration 是真实帧时长。
+    //    实测 timescale=16000、default_sample_duration=640 → 恰好 25.0 fps。
+    //    早期版本只读 mvhd，AVC 流上 duration=0 导致回退到 30fps，
+    //    于是 25fps 视频的时长从 212s 变成 176.9s（音画不同步）。
+    //
+    // B) mvhd.duration / 总帧数 —— 兜底，适用于写了 duration 的流。
+    if let Some(fps) = fps_from_trex(fmp4) {
+        return Some(fps);
+    }
     let dur = read_mvhd_duration_secs(fmp4)?;
     if dur <= 0.0 || total_samples == 0 {
         return None;
     }
-    let fps = total_samples as f64 / dur;
-    // 约分：优先匹配常见的 NTSC/PAL 帧率，避免浮点误差
+    normalize_fps(total_samples as f64 / dur)
+}
+
+/// 从 moov→mvex→trex 读 (timescale / default_sample_duration)。
+fn fps_from_trex(fmp4: &[u8]) -> Option<(u32, u32)> {
+    let scale = find_mdhd_timescale_of_first_video(fmp4)?;
+    let dsd = find_trex_default_duration(fmp4)?;
+    if dsd == 0 {
+        return None;
+    }
+    // 注意：mdhd.timescale / trex.default_sample_duration 得到的是**帧率本身**
+    // （例如 16000/640 = 25），而不是要原样传给 muxer 的 (num, den)。
+    // muxer 会用 `1e7 * den / num` 作为 stts 的单帧时长（100ns 刻度），
+    // 所以必须把这里得到的比值**约分成真实帧率**再传，
+    // 否则会把 16000/640 直接塞进去 → stts delta=625 → 时长算成 0.33s。
+    let fps = scale as f64 / dsd as f64;
+    normalize_fps(fps)
+}
+
+/// 在 moov 里找 mvex→trex，取 default_sample_duration。
+fn find_trex_default_duration(fmp4: &[u8]) -> Option<u32> {
+    let moov = find_top_box(fmp4, b"moov")?;
+    find_trex_in_moov(&moov)
+}
+
+fn find_trex_in_moov(moov: &[u8]) -> Option<u32> {
+    let mut p = 8usize;
+    while p + 8 <= moov.len() {
+        let size = u32::from_be_bytes([moov[p], moov[p + 1], moov[p + 2], moov[p + 3]]) as usize;
+        let typ = &moov[p + 4..p + 8];
+        if size < 8 || p + size > moov.len() {
+            break;
+        }
+        if typ == b"mvex" {
+            // mvex 内找 trex
+            let mut q = 8usize;
+            let area = &moov[p..p + size];
+            while q + 8 <= area.len() {
+                let s2 =
+                    u32::from_be_bytes([area[q], area[q + 1], area[q + 2], area[q + 3]]) as usize;
+                let t2 = &area[q + 4..q + 8];
+                if s2 < 8 || q + s2 > area.len() {
+                    break;
+                }
+                if t2 == b"trex" {
+                    // trex box 布局（实测校准，早期版本算错了 4 字节）：
+                    //   b[0..4]   size
+                    //   b[4..8]   'trex'
+                    //   b[8..12]  version+flags
+                    //   b[12..16] track_ID
+                    //   b[16..20] default_sample_description_index
+                    //   b[20..24] default_sample_duration   <-- 要的就是这个
+                    //   b[24..28] default_sample_size
+                    //   b[28..32] default_sample_flags
+                    //
+                    // 之前取 b[16..20]（sdi），把「描述索引 1」当成帧时长，
+                    // 于是 fps 被算成 mdhd_ts/1 = 16000 → stts delta=625 → 时长 0.33s。
+                    let b = &area[q..q + s2];
+                    if b.len() >= 24 {
+                        return Some(u32::from_be_bytes([b[20], b[21], b[22], b[23]]));
+                    }
+                }
+                q += s2;
+            }
+        }
+        p += size;
+    }
+    None
+}
+
+/// 取第一个**视频** trak 的 mdhd.timescale。
+fn find_mdhd_timescale_of_first_video(fmp4: &[u8]) -> Option<u32> {
+    let moov = find_top_box(fmp4, b"moov")?;
+    let mut p = 8usize;
+    while p + 8 <= moov.len() {
+        let size = u32::from_be_bytes([moov[p], moov[p + 1], moov[p + 2], moov[p + 3]]) as usize;
+        let typ = &moov[p + 4..p + 8];
+        if size < 8 || p + size > moov.len() {
+            break;
+        }
+        if typ == b"trak" {
+            let trak = &moov[p..p + size];
+            if trak_is_video(trak) {
+                if let Some(ts) = find_mdhd_timescale(trak) {
+                    if ts > 0 {
+                        return Some(ts);
+                    }
+                }
+            }
+        }
+        p += size;
+    }
+    None
+}
+
+/// 取顶层某个 box 的内容（含 box 头）。
+fn find_top_box(data: &[u8], name: &[u8; 4]) -> Option<Vec<u8>> {
+    let mut pos = 0usize;
+    while pos + 8 <= data.len() {
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let typ = &data[pos + 4..pos + 8];
+        if size < 8 || pos + size > data.len() {
+            return None;
+        }
+        if typ == name {
+            return Some(data[pos..pos + size].to_vec());
+        }
+        pos += size;
+    }
+    None
+}
+
+
+
+
+/// 把浮点帧率对齐到常见帧率，避免浮点误差导致时长漂移。
+fn normalize_fps(fps: f64) -> Option<(u32, u32)> {
+    if fps <= 0.0 {
+        return None;
+    }
     for (num, den) in [
         (24000u32, 1001u32),
         (30000, 1001),
@@ -1160,9 +1700,7 @@ fn read_video_fps(fmp4: &[u8], total_samples: usize) -> Option<(u32, u32)> {
             return Some((num, den));
         }
     }
-    // 兜底：按整数帧率
-    let rounded = fps.round().max(1.0);
-    Some((rounded as u32, 1))
+    Some((fps.round().max(1.0) as u32, 1))
 }
 
 /// 读 mvhd 的总时长（秒）。
