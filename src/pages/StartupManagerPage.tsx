@@ -65,6 +65,9 @@ interface ServiceItem {
 }
 
 export default function StartupManagerPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvd521c6 = useColorModeValue("orange.600", "orange.300");
   const { t } = useTranslation();
   const toast = useDynamicIsland("rocket");
   const { liquidGlassEnabled } = useBackground();
@@ -74,12 +77,20 @@ export default function StartupManagerPage() {
   const adaptiveTitle = useAdaptiveTextColor();
   const headingColor = useColorModeValue("gray.900", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
+  // 先无条件调用 Hook 取值，再做三元选择：
+  // useColorModeValue 内部是 useContext，写成 `cond ? A : useColorModeValue(...)`
+  // 会让 Hook 只在 cond 为假时执行，条件变化即崩溃。
+  const tableBgFallback = useColorModeValue("#ffffff", "#1a1a1a");
   const tableBg = liquidGlassEnabled
     ? "rgba(255,255,255,0.7)"
-    : useColorModeValue("#ffffff", "#1a1a1a");
+    : tableBgFallback;
+  // 先无条件调用 Hook 取值，再做三元选择：
+  // useColorModeValue 内部是 useContext，写成 `cond ? A : useColorModeValue(...)`
+  // 会让 Hook 只在 cond 为假时执行，条件变化即崩溃。
+  const tableBorderFallback = useColorModeValue("gray.200", "#333333");
   const tableBorder = liquidGlassEnabled
     ? "rgba(255,255,255,0.3)"
-    : useColorModeValue("gray.200", "#333333");
+    : tableBorderFallback;
   const pathColor = useColorModeValue("gray.500", "#888888");
   const hoverBg = `${themeConfig.primaryColor}1F`;
   const deleteColor = useColorModeValue("red.500", "red.400");
@@ -522,7 +533,7 @@ export default function StartupManagerPage() {
             </HStack>
 
             {!isAppAdmin && (
-              <Text color={useColorModeValue("orange.600", "orange.300")} fontSize="xs">
+              <Text color={cmvd521c6} fontSize="xs">
                 {t("optimization.startupManager.serviceAdminRequired")}
               </Text>
             )}

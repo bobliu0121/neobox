@@ -16,6 +16,9 @@ const SV_PANEL_H = 150;
 const PANEL_HEIGHT = 240;
 
 export function CustomColorPicker({ color, onChange, compact }: { color: string; onChange: (c: string) => void; compact?: boolean }) {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvd28141 = useColorModeValue("gray.700", "#e0e0e0");
   const [isOpen, setIsOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
@@ -240,7 +243,7 @@ export function CustomColorPicker({ color, onChange, compact }: { color: string;
               {/* Preview + hex */}
               <HStack spacing={2}>
                 <Box w="24px" h="24px" borderRadius="md" bg={color} flexShrink={0} />
-                <Text fontSize="xs" fontWeight="semibold" letterSpacing="0.03em" color={useColorModeValue("gray.700", "#e0e0e0")}>
+                <Text fontSize="xs" fontWeight="semibold" letterSpacing="0.03em" color={cmvd28141}>
                   {colorToHex(color)}
                 </Text>
               </HStack>

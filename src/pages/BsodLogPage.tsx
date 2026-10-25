@@ -207,6 +207,9 @@ function MetricCard({ value, label, color }: { value: string | number; label: st
 // 崩溃记录展开行
 // ---------------------------------------------------------------------------
 function CrashRow({ c }: { c: CrashRecord }) {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmv2b779f = useColorModeValue("gray.50", "#111111");
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const headingColor = useColorModeValue("gray.800", "#ffffff");
@@ -236,7 +239,7 @@ function CrashRow({ c }: { c: CrashRecord }) {
       </Tr>
       {open && (
         <Tr>
-          <Td colSpan={8} bg={useColorModeValue("gray.50", "#111111")}>
+          <Td colSpan={8} bg={cmv2b779f}>
             <VStack align="stretch" spacing={3} py={2}>
               {c.sources.length > 0 && (
                 <Box>
@@ -395,6 +398,10 @@ export default function BsodLogPage() {
   const adaptiveTitle = useAdaptiveTextColor();
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext。
+  // 原先直接写在下方 JSX 中、且位于 `{data && (...)}` 条件块内 ——
+  // 数据从 null 变为对象的那一刻 Hook 数量突变，React 抛错导致整页崩溃（白屏）。
+  const dividerColor = useColorModeValue("gray.200", "#333333");
 
   const [data, setData] = useState<BsodEvidence | null>(null);
   const [loading, setLoading] = useState(false);
@@ -490,7 +497,7 @@ export default function BsodLogPage() {
                 </HStack>
                 <Text fontSize="xs" color={subTextColor}>{t("bsodLog.generatedAt")}: {data.generated_at}</Text>
               </HStack>
-              <Box borderTopWidth="1px" borderColor={useColorModeValue("gray.200", "#333")} pt={3}>
+              <Box borderTopWidth="1px" borderColor={dividerColor} pt={3}>
                 <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} spacing={2} fontSize="sm">
                   <Text color={subTextColor}>{t("bsodLog.os")}: <Text as="span" color={headingColor}>{data.system.caption} {data.system.build}</Text></Text>
                   <Text color={subTextColor}>{t("bsodLog.cpu")}: <Text as="span" color={headingColor}>{data.system.cpu_name} ({data.system.cpu_cores}C/{data.system.cpu_threads}T)</Text></Text>
@@ -592,7 +599,7 @@ export default function BsodLogPage() {
                     ))}
                     <HStack spacing={1} ml="auto">
                       <IconSearch size={14} color={subTextColor} />
-                      <Box as="input" borderWidth="1px" borderColor={useColorModeValue("gray.200", "#333")}
+                      <Box as="input" borderWidth="1px" borderColor={dividerColor}
                         borderRadius="md" px={2} py={1} fontSize="xs" w="220px"
                         placeholder={t("bsodLog.searchPlaceholder")} />
                     </HStack>

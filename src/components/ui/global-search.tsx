@@ -42,6 +42,9 @@ function matchSearch(query: string, item: SearchItem, t: (key: string) => string
 }
 
 export function GlobalSearch() {
+  // Ctrl+K 快捷键提示的底色。必须在组件顶层取：useColorModeValue 内部是 useContext，
+  // 原先内联在 `{!isOpen && (...)}` 条件块里 —— 搜索框一打开/关闭，Hook 数量就变化 → React 崩溃。
+  const kbdBg = useColorModeValue("gray.100", "gray.700");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { liquidGlassEnabled, liquidGlassBlur } = useBackground();
@@ -236,10 +239,10 @@ export function GlobalSearch() {
         {!isOpen && (
           <Box position="absolute" right={3} top="50%" transform="translateY(-50%)">
             <HStack spacing={1}>
-              <Kbd fontSize="10px" px={1} py={0.5} borderRadius="md" bg={useColorModeValue("gray.100", "gray.700")}>
+              <Kbd fontSize="10px" px={1} py={0.5} borderRadius="md" bg={kbdBg}>
                 Ctrl
               </Kbd>
-              <Kbd fontSize="10px" px={1} py={0.5} borderRadius="md" bg={useColorModeValue("gray.100", "gray.700")}>
+              <Kbd fontSize="10px" px={1} py={0.5} borderRadius="md" bg={kbdBg}>
                 K
               </Kbd>
             </HStack>

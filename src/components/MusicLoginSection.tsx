@@ -158,6 +158,9 @@ export function VipBadge({
 }
 
 export function MusicLoginSection() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在条件/列表渲染里会让 Hook 数量随数据变化 → React 崩溃。
+  const loginRowHoverBg = useColorModeValue("gray.100", "#252525");
   const {
     loginInfo,
     loginInfos,
@@ -449,7 +452,7 @@ export function MusicLoginSection() {
                 as={Box}
                 cursor="pointer"
                 borderRadius="md"
-                _hover={{ bg: useColorModeValue("gray.100", "#252525") }}
+                _hover={{ bg: loginRowHoverBg }}
                 p={1}
               >
                 <HStack spacing={2}>

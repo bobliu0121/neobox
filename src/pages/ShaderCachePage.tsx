@@ -79,6 +79,8 @@ function VendorCard({
   onToggleSelect: () => void;
   onToggleExpand: () => void;
 }) {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在条件/列表渲染里会让 Hook 数量随数据变化 → React 崩溃。
   const { t } = useTranslation();
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const descColor = useColorModeValue("gray.500", "#ffffff");
@@ -92,6 +94,9 @@ function VendorCard({
   const name = t(`shaderCache.${vendorKey}.name`);
   const description = t(`shaderCache.${vendorKey}.description`);
   const hasDetected = !!result && result.total_dirs > 0;
+  // 徽章底色：必须在组件顶层取（useColorModeValue 内部是 useContext），
+  // 内联在 `{hasDetected ? ...}` 条件分支里会让 Hook 数量随扫描结果变化 → React 崩溃。
+  const detectedBadgeBg = useColorModeValue(hasDetected ? "green.50" : "gray.50", hasDetected ? "rgba(72,187,120,0.1)" : "rgba(128,128,128,0.15)");
   const accent = "#38A169";
   const dirs = result?.dirs ?? [];
   // 折叠时把目录路径挂到悬浮提示；展开后列表里已能看到，就不再提示
@@ -128,10 +133,7 @@ function VendorCard({
               fontSize="10px"
               fontWeight="medium"
               colorScheme={hasDetected ? "green" : "gray"}
-              bg={useColorModeValue(
-                hasDetected ? "green.50" : "gray.50",
-                hasDetected ? "rgba(72,187,120,0.1)" : "rgba(128,128,128,0.15)"
-              )}
+              bg={detectedBadgeBg}
             >
               {hasDetected
                 ? t("shaderCache.detected")

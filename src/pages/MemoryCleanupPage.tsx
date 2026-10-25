@@ -58,6 +58,9 @@ function getDriveLabel(path: string): string {
 const store = new LazyStore("auto-clean.json");
 
 export default function MemoryCleanupPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvdd4528 = useColorModeValue("orange.50", "rgba(255, 165, 0, 0.1)");
   const { t } = useTranslation();
   const { liquidGlassEnabled } = useBackground();
   const { config: themeConfig, getContrastTextColor } = useThemeColor();
@@ -833,7 +836,7 @@ export default function MemoryCleanupPage() {
                           <Alert
                             status={pagefile.recommendation.verdict === "low" ? "warning" : pagefile.recommendation.verdict === "high" ? "error" : "success"}
                             borderRadius="xl"
-                            bg={useColorModeValue("orange.50", "rgba(255, 165, 0, 0.1)")}
+                            bg={cmvdd4528}
                             borderLeft="4px solid"
                             borderColor={pagefile.recommendation.verdict === "low" ? "orange.400" : pagefile.recommendation.verdict === "high" ? "red.400" : "green.400"}
                           >

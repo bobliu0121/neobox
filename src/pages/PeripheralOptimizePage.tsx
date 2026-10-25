@@ -37,6 +37,9 @@ const RECOMMENDED = {
 } as const;
 
 export default function PeripheralOptimizePage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在条件/列表渲染里会让 Hook 数量随数据变化 → React 崩溃。
+  const rowHoverBg = useColorModeValue("gray.100", "rgba(255,255,255,0.08)");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useDynamicIsland("mouse");
@@ -256,7 +259,7 @@ export default function PeripheralOptimizePage() {
           w={9}
           h={9}
           borderRadius="lg"
-          _hover={{ bg: useColorModeValue("gray.100", "rgba(255,255,255,0.08)") }}
+          _hover={{ bg: rowHoverBg }}
           onClick={() => navigate("/optimize")}
           color={headingColor}
         >

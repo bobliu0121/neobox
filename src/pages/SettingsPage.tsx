@@ -1250,6 +1250,13 @@ function ThemeColorSettings() {
 
 
 function AppearanceSettings() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在条件/列表渲染里会让 Hook 数量随数据变化 → React 崩溃。
+  const swatchHoverBg = useColorModeValue("gray.200", "#222222");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvfa9bd6 = useColorModeValue("rgba(0,0,0,0.08)", "rgba(255,255,255,0.08)");
+  const cmv6ce314 = useColorModeValue("gray.200", "gray.700");
   const { t } = useTranslation();
   const { getActiveColor } = useThemeColor();
   const { font, setFont, fontOptions, importCustomFont, removeCustomFont, importing } = useFont();
@@ -1676,7 +1683,7 @@ function AppearanceSettings() {
             />
           </HStack>
           {liquidGlassEnabled && (
-            <Box mt={4} pt={3} borderTop="1px solid" borderColor={useColorModeValue("rgba(0,0,0,0.08)", "rgba(255,255,255,0.08)")}>
+            <Box mt={4} pt={3} borderTop="1px solid" borderColor={cmvfa9bd6}>
               <HStack justify="space-between" mb={2}>
                 <Text fontSize="sm" color={labelColor}>
                   {t("settings.appearanceSettings.liquidGlassModeLabel")}
@@ -1700,7 +1707,7 @@ function AppearanceSettings() {
             </Box>
           )}
           {liquidGlassEnabled && liquidGlassMode === "normal" && (
-            <Box mt={4} pt={3} borderTop="1px solid" borderColor={useColorModeValue("rgba(0,0,0,0.08)", "rgba(255,255,255,0.08)")}>
+            <Box mt={4} pt={3} borderTop="1px solid" borderColor={cmvfa9bd6}>
               <HStack justify="space-between" mb={2}>
                 <Text fontSize="sm" color={labelColor}>
                   {t("settings.appearanceSettings.liquidGlassBlurLabel")}
@@ -1714,7 +1721,7 @@ function AppearanceSettings() {
                 step={1}
                 onChange={(val) => setLiquidGlassBlur(val)}
               >
-                <SliderTrack bg={useColorModeValue("gray.200", "gray.700")}>
+                <SliderTrack bg={cmv6ce314}>
                   <SliderFilledTrack bg={getActiveColor()} />
                 </SliderTrack>
                 <SliderThumb />
@@ -2075,7 +2082,7 @@ function AppearanceSettings() {
                             justify="center"
                             cursor="pointer"
                             onClick={handleAddClick}
-                            _hover={{ bg: useColorModeValue("gray.200", "#222222") }}
+                            _hover={{ bg: swatchHoverBg }}
                             transition="all 0.2s"
                           >
                             <LuUpload size={18} color={subLabelColor} />
@@ -2141,7 +2148,7 @@ function AppearanceSettings() {
                           justify="center"
                           cursor="pointer"
                           onClick={handleVideoAddClick}
-                          _hover={{ bg: useColorModeValue("gray.200", "#222222") }}
+                          _hover={{ bg: swatchHoverBg }}
                           transition="all 0.2s"
                           flexDirection="column"
                           gap={1}
@@ -2264,7 +2271,7 @@ function AppearanceSettings() {
               step={1}
               onChange={(val) => setBackgroundBlur(val)}
             >
-              <SliderTrack bg={useColorModeValue("gray.200", "gray.700")}>
+              <SliderTrack bg={cmv6ce314}>
                 <SliderFilledTrack bg={getActiveColor()} />
               </SliderTrack>
               <SliderThumb />
@@ -2287,6 +2294,10 @@ function NetworkSettings() {
   const subLabelColor = useColorModeValue("gray.500", "#ffffff");
   const inputBg = useColorModeValue("white", "#1a1a1a");
   const inputBorder = useColorModeValue("gray.200", "#333333");
+  // 服务器图标底色：必须在组件顶层取。useColorModeValue 内部是 useContext，
+  // 写进 `allServers.map()` 里会让 Hook 数量随服务器条数变化，
+  // 只要用户添加过自定义 DNS 服务器，渲染即抛 "Rendered more hooks..." 整页崩溃。
+  const serverIconBg = useColorModeValue("gray.50", "#1a1a1a");
 
   const presetServers = [
     { id: "baidu", url: "https://www.baidu.com/img/flexible/logo/pc/result.png" },
@@ -2478,7 +2489,7 @@ function NetworkSettings() {
                       borderRadius="md"
                       overflow="hidden"
                       flexShrink={0}
-                      bg={useColorModeValue("gray.50", "#1a1a1a")}
+                      bg={serverIconBg}
                       display="flex"
                       alignItems="center"
                       justifyContent="center"
@@ -2552,6 +2563,10 @@ function NetworkSettings() {
  }
 
 function AboutSettings() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmv048128 = useColorModeValue("#1a202c", "#ffffff");
+  const cmv9b3ca8 = useColorModeValue("gray.400", "#6b7280");
   const { t } = useTranslation();
   const toast = useDynamicIsland("settings");
   const { getActiveColor } = useThemeColor();
@@ -2826,13 +2841,13 @@ function AboutSettings() {
               flexShrink={0}
             >
               {IS_STORE_BUILD ? (
-                <LuInfo size={22} color={useColorModeValue("#1a202c", "#ffffff")} />
+                <LuInfo size={22} color={cmv048128} />
               ) : isChecking ? (
-                <LuRefreshCw className="animate-spin" size={22} color={useColorModeValue("#1a202c", "#ffffff")} />
+                <LuRefreshCw className="animate-spin" size={22} color={cmv048128} />
               ) : hasUpdate ? (
-                <LuDownload size={22} color={useColorModeValue("#1a202c", "#ffffff")} />
+                <LuDownload size={22} color={cmv048128} />
               ) : (
-                <LuCheck size={22} color={useColorModeValue("#1a202c", "#ffffff")} />
+                <LuCheck size={22} color={cmv048128} />
               )}
             </Box>
             <VStack spacing={1} align="start" flex={1}>
@@ -2850,7 +2865,7 @@ function AboutSettings() {
               </Text>
             </VStack>
             {!IS_STORE_BUILD && (
-              <Box color={useColorModeValue("gray.400", "#6b7280")} _groupHover={{ color: getActiveColor() }}>
+              <Box color={cmv9b3ca8} _groupHover={{ color: getActiveColor() }}>
                 <Text fontSize="xl" lineHeight="1">›</Text>
               </Box>
             )}
@@ -2924,7 +2939,7 @@ function AboutSettings() {
               justifyContent="center"
               flexShrink={0}
             >
-              <LuBug size={20} color={useColorModeValue("#1a202c", "#ffffff")} />
+              <LuBug size={20} color={cmv048128} />
             </Box>
             <VStack spacing={1} align="start" flex={1}>
               <Text fontSize="md" fontWeight="bold" color={labelColor} noOfLines={1}>
@@ -2934,7 +2949,7 @@ function AboutSettings() {
                 github.com/bobliu0121/neobox/issues
               </Text>
             </VStack>
-            <Box color={useColorModeValue("gray.400", "#6b7280")} _groupHover={{ color: getActiveColor() }}>
+            <Box color={cmv9b3ca8} _groupHover={{ color: getActiveColor() }}>
               <Text fontSize="xl" lineHeight="1">›</Text>
             </Box>
           </HStack>

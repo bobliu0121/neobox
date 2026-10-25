@@ -538,6 +538,9 @@ function isUnderFolder(videoPath: string, folderPath: string): boolean {
 const THUMB_BATCH = 12;
 
 export default function NvidiaRecordingPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvb35dc2 = useColorModeValue("white", "#141414");
   const { t } = useTranslation();
   const adaptiveTitle = useAdaptiveTextColor();
   const { config, getActiveColor, getHoverColor } = useThemeColor();
@@ -1144,7 +1147,7 @@ export default function NvidiaRecordingPage() {
       >
         <ModalOverlay />
         {detailVideo && (
-          <ModalContent bg={useColorModeValue("white", "#141414")} borderRadius="2xl">
+          <ModalContent bg={cmvb35dc2} borderRadius="2xl">
             <ModalHeader fontSize="md" color={textColor} pr={14}>
               <HStack spacing={2}>
                 <Info size={16} color={getActiveColor()} />
@@ -1214,7 +1217,7 @@ export default function NvidiaRecordingPage() {
         returnFocusOnClose={false}
       >
         <AlertDialogOverlay>
-          <AlertDialogContent bg={useColorModeValue("white", "#141414")} borderRadius="2xl">
+          <AlertDialogContent bg={cmvb35dc2} borderRadius="2xl">
             <AlertDialogHeader fontSize="lg" fontWeight="bold" color={textColor}>
               <HStack spacing={2}>
                 <AlertTriangle size={18} color="red.400" />
@@ -1276,6 +1279,9 @@ function VideoCard({
   accentColor: string;
   prefersColorScheme: "light" | "dark";
 }) {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在条件/列表渲染里会让 Hook 数量随数据变化 → React 崩溃。
+  const thumbBorderColor = useColorModeValue("gray.100", "#262626");
   const { t } = useTranslation();
   const hasThumb = !!thumbSrc;
 
@@ -1292,7 +1298,7 @@ function VideoCard({
       <Box
         position="relative"
         borderBottom="1px solid"
-        borderColor={useColorModeValue("gray.100", "#262626")}
+        borderColor={thumbBorderColor}
         bg={prefersColorScheme === "dark" ? "#0d0d0d" : "#f3f4f6"}
         sx={{ aspectRatio: "16/9" }}
         cursor={batchMode ? undefined : "pointer"}

@@ -468,6 +468,11 @@ function EqBandSlider({
 
 // ===== 主页面组件 =====
 export default function AudioEqPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmv6afd1e = useColorModeValue("white", "#222");
+  const cmvd6c38f = useColorModeValue("white", "#1a1a1a");
+  const cmv8ae582 = useColorModeValue("gray.100", "#333");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useDynamicIsland("audio");
@@ -1448,7 +1453,7 @@ ${bandsStr}`;
                           <Box h="full" borderRadius="3px" bg={activeColor} w={`${fx[key] * 100}%`} transition="width 0.12s ease-out" />
                           <Box position="absolute" top="50%" left={`${fx[key] * 100}%`} transform="translate(-50%, -50%)"
                             w="16px" h="16px" borderRadius="full" bg={activeColor}
-                            border="2px solid" borderColor={useColorModeValue("white", "#222")}
+                            border="2px solid" borderColor={cmv6afd1e}
                             boxShadow="0 1px 4px rgba(0,0,0,0.3)" pointerEvents="none" transition="left 0.12s ease-out" />
                         </Box>
                         <input type="range" min={0} max={10} step={1} value={Math.round(fx[key] * 10)}
@@ -1683,7 +1688,7 @@ ${bandsStr}`;
       {/* 保存为预设 模态框 */}
       <Modal isOpen={saveModalOpen} onClose={onSaveModalClose} isCentered size="sm">
         <ModalOverlay bg="blackAlpha.600" />
-        <ModalContent bg={useColorModeValue("white", "#1a1a1a")} border="1px solid" borderColor={useColorModeValue("gray.100", "#333")}>
+        <ModalContent bg={cmvd6c38f} border="1px solid" borderColor={cmv8ae582}>
           <ModalHeader fontSize="md" color={headingColor}>保存为预设</ModalHeader>
           <ModalCloseButton color={descColor} />
           <ModalBody>

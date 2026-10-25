@@ -65,6 +65,9 @@ function formatSize(bytes: number): string {
 const ISLAND_EXTERNAL_KEY = "neobox_island_external_window";
 
 export default function AdvancedPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmv80e5a1 = useColorModeValue("white", "gray.800");
   const { t } = useTranslation();
   const toast = useDynamicIsland("settings");
   const titleColor = useColorModeValue("gray.800", "#ffffff");
@@ -460,7 +463,7 @@ export default function AdvancedPage() {
       {/* 清除数据确认框 */}
       <Modal isOpen={isClearDataConfirmOpen} onClose={onClearDataConfirmClose} isCentered>
         <ModalOverlay />
-        <ModalContent bg={useColorModeValue("white", "gray.800")}>
+        <ModalContent bg={cmv80e5a1}>
           <ModalHeader color={labelColor}>{t("settings.advanced.clearDataConfirmTitle", "确认清除数据")}</ModalHeader>
           <ModalCloseButton color={subLabelColor} />
           <ModalBody pb={4}>

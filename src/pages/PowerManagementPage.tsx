@@ -90,6 +90,9 @@ function SystemPlanCard({
   const { t } = useTranslation();
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const descColor = useColorModeValue("gray.500", "#ffffff");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在 `{plan.is_active ? (...)}` 条件分支里会让 Hook 数量随状态变化 → React 崩溃。
+  const planActiveBadgeBg = useColorModeValue("green.50", "rgba(72,187,120,0.1)");
   const accentColor = "#805ad5";
 
   return (
@@ -134,10 +137,7 @@ function SystemPlanCard({
                 fontSize="xs"
                 fontWeight="bold"
                 colorScheme="green"
-                bg={useColorModeValue(
-                  "green.50",
-                  "rgba(72,187,120,0.1)"
-                )}
+                bg={planActiveBadgeBg}
               >
                 <HStack spacing={1}>
                   <CheckCircle size={10} />
@@ -192,6 +192,10 @@ function BuiltinPlanCard({
   const { t } = useTranslation();
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const descColor = useColorModeValue("gray.500", "#ffffff");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在 `{plan.is_imported ? (...)}` 条件分支里会让 Hook 数量随状态变化 → React 崩溃。
+  const importedBadgeBg = useColorModeValue("blue.50", "rgba(66,153,225,0.1)");
+  const unimportedBadgeBg = useColorModeValue("gray.50", "rgba(128,128,128,0.15)");
   const accentColor = "#F6AD55";
 
   return (
@@ -236,10 +240,7 @@ function BuiltinPlanCard({
                 fontSize="xs"
                 fontWeight="medium"
                 colorScheme="blue"
-                bg={useColorModeValue(
-                  "blue.50",
-                  "rgba(66,153,225,0.1)"
-                )}
+                bg={importedBadgeBg}
               >
                 {t("optimization.powerManagement.alreadyImported")}
               </Badge>
@@ -252,10 +253,7 @@ function BuiltinPlanCard({
                   fontSize="xs"
                   fontWeight="medium"
                   colorScheme="gray"
-                  bg={useColorModeValue(
-                    "gray.50",
-                    "rgba(128,128,128,0.15)"
-                  )}
+                  bg={unimportedBadgeBg}
                 >
                   {t("optimization.powerManagement.notImported")}
                 </Badge>
@@ -299,6 +297,9 @@ export default function PowerManagementPage() {
 
   const headingColor = useColorModeValue("gray.900", "#ffffff");
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 内联在 `{activePlan && (...)}` 条件分支里会让 Hook 数量随选择状态变化 → React 崩溃。
+  const activePlanDetailBg = useColorModeValue("green.50", "rgba(72,187,120,0.1)");
 
   const [builtinPlans, setBuiltinPlans] = useState<BuiltinPowerPlan[]>([]);
   const [systemPlans, setSystemPlans] = useState<SystemPowerPlan[]>([]);
@@ -622,10 +623,7 @@ export default function PowerManagementPage() {
                   fontSize="xs"
                   fontWeight="bold"
                   colorScheme="green"
-                  bg={useColorModeValue(
-                    "green.50",
-                    "rgba(72,187,120,0.1)"
-                  )}
+                  bg={activePlanDetailBg}
                 >
                   <HStack spacing={1}>
                     <CheckCircle size={12} />

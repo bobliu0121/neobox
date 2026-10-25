@@ -301,9 +301,13 @@ const CleanItemCard = memo(function CleanItemCard({
   const headingColor = useColorModeValue("gray.800", "#ffffff");
   const descColor = useColorModeValue("gray.500", "#ffffff");
   const pathColor = useColorModeValue("gray.400", "#666666");
+  // 先无条件调用 Hook 取值，再做三元选择：
+  // useColorModeValue 内部是 useContext，写成 `cond ? A : useColorModeValue(...)`
+  // 会让 Hook 只在 cond 为假时执行，条件变化即崩溃。
+  const hoverBorderColorFallback = useColorModeValue("gray.300", "#444444");
   const hoverBorderColor = liquidGlassEnabled
     ? "rgba(255,255,255,0.5)"
-    : useColorModeValue("gray.300", "#444444");
+    : hoverBorderColorFallback;
   const IconComponent = getItemIcon(item.id);
 
   const hasContent = item.exists && item.size_bytes > 0;

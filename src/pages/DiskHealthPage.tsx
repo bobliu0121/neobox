@@ -246,6 +246,10 @@ function formatBytes(bytes: number | null): string {
 }
 
 export default function DiskHealthPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmv7c29d4 = useColorModeValue("gray.200", "gray.600");
+  const cmv753faf = useColorModeValue("gray.50", "rgba(255,255,255,0.03)");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { getActiveColor } = useThemeColor();
@@ -424,7 +428,7 @@ export default function DiskHealthPage() {
                       size="sm"
                       borderRadius="full"
                       colorScheme={part.usage_percent > 90 ? "red" : part.usage_percent > 75 ? "yellow" : "green"}
-                      bg={useColorModeValue("gray.200", "gray.600")}
+                      bg={cmv7c29d4}
                     />
                   </Box>
                 ))}
@@ -445,7 +449,7 @@ export default function DiskHealthPage() {
                       )}
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <HStack justify="center" mb={1}>
                         <Thermometer size={14} />
                         <Text fontSize="xs" color={subTextColor}>{t("diskHealth.temperature")}</Text>
@@ -480,7 +484,7 @@ export default function DiskHealthPage() {
                       )}
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <HStack justify="center" mb={1}>
                         <Clock size={14} />
                         <Text fontSize="xs" color={subTextColor}>{t("diskHealth.powerOnHours")}</Text>
@@ -515,7 +519,7 @@ export default function DiskHealthPage() {
                       )}
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <HStack justify="center" mb={1}>
                         <Power size={14} />
                         <Text fontSize="xs" color={subTextColor}>{t("diskHealth.powerOnCount")}</Text>
@@ -541,7 +545,7 @@ export default function DiskHealthPage() {
                       </Text>
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <HStack justify="center" mb={1}>
                         <Download size={14} />
                         <Text fontSize="xs" color={subTextColor}>{t("diskHealth.dataRead")}</Text>
@@ -563,7 +567,7 @@ export default function DiskHealthPage() {
                       </Text>
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <HStack justify="center" mb={1}>
                         <Upload size={14} />
                         <Text fontSize="xs" color={subTextColor}>{t("diskHealth.dataWritten")}</Text>
@@ -582,7 +586,7 @@ export default function DiskHealthPage() {
                       </Text>
                     </LiquidGlassCard>
                   ) : (
-                    <Box textAlign="center" p={3} borderRadius="lg" bg={useColorModeValue("gray.50", "rgba(255,255,255,0.03)")}>
+                    <Box textAlign="center" p={3} borderRadius="lg" bg={cmv753faf}>
                       <Text fontSize="xs" color={subTextColor} mb={1}>{t("diskHealth.operationalStatus")}</Text>
                       <Text fontSize="sm" fontWeight="medium" color={textColor} noOfLines={1}>
                         {disk.operational_status}

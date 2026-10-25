@@ -258,6 +258,10 @@ const PowerAdvancedSettingCard = memo(function PowerAdvancedSettingCard({
   const descColor = useColorModeValue("gray.500", "rgba(200,200,200,0.85)");
   const labelColor = useColorModeValue("gray.500", "rgba(200,200,200,0.6)");
   const schemeLabel = useColorModeValue("gray.400", "rgba(200,200,200,0.5)");
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 写在 `{!info.supported ? ... : ...}` 条件分支里会让 Hook 数量随渲染变化，
+  // React 会抛 "Rendered more hooks than during the previous render" 导致崩溃。
+  const unsupportedHintColor = useColorModeValue("orange.600", "orange.300");
   const disabled = locked || !info.supported || applying;
   const Icon = def.icon;
 
@@ -303,7 +307,7 @@ const PowerAdvancedSettingCard = memo(function PowerAdvancedSettingCard({
         </Text>
 
         {!info.supported ? (
-          <Text fontSize="xs" color={useColorModeValue("orange.600", "orange.300")}>
+          <Text fontSize="xs" color={unsupportedHintColor}>
             {t("powerAdvanced.notSupported")}
           </Text>
         ) : (

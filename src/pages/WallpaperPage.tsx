@@ -203,6 +203,12 @@ export default function WallpaperPage() {
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
   const menuBg = useColorModeValue("white", "gray.800");
   const menuBorder = useColorModeValue("gray.200", "gray.600");
+  // 毛玻璃右键菜单配色必须在此处（组件顶层）取。
+  // `useColorModeValue` 内部调用 `useContext`，是真正的 Hook；
+  // 若写在 `{ctxMenu && (...)}` 条件块里，右键打开菜单会让 Hook 数量在两次渲染间变化，
+  // React 直接抛 "Rendered more hooks than during the previous render" → 整页崩溃、菜单打不开。
+  const glassMenuBg = useColorModeValue("rgba(255,255,255,0.25)", "rgba(0,0,0,0.25)");
+  const glassMenuBorder = useColorModeValue("rgba(255,255,255,0.2)", "rgba(255,255,255,0.1)");
 
   interface WallpaperFolder {
   path: string;
@@ -975,7 +981,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
           top={ctxMenu.y}
           left={ctxMenu.x}
           zIndex={1401}
-          bg={liquidGlassEnabled ? useColorModeValue("rgba(255,255,255,0.25)", "rgba(0,0,0,0.25)") : menuBg}
+          bg={liquidGlassEnabled ? glassMenuBg : menuBg}
           sx={liquidGlassEnabled ? { backdropFilter: `blur(${liquidGlassBlur}px) saturate(1.3)`, WebkitBackdropFilter: `blur(${liquidGlassBlur}px) saturate(1.3)` } : undefined}
           borderRadius="md"
           boxShadow="lg"
@@ -984,7 +990,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
           align="stretch"
           minW="200px"
           border="1px solid"
-          borderColor={liquidGlassEnabled ? useColorModeValue("rgba(255,255,255,0.2)", "rgba(255,255,255,0.1)") : menuBorder}
+          borderColor={liquidGlassEnabled ? glassMenuBorder : menuBorder}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();

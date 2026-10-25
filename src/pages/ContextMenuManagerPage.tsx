@@ -135,19 +135,26 @@ export default function ContextMenuManagerPage() {
   const headingColor = useColorModeValue("gray.900", "#ffffff");
   const adaptiveTitle = useAdaptiveTextColor();
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
+  // 以下配色先无条件取 Hook 值、再做三元选择。
+  // useColorModeValue 内部是 useContext；写成 `cond ? A : useColorModeValue(...)`
+  // 会让 Hook 只在条件为假时执行，毛玻璃开关一翻转 Hook 数量就变 → React 崩溃。
+  const tableBgFallback = useColorModeValue("#ffffff", "#1a1a1a");
+  const tableBorderFallback = useColorModeValue("gray.200", "#333333");
+  const inputGlassBgOn = useColorModeValue("rgba(255,255,255,0.26)", "rgba(255,255,255,0.1)");
+  const inputGlassBgOff = useColorModeValue("#ffffff", "#1a1a1a");
   const tableBg = liquidGlassEnabled
     ? "rgba(255,255,255,0.7)"
-    : useColorModeValue("#ffffff", "#1a1a1a");
+    : tableBgFallback;
   const tableBorder = liquidGlassEnabled
     ? "rgba(255,255,255,0.3)"
-    : useColorModeValue("gray.200", "#333333");
+    : tableBorderFallback;
   const pathColor = useColorModeValue("gray.500", "#888888");
   const hoverBg = `${themeConfig.primaryColor}1F`;
   const deleteColor = useColorModeValue("red.500", "red.400");
   const restoreColor = themeConfig.primaryColor;
   const inputGlassBg = liquidGlassEnabled
-    ? useColorModeValue("rgba(255,255,255,0.26)", "rgba(255,255,255,0.1)")
-    : useColorModeValue("#ffffff", "#1a1a1a");
+    ? inputGlassBgOn
+    : inputGlassBgOff;
   const inputGlassProps = {
     bg: inputGlassBg,
     borderColor: `${themeConfig.primaryColor}59`,

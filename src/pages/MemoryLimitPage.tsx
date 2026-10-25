@@ -52,6 +52,9 @@ interface MemoryLimitResult {
 }
 
 export default function MemoryLimitPage() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvdd4528 = useColorModeValue("orange.50", "rgba(255, 165, 0, 0.1)");
   const [memoryStatus, setMemoryStatus] = useState<MemoryLimitStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
@@ -384,7 +387,7 @@ export default function MemoryLimitPage() {
           <Alert
             status="warning"
             borderRadius="xl"
-            bg={useColorModeValue("orange.50", "rgba(255, 165, 0, 0.1)")}
+            bg={cmvdd4528}
             borderLeft="4px solid"
             borderColor="orange.400"
           >

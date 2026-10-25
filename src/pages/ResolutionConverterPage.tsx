@@ -334,6 +334,11 @@ export default function ResolutionConverterPage() {
   const [customRefreshRate, setCustomRefreshRate] = useState("");
   const [isApplyingCustom, setIsApplyingCustom] = useState(false);
 
+  // 注入分辨率条目的底色。必须提升到组件顶层：useColorModeValue 内部调用 useContext，
+  // 原先内联在 `{injectedResolutions.map((r) => ...)}` 回调里，Hook 数量会随条目数变化，
+  // 一旦注入列表非空就抛 "Rendered more hooks than during the previous render"。
+  const injectedResItemBg = useColorModeValue("gray.50", "#1a1a1a");
+
   // 去重后的分辨率列表（按面积降序），用于两级联动下拉
   const availableResolutions = useMemo(() => {
     const seen = new Set<string>();
@@ -381,6 +386,10 @@ export default function ResolutionConverterPage() {
   const subTextColor = useColorModeValue("gray.500", "#ffffff");
   const cardBg = useColorModeValue("white", "#111111");
   const cardBorder = useColorModeValue("gray.200", "#333333");
+  // 自定义分辨率三个输入框的底色。必须提升到顶层：这三个 Input 位于
+  // `{selectedResolution === "custom" ? (...)}` 条件分支内，
+  // 用户把下拉切到「自定义」时 Hook 数量会突变，React 直接崩溃。
+  const customInputBg = useColorModeValue("white", "#1a1a1a");
 
   const resolutions = useMemo(() => {
     if (selectedResolution === "custom") return [];
@@ -581,7 +590,7 @@ export default function ResolutionConverterPage() {
                     value={customWidth}
                     onChange={(e) => setCustomWidth(e.target.value)}
                     placeholder={t("resolutionConverter.widthInputPlaceholder")}
-                    bg={useColorModeValue("white", "#1a1a1a")}
+                    bg={customInputBg}
                   />
                 </Box>
                 <Box>
@@ -593,7 +602,7 @@ export default function ResolutionConverterPage() {
                     value={customHeight}
                     onChange={(e) => setCustomHeight(e.target.value)}
                     placeholder={t("resolutionConverter.heightInputPlaceholder")}
-                    bg={useColorModeValue("white", "#1a1a1a")}
+                    bg={customInputBg}
                   />
                 </Box>
                 <Box>
@@ -605,7 +614,7 @@ export default function ResolutionConverterPage() {
                     value={customRefreshRate}
                     onChange={(e) => setCustomRefreshRate(e.target.value)}
                     placeholder={t("resolutionConverter.refreshRateInputPlaceholder")}
-                    bg={useColorModeValue("white", "#1a1a1a")}
+                    bg={customInputBg}
                   />
                 </Box>
               </SimpleGrid>
@@ -810,7 +819,7 @@ export default function ResolutionConverterPage() {
                 justify="space-between"
                 p={3}
                 borderRadius="lg"
-                bg={useColorModeValue("gray.50", "#1a1a1a")}
+                bg={injectedResItemBg}
               >
                 <Text color={textColor} fontWeight="500" fontSize="sm">
                   {r.width} × {r.height}

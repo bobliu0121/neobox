@@ -1049,11 +1049,28 @@ fn process_video_media(input: &str, output: &str, op: MediaOp) -> Result<Option<
             use std::io::{Seek, SeekFrom};
             let mut read_file = std::fs::File::open(&tmp_path)
                 .map_err(|e| format!("打开临时帧文件失败: {e}"))?;
-            let avg_frame_bytes = (cur_offset / total_video_frames as u64) as usize;
-            let out_bytes_hint = (total_video_frames as f64 / match op {
+            // 输出体积预估。
+            //
+            // ⚠️ 不能用 `cur_offset / total_video_frames` 当单帧大小：
+            // 临时帧文件里存的是**解码后的 NV12 原始帧**（1080p 约 3.0 MB/帧），
+            // 与最终 H.264 编码后的字节数相差接近两个数量级。
+            // 旧实现据此估算，实测 3746 帧 1080p 得到「约 11194 MB」的提示，
+            // 而真实输出只有 128 MB —— 夸大 87 倍，会直接吓退用户。
+            //
+            // 改为以**输入文件实际大小**为基准（已是压缩后的真实码率），
+            // 再按「输出帧数 / 输入帧数」的比例缩放，得到量级正确的估算。
+            // 目标码率相对源只有小幅变化（同分辨率同编码器），这个比例足够准；
+            // 即便估算偏差几倍，也仍在合理提示范围内，不会出现 87 倍这种量级错误。
+            let src_file_bytes = std::fs::metadata(input)
+                .map(|m| m.len())
+                .unwrap_or(0) as f64;
+            let out_frame_ratio = match op {
                 MediaOp::Reverse => 1.0,
-                MediaOp::Speed(s) => s,
-            } * avg_frame_bytes as f64) as usize;
+                // 加速 → 帧数减少 → 体积减小；减速 → 帧数增加 → 体积增大
+                MediaOp::Speed(s) if s > 0.0 => 1.0 / s,
+                MediaOp::Speed(_) => 1.0,
+            };
+            let out_bytes_hint = (src_file_bytes * out_frame_ratio) as usize;
             if out_bytes_hint > 1_500_000_000usize {
                 warning = Some(format!(
                     "处理后将产生约 {} MB 的视频数据，输出文件会较大，请耐心等待",
@@ -1951,8 +1968,20 @@ impl Mp4Muxer {
     }
 
     fn write_mdat_header(&mut self) {
+        // ⚠️ mdat 是 MP4 里最大的 box，慢放时轻易超过 4 GiB。
+        // 普通 box 头只有 32 位 size 字段，最大 4294967295 字节（≈4 GiB）。
+        // 一旦越过该边界，回填的 size 会被 `as u32` 截断成错误值，
+        // 播放器会认为 mdat 长度不对而直接判整个文件损坏（打不开）。
+        //
+        // 解决：先**预留 large size 形式**的头（size32 = 1，紧跟 64 位 largesize），
+        // 这样无论最终多大都能正确回填，且不必在结尾处搬移数据。
+        // 实测 0.01x 慢放 187s 源会产出约 12 GB，必然越过该边界。
+        //
+        // 布局：[size=1][mdat][largesize(u64)]  —— 头共 4+4+8 = 16 字节。
         let mut b = Vec::new();
-        box_start(&mut b, b"mdat");
+        be32(&mut b, 1); // size32 = 1 表示「使用 largesize」
+        fourcc(&mut b, b"mdat");
+        be64(&mut b, 0); // largesize 占位，finish() 时回填
         use std::io::Write;
         let _ = self.file.write_all(&b);
         self.file_pos += b.len() as u64;
@@ -1993,14 +2022,21 @@ impl Mp4Muxer {
 
     fn finish(mut self) -> Result<(), String> {
         use std::io::{Seek, Write};
-        let mdat_size = (self.file_pos - self.data_start) + 8;
+        // largesize 覆盖「size32 + fourcc + largesize」整个头，共 16 字节。
+        // 与 write_mdat_header 预留的布局严格对应。
+        let mdat_size: u64 = (self.file_pos - self.data_start) + 16;
         let mdat_size_pos = self.ftyp_len as u64;
         self.file
             .seek(std::io::SeekFrom::Start(mdat_size_pos))
             .map_err(|e| format!("定位 mdat 失败: {e}"))?;
+        // size32 = 1 已在头部写好；这里只需回填 64 位 largesize。
+        // 跳过 4 字节 size32 与 4 字节 fourcc，直接写 largesize。
         self.file
-            .write_all(&(mdat_size as u32).to_be_bytes())
-            .map_err(|e| format!("回填 mdat 失败: {e}"))?;
+            .seek(std::io::SeekFrom::Start(mdat_size_pos + 8))
+            .map_err(|e| format!("定位 mdat largesize 失败: {e}"))?;
+        self.file
+            .write_all(&mdat_size.to_be_bytes())
+            .map_err(|e| format!("回填 mdat largesize 失败: {e}"))?;
         self.file
             .seek(std::io::SeekFrom::Start(self.file_pos))
             .map_err(|e| format!("定位末尾失败: {e}"))?;
@@ -2030,11 +2066,21 @@ impl Mp4Muxer {
         let total_dur = v_dur.max(a_dur);
         {
             let p = box_start(&mut moov, b"mvhd");
-            be32(&mut moov, 0);
-            be32(&mut moov, 0);
-            be32(&mut moov, 0);
-            be32(&mut moov, 10_000_000);
-            be32(&mut moov, total_dur.min(0xFFFF_FFFF) as u32);
+            // 与 tkhd/mdhd 同理：总时长超过 32 位（≈429.5s）时必须用 version=1 的 64 位字段，
+            // 否则慢放/长视频的 mvhd 会被截断，播放器据此判定影片提前结束。
+            if total_dur > 0xFFFF_FFFF {
+                be32(&mut moov, 0x0100_0000); // version=1, flags=0
+                be64(&mut moov, 0); // creation_time
+                be64(&mut moov, 0); // modification_time
+                be32(&mut moov, 10_000_000);
+                be64(&mut moov, total_dur); // duration (64-bit)
+            } else {
+                be32(&mut moov, 0);
+                be32(&mut moov, 0);
+                be32(&mut moov, 0);
+                be32(&mut moov, 10_000_000);
+                be32(&mut moov, total_dur as u32);
+            }
             be32(&mut moov, 0x0001_0000);
             be16(&mut moov, 0x0100);
             be16(&mut moov, 0);
@@ -2062,15 +2108,36 @@ impl Mp4Muxer {
     }
 
     fn build_video_trak(&self, moov: &mut Vec<u8>, v_dur: u64) {
+        // ⚠️ 32 位时长溢出。
+        //
+        // `v_dur` 的单位是 100ns，所以 0xFFFF_FFFF ≈ 429.5 秒。慢放（如 0.25x）会让
+        // 视频轨时长轻易超过这个值：实测 187.3s 的源慢放 4 倍后 v_dur = 7,491,992,508，
+        // 旧代码用 `v_dur.min(0xFFFF_FFFF)` 截断成 429.5s，而音频轨（timescale=48000，
+        // 用样本数计时）仍是 749.2s —— 结果音视频轨时长差 320 秒，播放器表现就是
+        // 画面只放到一半就停止、之后长时间黑屏但声音还在。
+        //
+        // 正确做法：ISO/MP4 的 tkhd/mdhd 在 version=1 时用 64 位字段存 duration。
+        // 这里按需切换版本，短时长仍用 version=0（兼容性最好），超长才升到 version=1。
+        let need_v1 = v_dur > 0xFFFF_FFFF;
         let tpos = box_start(moov, b"trak");
         {
             let p = box_start(moov, b"tkhd");
-            be32(moov, 0x0000_0003);
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 1);
-            be32(moov, 0);
-            be32(moov, v_dur.min(0xFFFF_FFFF) as u32);
+            if need_v1 {
+                // version=1, flags=3（启用 + 用于presentation）
+                be32(moov, 0x0100_0003);
+                be64(moov, 0); // creation_time
+                be64(moov, 0); // modification_time
+                be32(moov, 1); // track_ID
+                be32(moov, 0); // reserved
+                be64(moov, v_dur); // duration (64-bit)
+            } else {
+                be32(moov, 0x0000_0003);
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, 1);
+                be32(moov, 0);
+                be32(moov, v_dur as u32);
+            }
             be32(moov, 0);
             be32(moov, 0);
             be16(moov, 0);
@@ -2089,11 +2156,20 @@ impl Mp4Muxer {
         {
             let p = box_start(moov, b"mdia");
             let p2 = box_start(moov, b"mdhd");
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 10_000_000);
-            be32(moov, v_dur.min(0xFFFF_FFFF) as u32);
+            // 视频轨 timescale 固定 1e7（100ns 刻度），与 stts 的 delta 单位一致。
+            if need_v1 {
+                be32(moov, 0x0100_0000); // version=1, flags=0
+                be64(moov, 0); // creation_time
+                be64(moov, 0); // modification_time
+                be32(moov, 10_000_000); // timescale
+                be64(moov, v_dur); // duration (64-bit)
+            } else {
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, 10_000_000);
+                be32(moov, v_dur as u32);
+            }
             be16(moov, 0x55C4);
             be16(moov, 0);
             box_end(moov, p2);
@@ -2210,15 +2286,30 @@ impl Mp4Muxer {
     }
 
     fn build_audio_trak(&self, moov: &mut Vec<u8>, a_dur: u64, a_total_samples: u64) {
+        // 音频侧同样有 32 位边界，但判据不同：
+        // - tkhd.duration 是 100ns 刻度（同视频），超过 429.5s 需 version=1；
+        // - mdhd.duration 是**采样数**（timescale=采样率），64 位上限极高但与 tkhd 分开判断，
+        //   因为 sr 可能是 8000 这类低采样率，此时时长很长但样本数不大。
+        let tkhd_v1 = a_dur > 0xFFFF_FFFF;
+        let mdhd_v1 = a_total_samples > 0xFFFF_FFFF;
         let tpos = box_start(moov, b"trak");
         {
             let p = box_start(moov, b"tkhd");
-            be32(moov, 0x0000_0003);
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 2);
-            be32(moov, 0);
-            be32(moov, a_dur.min(0xFFFF_FFFF) as u32);
+            if tkhd_v1 {
+                be32(moov, 0x0100_0003);
+                be64(moov, 0);
+                be64(moov, 0);
+                be32(moov, 2);
+                be32(moov, 0);
+                be64(moov, a_dur);
+            } else {
+                be32(moov, 0x0000_0003);
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, 2);
+                be32(moov, 0);
+                be32(moov, a_dur as u32);
+            }
             be32(moov, 0);
             be32(moov, 0);
             be16(moov, 0);
@@ -2237,11 +2328,19 @@ impl Mp4Muxer {
         {
             let p = box_start(moov, b"mdia");
             let p2 = box_start(moov, b"mdhd");
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, self.sr);
-            be32(moov, a_total_samples.min(0xFFFF_FFFF) as u32);
+            if mdhd_v1 {
+                be32(moov, 0x0100_0000);
+                be64(moov, 0);
+                be64(moov, 0);
+                be32(moov, self.sr);
+                be64(moov, a_total_samples);
+            } else {
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, 0);
+                be32(moov, self.sr);
+                be32(moov, a_total_samples as u32);
+            }
             be16(moov, 0x55C4);
             be16(moov, 0);
             box_end(moov, p2);

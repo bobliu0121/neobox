@@ -52,6 +52,10 @@ interface UnhideResult {
 const UNLOCK_STORE_KEY = "powerAdvancedUnlocked";
 
 export default function PowerAdvancedSettingsPanel() {
+  // 提升到组件顶层：useColorModeValue 内部是 useContext，
+  // 在条件分支/map 回调里调用会让 Hook 数量随渲染变化 → React 崩溃。
+  const cmvaa5f5b = useColorModeValue("#ffffff", "#171923");
+  const cmv888c94 = useColorModeValue("#C53030", "#FC8181");
   const { t } = useTranslation();
   const toast = useDynamicIsland("power");
   const { getActiveColor, getBorderColor, getContrastTextColor, getHoverColor } = useThemeColor();
@@ -317,8 +321,8 @@ export default function PowerAdvancedSettingsPanel() {
       {/* 免责声明弹窗 */}
       <AlertDialog isOpen={isOpen} leastDestructiveRef={cancelRef} onClose={onClose} isCentered>
         <AlertDialogOverlay>
-          <AlertDialogContent bg={useColorModeValue("#ffffff", "#171923")} maxW="md">
-            <AlertDialogHeader fontSize="lg" fontWeight="bold" color={useColorModeValue("#C53030", "#FC8181")}>
+          <AlertDialogContent bg={cmvaa5f5b} maxW="md">
+            <AlertDialogHeader fontSize="lg" fontWeight="bold" color={cmv888c94}>
               {t("powerAdvanced.disclaimerTitle")}
             </AlertDialogHeader>
             <AlertDialogCloseButton />

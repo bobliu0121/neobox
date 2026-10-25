@@ -2592,6 +2592,10 @@ const SongRow = memo(function SongRow({
   onToggleLike,
   onArtistClick,
 }: SongRowProps) {
+  // 语言标签底色。必须在组件顶层取：useColorModeValue 内部是 useContext，
+  // 原先内联在 `{song.language > 0 && ...}` 条件块里 —— 语言字段为 0 时不执行、
+  // 有值时执行，Hook 数量随歌曲变化，切歌即可抛 "Rendered more hooks..." 崩溃。
+  const songLanguageTagBg = useColorModeValue("gray.100", "rgba(255,255,255,0.08)");
   return (
     <HStack
       key={`${song.provider}-${song.id}-${index}`}
@@ -2657,7 +2661,7 @@ const SongRow = memo(function SongRow({
           as="span"
           fontSize="10px"
           color={subTextColor}
-          bg={useColorModeValue("gray.100", "rgba(255,255,255,0.08)")}
+          bg={songLanguageTagBg}
           px={1.5}
           py={0.5}
           borderRadius="sm"
@@ -4087,6 +4091,20 @@ export default function MusicPage() {
   // ── 使用独立选择器，每个字段用 Object.is 比较 ──
   // 比 useShallow 更可靠：播放时 timeupdate 只改 currentTime，
   // 这些选择器都不会触发重渲染
+  //
+  // ⚠️ 以下配色必须在此处（组件顶层）取：
+  // useColorModeValue 内部调用 useContext，是真正的 Hook。它们原先内联在
+  // `{artistSearchResults.map(...)}`、`{activeLocalFolder && ...}`、
+  // `{localFolders.map(...)}` 等条件/列表渲染里，Hook 数量会随数据条数变化 ——
+  // 搜索结果出现、或添加第二个本地文件夹，就会抛 "Rendered more hooks..." 整页崩溃。
+  const artistResultBg = useColorModeValue("gray.100", "rgba(255,255,255,0.08)");
+  const artistResultBorder = useColorModeValue("gray.200", "rgba(255,255,255,0.12)");
+  const localFolderDeleteBg = useColorModeValue("rgba(229,62,62,0.10)", "rgba(229,62,62,0.18)");
+  // 视图模式分支（artistDetail / unifiedSearch）内的配色也必须在这里取。
+  // MusicPage 用 `if (viewMode === "...") { ... }` 做早返回分支，分支里调用 Hook 会导致
+  // Hook 数量随 viewMode 变化 —— 从「歌手详情」切回「搜索」时直接抛错崩溃。
+  const viewTabBarBg = useColorModeValue("gray.100", "rgba(255,255,255,0.04)");
+  const viewTabActiveBg = useColorModeValue("white", "rgba(255,255,255,0.1)");
   const currentSong = useMusicStore((s) => s.currentSong);
   const isPlaying = useMusicStore((s) => s.isPlaying);
   const searchResults = useMusicStore((s) => s.searchResults);
@@ -5018,8 +5036,8 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
   // 歌手详情视图
   // ═══════════════════════════════════════════════
   if (viewMode === "artistDetail") {
-    const artistTabBarBg = useColorModeValue("gray.100", "rgba(255,255,255,0.04)");
-    const artistTabActiveBg = useColorModeValue("white", "rgba(255,255,255,0.1)");
+    const artistTabBarBg = viewTabBarBg;
+    const artistTabActiveBg = viewTabActiveBg;
 
     const renderAlbumItem = (album: Album) => (
       <HStack
@@ -5647,8 +5665,8 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
     const isLoading = searching || searchingArtists || searchingPlaylists;
     const hasAnyResults = searchResults.length > 0 || playlistSearchResults.length > 0 || artistSearchResults.length > 0;
 
-    const tabBarBg = useColorModeValue("gray.100", "rgba(255,255,255,0.04)");
-    const tabActiveBg = useColorModeValue("white", "rgba(255,255,255,0.1)");
+    const tabBarBg = viewTabBarBg;
+    const tabActiveBg = viewTabActiveBg;
 
     const tabs: { key: "songs" | "playlists" | "artists"; label: string; icon: React.ReactNode; count: number }[] = [
       { key: "songs", label: "单曲", icon: <MusicIcon size={14} />, count: searchResults.length },
@@ -6173,9 +6191,9 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
             px={2.5}
             py={0.5}
             borderRadius="md"
-            bg={useColorModeValue("gray.100", "rgba(255,255,255,0.08)")}
+            bg={artistResultBg}
             border="1px solid"
-            borderColor={useColorModeValue("gray.200", "rgba(255,255,255,0.12)")}
+            borderColor={artistResultBorder}
           >
             <Text fontSize="xs" color={subTextColor} fontWeight="medium" whiteSpace="nowrap">
               当前平台：{providerName}
@@ -6596,7 +6614,7 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
-                    bg={useColorModeValue(`${activeColor}1a`, `${activeColor}26`)}
+                    bg={localFolderDeleteBg}
                   >
                     <FileMusic size={22} color={activeColor} />
                   </Box>
@@ -6681,7 +6699,7 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
-                    bg={useColorModeValue(`${activeColor}1a`, `${activeColor}26`)}
+                    bg={localFolderDeleteBg}
                   >
                     <History size={22} color={activeColor} />
                   </Box>
@@ -6719,7 +6737,7 @@ const chartIsGrid = playbackSource === "kugou" || playbackSource === "qqmusic";
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
-                    bg={useColorModeValue("rgba(229,62,62,0.10)", "rgba(229,62,62,0.18)")}
+                    bg={localFolderDeleteBg}
                   >
                     <Heart size={22} color="#e53e3e" fill={favoriteSongs.length > 0 ? "#e53e3e" : "none"} />
                   </Box>
