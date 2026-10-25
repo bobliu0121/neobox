@@ -51,6 +51,7 @@ import {
   AudioSpeedPage,
   VideoConverterPage,
   MkaMuxerPage,
+  BilibiliDownloadPage,
   MusicPage,
   preloadMusicPage,
 } from "./routes/lazy-pages";
@@ -518,6 +519,12 @@ function App() {
                     path="/mka-muxer"
                     element={
                       <MkaMuxerPage />
+                    }
+                  />
+                  <Route
+                    path="/bilibili-download"
+                    element={
+                      <BilibiliDownloadPage />
                     }
                   />
                 </Routes>

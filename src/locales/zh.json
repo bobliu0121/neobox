@@ -66,7 +66,8 @@
     "audioConverter": "音频转换",
     "wallpaper": "壁纸管理",
     "videoConverter": "视频转换",
-    "mkaMuxer": "MKA 合成"
+    "mkaMuxer": "MKA 合成",
+    "bilibiliDownload": "B 站下载"
   },
   "customPage": {
     "title": "自定义页面",
@@ -742,7 +743,8 @@
     "imageConverterDesc": "图片格式（PNG/JPG/JPEG/WebP/BMP）相互转换",
     "audioConverterDesc": "音频格式（WAV/MP3/M4A）相互转换",
     "videoConverterDesc": "视频转 GIF 动图、首帧图片，或提取音频",
-    "mkaMuxerDesc": "音频 + 字幕 + 封面合成为 MKA 文件"
+    "mkaMuxerDesc": "音频 + 字幕 + 封面合成为 MKA 文件",
+    "bilibiliDownloadDesc": "下载 B 站视频或音频（免登录，最高 480P）"
   },
   "contextMenu": {
     "title": "右键菜单 & 此电脑",

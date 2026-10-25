@@ -1,5 +1,6 @@
 mod advanced;
 mod announcement;
+pub mod bilibili;
 mod app_manager;
 mod audio_engine;
 mod audio_eq;
@@ -964,6 +965,10 @@ pub fn run() {
         file_convert::convert_image,
         file_convert::convert_audio,
         file_convert::reverse_media,
+        bilibili::bilibili_resolve,
+        bilibili::bilibili_qualities,
+        bilibili::bilibili_download,
+        bilibili::bilibili_cancel,
         file_convert::change_media_speed,
         file_convert::convert_video,
         file_convert::mux_mka,

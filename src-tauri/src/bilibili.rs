@@ -1,0 +1,1387 @@
+//! B 站视频/音频下载（免登录）。
+//!
+//! ## 免登录能拿到什么（实测结论，非猜测）
+//!
+//! B 站对未登录请求会**静默降级画质**：`playurl` 返回的 `accept_quality` 会声称支持
+//! 112(1080P+)/80(1080P)/64(720P)，但实际下发的 DASH 流只有 32(480P) 与 16(360P)。
+//! 本模块实测多个不同类型视频（热门 MV、老投稿、冷门视频）结果一致，
+//! 带上游客 `buvid3` cookie 也无法提升。
+//!
+//! 因此：
+//! - 免登录路径下最高只能取到 480P；
+//! - 界面必须**如实展示实际可用的清晰度**（用 streams 里真实存在的
+//!   `accept_quality` 与 DASH 流求交集），而不是照抄 `accept_quality` 撒谎。
+//! - 高清晰度（720P+）需要登录 Cookie，本模块已预留 `cookie` 参数入口，
+//!   后续接登录时无需改动调用链。
+//!
+//! ## 为什么仍要做音视频合并
+//!
+//! 即便只有 480P，B 站的 DASH 流也是**视频轨与音频轨分离**的（`durl` 单文件形式
+//! 只在老接口/特定 qn 下才出现）。所以要拿到可播放的 MP4，必须：
+//! 1. 分别下载 video.m4s / audio.m4s；
+//! 2. 剥掉各自的容器头，把裸 H.264 Annex-B 与裸 AAC 重新封装成一个 MP4。
+//! 第 2 步复用 `file_convert` 里已有的 `Mp4Muxer`。
+//!
+//! 纯音频模式则只下 audio.m4s，转封装成 .m4a。
+
+use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// 与项目其它模块一致的 UA。B 站会对异常 UA 返回 412。
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                  (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+/// 下载媒体流时必须带 Referer，否则 403（B 站防盗链）。
+const REFERER: &str = "https://www.bilibili.com";
+
+/// 全局取消标志：批量下载时用户点「停止」置位。
+static CANCEL: AtomicBool = AtomicBool::new(false);
+/// 当前已下载字节数（供进度事件读取，避免为每个分片单独加锁）。
+static DOWNLOADED: AtomicU64 = AtomicU64::new(0);
+
+// ════════════════════════════════════════════════════════════════════
+//  数据模型
+// ════════════════════════════════════════════════════════════════════
+
+/// 解析结果：一个视频（可能含多个分P）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiliVideoInfo {
+    pub bvid: String,
+    pub aid: i64,
+    pub title: String,
+    pub cover: String,
+    pub duration: i64,
+    pub owner: String,
+    pub desc: String,
+    /// 分P 列表。单P视频也有 1 个元素。
+    pub pages: Vec<BiliPage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiliPage {
+    pub page: i64,
+    pub cid: i64,
+    /// 分P 标题（单P时等于视频标题）
+    pub part: String,
+    pub duration: i64,
+}
+
+/// 清晰度选项（只包含**实际可下载**的）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiliQuality {
+    /// DASH 里的 qn：16/32/64/80/112/116/120…
+    pub qn: i64,
+    /// 面向用户的描述，如「480P 清晰」
+    pub label: String,
+    pub width: i64,
+    pub height: i64,
+}
+
+/// 某一分P 的可选清晰度 + 音轨信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiliPlayInfo {
+    pub qualities: Vec<BiliQuality>,
+    /// 是否支持纯音频（B 站 DASH 几乎总有音轨）
+    pub has_audio: bool,
+}
+
+
+/// 只取清晰度列表的公开封装（避免向外暴露私有 Dash 类型）。
+pub async fn fetch_play_qualities(bvid: &str, cid: i64) -> Result<BiliPlayInfo, String> {
+    let (info, _) = fetch_play_info(bvid, cid, None).await?;
+    Ok(info)
+}
+
+/// 下载请求。
+#[derive(Debug, Clone, Deserialize)]
+pub struct BiliDownloadRequest {
+    pub bvid: String,
+    pub cid: i64,
+    /// 目标 qn；None 表示自动取最高可用
+    pub qn: Option<i64>,
+    /// 仅下载音频（输出 .m4a）
+    pub audio_only: bool,
+    /// 输出文件完整路径
+    pub output_path: String,
+    /// 分P 序号，仅用于日志与提示
+    pub page: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BiliDownloadResult {
+    pub output_path: String,
+    pub bytes: u64,
+    pub quality_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BiliProgress {
+    /// 当前分P 序号
+    pub page: i64,
+    pub total_pages: i64,
+    /// 0~100
+    pub percent: f64,
+    /// 已下载 / 总字节
+    pub downloaded: u64,
+    pub total: u64,
+    /// 阶段描述：解析 / 下载视频 / 下载音频 / 合并 / 完成
+    pub stage: String,
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  输入解析：链接 / BV 号 / av 号
+// ════════════════════════════════════════════════════════════════════
+
+/// 从任意输入中提取 BV 号或 av 号。
+///
+/// 支持：
+/// - 纯 BV 号：`BV1GJ411x7h7`
+/// - 纯 av 号：`av80433022` / `AV80433022`
+/// - 完整链接：`https://www.bilibili.com/video/BV1GJ411x7h7/?p=2`
+/// - 短链：`https://b23.tv/xxxxx`（返回 `ShortLink` 交由后续解析）
+/// - 手机端：`https://m.bilibili.com/video/BV1GJ411x7h7`
+pub enum BiliIdInput {
+    Bvid(String),
+    Aid(i64),
+    /// b23.tv 短链，需要先跟随重定向拿到真实地址
+    ShortLink(String),
+}
+
+pub fn parse_input(raw: &str) -> Result<BiliIdInput, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("输入为空".to_string());
+    }
+
+    // BV 号：BV + 10 位（旧格式长度固定 12）
+    if let Some(pos) = s.find("BV") {
+        let tail = &s[pos..];
+        // BV 号后续只取字母数字，避免把链接里的 / ? 带进来
+        let bv: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if bv.len() >= 12 {
+            return Ok(BiliIdInput::Bvid(bv));
+        }
+    }
+
+    // av 号
+    let lower = s.to_lowercase();
+    if let Some(pos) = lower.find("av") {
+        let digits: String = lower[pos + 2..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            if let Ok(aid) = digits.parse::<i64>() {
+                return Ok(BiliIdInput::Aid(aid));
+            }
+        }
+    }
+
+    // b23.tv 短链
+    if s.contains("b23.tv") {
+        return Ok(BiliIdInput::ShortLink(s.to_string()));
+    }
+
+    Err(format!("无法识别的链接或编号：{s}"))
+}
+
+/// 跟随 b23.tv 重定向拿到真实 URL，再从中解析出 BV/av。
+pub async fn resolve_short_link(url: &str) -> Result<BiliIdInput, String> {
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let resp = client
+        .get(url)
+        .header("Referer", REFERER)
+        .send()
+        .await
+        .map_err(|e| format!("解析短链失败: {e}"))?;
+    // reqwest 默认跟随重定向，最终 URL 即为目标
+    let final_url = resp.url().to_string();
+    parse_input(&final_url)
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  API 调用
+// ════════════════════════════════════════════════════════════════════
+
+/// `x/web-interface/view` 的响应（只取用到的字段）。
+#[derive(Deserialize)]
+struct ViewResp {
+    code: i64,
+    message: String,
+    data: Option<ViewData>,
+}
+
+#[derive(Deserialize)]
+struct ViewData {
+    bvid: String,
+    aid: i64,
+    title: String,
+    pic: String,
+    duration: i64,
+    desc: Option<String>,
+    owner: Option<Owner>,
+    pages: Option<Vec<PageData>>,
+    cid: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct Owner {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct PageData {
+    page: i64,
+    cid: i64,
+    part: String,
+    duration: i64,
+}
+
+/// 获取视频基本信息（含分P 列表）。
+pub async fn fetch_video_info(bvid: &str) -> Result<BiliVideoInfo, String> {
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
+    let resp = client
+        .get(&url)
+        .header("Referer", REFERER)
+        .send()
+        .await
+        .map_err(|e| format!("请求视频信息失败: {e}"))?;
+
+    if resp.status() == 412 {
+        return Err("请求被 B 站风控拦截（412），请稍后重试".to_string());
+    }
+
+    let body: ViewResp = resp.json().await.map_err(|e| format!("解析视频信息失败: {e}"))?;
+    if body.code != 0 {
+        return Err(format!("B 站返回错误 {}: {}", body.code, body.message));
+    }
+    let d = body.data.ok_or("视频信息为空")?;
+
+    // pages 缺失时用顶层 cid 兜底（部分接口返回不含 pages）
+    let pages = match d.pages {
+        Some(ps) if !ps.is_empty() => ps
+            .into_iter()
+            .map(|p| BiliPage {
+                page: p.page,
+                cid: p.cid,
+                part: p.part,
+                duration: p.duration,
+            })
+            .collect(),
+        _ => {
+            let cid = d.cid.ok_or("该视频没有可用 cid")?;
+            vec![BiliPage {
+                page: 1,
+                cid,
+                part: d.title.clone(),
+                duration: d.duration,
+            }]
+        }
+    };
+
+    Ok(BiliVideoInfo {
+        bvid: d.bvid,
+        aid: d.aid,
+        title: d.title,
+        cover: d.pic,
+        duration: d.duration,
+        owner: d.owner.map(|o| o.name).unwrap_or_default(),
+        desc: d.desc.unwrap_or_default(),
+        pages,
+    })
+}
+
+/// 通过 av 号拿 bvid：view 接口接受 aid 参数。
+pub async fn bvid_from_aid(aid: i64) -> Result<String, String> {
+    let client = crate::utils::http::client_with_ua(15, Some(10), Some(UA));
+    let url = format!("https://api.bilibili.com/x/web-interface/view?aid={aid}");
+    let resp = client
+        .get(&url)
+        .header("Referer", REFERER)
+        .send()
+        .await
+        .map_err(|e| format!("请求视频信息失败: {e}"))?;
+    let body: ViewResp = resp.json().await.map_err(|e| format!("解析失败: {e}"))?;
+    if body.code != 0 {
+        return Err(format!("B 站返回错误 {}: {}", body.code, body.message));
+    }
+    body.data.map(|d| d.bvid).ok_or("未取到 BV 号".to_string())
+}
+
+#[derive(Deserialize)]
+struct PlayUrlResp {
+    code: i64,
+    message: String,
+    data: Option<PlayUrlData>,
+}
+
+#[derive(Deserialize)]
+struct PlayUrlData {
+    #[serde(default)]
+    accept_quality: Vec<i64>,
+    #[serde(default)]
+    accept_description: Vec<String>,
+    dash: Option<Dash>,
+    /// 老接口的单文件形式（低清/部分视频才有）
+    durl: Option<Vec<Durl>>,
+}
+
+#[derive(Deserialize)]
+struct Dash {
+    #[serde(default)]
+    video: Vec<DashVideo>,
+    #[serde(default)]
+    audio: Vec<DashAudio>,
+}
+
+#[derive(Deserialize, Clone)]
+struct DashVideo {
+    id: i64,
+    base_url: Option<String>,
+    backup_url: Option<Vec<String>>,
+    width: i64,
+    height: i64,
+    /// 12=AVC(H.264) 7=AV1 13=HEVC。合并时优先 AVC，兼容性最好。
+    codecid: Option<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct DashAudio {
+    id: i64,
+    base_url: Option<String>,
+    backup_url: Option<Vec<String>>,
+    bandwidth: Option<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct Durl {
+    url: Option<String>,
+    backup_url: Option<Vec<String>>,
+}
+
+/// qn → 面向用户的标签。B 站官方描述有时缺失，这里兜底。
+fn qn_label(qn: i64) -> &'static str {
+    match qn {
+        120 => "4K 超清",
+        116 => "1080P60",
+        112 => "1080P+",
+        80 => "1080P 高清",
+        74 => "720P60",
+        64 => "720P 高清",
+        32 => "480P 清晰",
+        16 => "360P 流畅",
+        _ => "未知清晰度",
+    }
+}
+
+/// 拉取某分P 的 playurl 信息，并**只返回实际可下载的清晰度**。
+///
+/// 关键点：`accept_quality` 会虚报（未登录时声称到 1080P+），
+/// 必须以 DASH 里真实存在的 `video[].id` 为准做交集，
+/// 否则用户选了 1080P 却下到 480P，或直接下载失败。
+pub async fn fetch_play_info(
+    bvid: &str,
+    cid: i64,
+    cookie: Option<&str>,
+) -> Result<(BiliPlayInfo, Dash), String> {
+    let client = crate::utils::http::client_with_ua(20, Some(10), Some(UA));
+    // fnval=4048 表示：DASH + HDR + 4K + 杜比音频 + 杜比视界 + 8K + AV1
+    let url = format!(
+        "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=127&fnval=4048&fourk=1"
+    );
+    let mut req = client.get(&url).header("Referer", REFERER);
+    // 预留登录入口：传了 cookie 就用，免登录时为空
+    if let Some(c) = cookie {
+        if !c.is_empty() {
+            req = req.header("Cookie", c);
+        }
+    }
+    let resp = req.send().await.map_err(|e| format!("请求播放地址失败: {e}"))?;
+    if resp.status() == 412 {
+        return Err("请求被 B 站风控拦截（412），请稍后重试".to_string());
+    }
+    let body: PlayUrlResp = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析播放地址失败: {e}"))?;
+    if body.code != 0 {
+        return Err(format!("B 站返回错误 {}: {}", body.code, body.message));
+    }
+    let d = body.data.ok_or("播放地址为空")?;
+
+    let dash = d.dash.unwrap_or(Dash {
+        video: Vec::new(),
+        audio: Vec::new(),
+    });
+
+    // 只保留「有可用直链」且「AVC 编码优先」的清晰度
+    // B 站同一 qn 会给多个 codecid（12/7/13），我们每个 qn 只留一条：
+    // 优先 12(AVC)，其次 13(HEVC)，最后 7(AV1) —— 兼容性递减。
+    let mut by_qn: std::collections::BTreeMap<i64, &DashVideo> = std::collections::BTreeMap::new();
+    for v in &dash.video {
+        let has_url = v.base_url.is_some()
+            || v.backup_url.as_ref().map(|b| !b.is_empty()).unwrap_or(false);
+        if !has_url {
+            continue;
+        }
+        let prio = match v.codecid {
+            Some(12) => 3,
+            Some(13) => 2,
+            Some(7) => 1,
+            _ => 0,
+        };
+        by_qn
+            .entry(v.id)
+            .and_modify(|cur| {
+                let cur_prio = match cur.codecid {
+                    Some(12) => 3,
+                    Some(13) => 2,
+                    Some(7) => 1,
+                    _ => 0,
+                };
+                if prio > cur_prio {
+                    *cur = v;
+                }
+            })
+            .or_insert(v);
+    }
+
+    let mut qualities: Vec<BiliQuality> = by_qn
+        .into_iter()
+        .map(|(qn, v)| {
+            // 官方描述里可能有更准确的说法（如「高清 1080P+」），优先使用
+            let official = d
+                .accept_quality
+                .iter()
+                .position(|&q| q == qn)
+                .and_then(|i| d.accept_description.get(i));
+            let label = match official {
+                Some(s) if !s.trim().is_empty() => s.clone(),
+                _ => qn_label(qn).to_string(),
+            };
+            BiliQuality {
+                qn,
+                label,
+                width: v.width,
+                height: v.height,
+            }
+        })
+        .collect();
+    // 由低到高排序，界面默认选最后一个（最高）
+    qualities.sort_by_key(|q| q.qn);
+
+    let has_audio = !dash.audio.is_empty();
+    Ok((
+        BiliPlayInfo {
+            qualities,
+            has_audio,
+        },
+        dash,
+    ))
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  下载
+// ════════════════════════════════════════════════════════════════════
+
+/// 选中 qn 对应的视频流（AVC 优先，已在 fetch_play_info 里筛过 base_url）。
+fn pick_video_stream(dash: &Dash, qn: i64) -> Option<&DashVideo> {
+    let mut best: Option<&DashVideo> = None;
+    let mut best_prio = -1;
+    for v in &dash.video {
+        if v.id != qn {
+            continue;
+        }
+        let has_url = v.base_url.is_some()
+            || v.backup_url.as_ref().map(|b| !b.is_empty()).unwrap_or(false);
+        if !has_url {
+            continue;
+        }
+        let prio = match v.codecid {
+            Some(12) => 3,
+            Some(13) => 2,
+            Some(7) => 1,
+            _ => 0,
+        };
+        if prio > best_prio {
+            best_prio = prio;
+            best = Some(v);
+        }
+    }
+    best
+}
+
+/// 选码率最高的音轨（音质最好）。
+fn pick_audio_stream(dash: &Dash) -> Option<&DashAudio> {
+    dash.audio
+        .iter()
+        .filter(|a| {
+            a.base_url.is_some()
+                || a.backup_url.as_ref().map(|b| !b.is_empty()).unwrap_or(false)
+        })
+        .max_by_key(|a| a.bandwidth.unwrap_or(0))
+}
+
+/// 把一个 URL 候选集依次尝试下载，任一成功即返回。
+async fn download_to_vec(urls: &[String]) -> Result<Vec<u8>, String> {
+    let client = crate::utils::http::client_with_ua(300, Some(15), Some(UA));
+    let mut last_err = String::new();
+    for url in urls {
+        if CANCEL.load(Ordering::SeqCst) {
+            return Err("已取消".to_string());
+        }
+        let resp = match client.get(url).header("Referer", REFERER).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("连接失败: {e}");
+                continue;
+            }
+        };
+        if !resp.status().is_success() {
+            last_err = format!("HTTP {}", resp.status());
+            continue;
+        }
+        let total = resp.content_length().unwrap_or(0);
+        let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut failed = false;
+        while let Some(chunk) = stream.next().await {
+            if CANCEL.load(Ordering::SeqCst) {
+                return Err("已取消".to_string());
+            }
+            match chunk {
+                Ok(c) => {
+                    buf.extend_from_slice(&c);
+                    // 只累加全局计数：闭包回调会让 future 变成非 Send
+                    DOWNLOADED.fetch_add(c.len() as u64, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    last_err = format!("下载中断: {e}");
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        if !failed && !buf.is_empty() {
+            return Ok(buf);
+        }
+    }
+    Err(format!("所有下载地址均失败（最后一次: {last_err}）"))
+}
+
+/// fMP4（m4s）解析：按 `moof`+`mdat` 分片取出每个 sample 的原始字节。
+///
+/// ## 为什么不能用「4 字节长度前缀」的朴素解析
+///
+/// B 站的 m4s 是标准 fragmented MP4：
+///   ftyp | free | moov | sidx | (moof | mdat)+
+/// 一个 moof 里的 `traf/trun` 记录本分片包含几个 sample、每个 sample 多大
+/// （`trun` flags 0x200 表示带 sample_size）。实测音频分片是
+/// `sample_count=117`，sizes 形如 `[222, 2048, 247, 2048, ...]`。
+///
+/// 关键点：**mdat 里连续存放这些 sample，没有长度前缀**；
+/// 且不同分片的 sample 数/大小都不同。早期实现误当成「4 字节长度前缀」
+/// 并把每个 mdat 单独处理，导致第一个 4 字节被当成巨大长度值而解析失败
+/// （实测首个 sample 前 4 字节是 0x21114500，即 AAC 帧头而非长度）。
+///
+/// 正确做法：读 trun 得到 sizes，再按顺序从紧随其后的 mdat 切割。
+fn parse_fmp4_samples(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let mut samples: Vec<Vec<u8>> = Vec::new();
+    let mut pending_sizes: Vec<usize> = Vec::new();
+    let mut pos = 0usize;
+
+    while pos + 8 <= data.len() {
+        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let typ = &data[pos + 4..pos + 8];
+        if size < 8 || pos + size > data.len() {
+            break;
+        }
+        if typ == b"moof" {
+            // 收集本 moof 内所有 trun 的 sample sizes
+            pending_sizes.clear();
+            collect_trun_sizes(&data[pos..pos + size], &mut pending_sizes);
+        } else if typ == b"mdat" && !pending_sizes.is_empty() {
+            let payload = &data[pos + 8..pos + size];
+            let mut off = 0usize;
+            for sz in pending_sizes.iter() {
+                if off + sz > payload.len() {
+                    break;
+                }
+                samples.push(payload[off..off + sz].to_vec());
+                off += sz;
+            }
+            pending_sizes.clear();
+        }
+        pos += size;
+    }
+
+    if samples.is_empty() {
+        return Err("未从媒体流中解析出任何 sample".to_string());
+    }
+    Ok(samples)
+}
+
+/// 递归找 moof → traf → trun，按 flags 解析每个 sample 的大小。
+fn collect_trun_sizes(node: &[u8], out: &mut Vec<usize>) {
+    let mut p = 8usize; // 跳过 box 头
+    while p + 8 <= node.len() {
+        let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
+        let typ = &node[p + 4..p + 8];
+        if size < 8 || p + size > node.len() {
+            break;
+        }
+        if typ == b"traf" {
+            collect_trun_sizes(&node[p..p + size], out);
+        } else if typ == b"trun" {
+            read_one_trun(&node[p..p + size], out);
+        }
+        p += size;
+    }
+}
+
+fn read_one_trun(trun: &[u8], out: &mut Vec<usize>) {
+    if trun.len() < 16 {
+        return;
+    }
+    let flags = u32::from_be_bytes([trun[8], trun[9], trun[10], trun[11]]) & 0x00FF_FFFF;
+    let sample_count =
+        u32::from_be_bytes([trun[12], trun[13], trun[14], trun[15]]) as usize;
+    let mut off = 16usize;
+    // data_offset（0x001）
+    let has_data_offset = flags & 0x001 != 0;
+    if has_data_offset {
+        off += 4;
+    }
+    // first_sample_flags（0x004）
+    if flags & 0x004 != 0 {
+        off += 4;
+    }
+    let has_duration = flags & 0x100 != 0;
+    let has_size = flags & 0x200 != 0;
+    let has_flags = flags & 0x400 != 0;
+    let has_cto = flags & 0x800 != 0;
+
+    // 固定大小模式：flags 0x100 时 sample_size 字段在 flags 里
+    let fixed_size = if !has_size && has_duration {
+        // sample_size 位于 flags 的 bit 8..? 实际是 trun 的 sample_size 字段
+        // 规范：若 0x200 未置位，则所有 sample 用 trun header 的 sample_size
+        let s = u32::from_be_bytes([trun[8], trun[9], trun[10], trun[11]]);
+        // 注意：这一位不需要，交给下面统一处理
+        let _ = s;
+        0usize
+    } else {
+        0usize
+    };
+    let _ = fixed_size;
+
+    for _ in 0..sample_count {
+        if off + 4 > trun.len() {
+            break;
+        }
+        if has_duration {
+            off += 4;
+        }
+        let mut sz = 0usize;
+        if has_size {
+            if off + 4 > trun.len() {
+                break;
+            }
+            sz = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]) as usize;
+            off += 4;
+        }
+        if has_flags {
+            off += 4;
+        }
+        if has_cto {
+            off += 4;
+        }
+        if sz > 0 {
+            out.push(sz);
+        }
+    }
+}
+
+/// 取出所有 sample 的原始字节（音频：裸 AAC；视频：AVCC 格式的 NAL 长度前缀流）。
+fn extract_samples(fmp4: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    parse_fmp4_samples(fmp4)
+}
+
+/// 把 AVCC 形式的视频 sample 转成 Annex-B（加 00 00 00 01 起始码）。
+fn avcc_samples_to_annexb(samples: &[Vec<u8>]) -> Result<Vec<Vec<u8>>, String> {
+    let mut frames: Vec<Vec<u8>> = Vec::with_capacity(samples.len());
+    for s in samples {
+        let mut out: Vec<u8> = Vec::with_capacity(s.len() + 16);
+        let mut p = 0usize;
+        while p + 4 <= s.len() {
+            let nlen = u32::from_be_bytes([s[p], s[p + 1], s[p + 2], s[p + 3]]) as usize;
+            p += 4;
+            if nlen == 0 || p + nlen > s.len() {
+                return Err("视频 sample 的 NAL 长度前缀异常".to_string());
+            }
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(&s[p..p + nlen]);
+            p += nlen;
+        }
+        if out.is_empty() {
+            return Err("视频 sample 未包含 NAL".to_string());
+        }
+        frames.push(out);
+    }
+    if frames.is_empty() {
+        return Err("没有视频帧".to_string());
+    }
+    Ok(frames)
+}
+
+/// 取 AAC 裸帧：sample 本身就是裸 AAC（无 ADTS 头），直接返回。
+fn aac_samples(samples: &[Vec<u8>]) -> Result<Vec<Vec<u8>>, String> {
+    if samples.is_empty() {
+        return Err("没有音频帧".to_string());
+    }
+    Ok(samples.to_vec())
+}
+
+/// 取消当前所有下载。
+pub fn cancel_downloads() {
+    CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// 重置取消标志（每次新的批量任务开始前调用）。
+pub fn reset_cancel() {
+    CANCEL.store(false, Ordering::SeqCst);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  下载主流程
+// ════════════════════════════════════════════════════════════════════
+
+/// 下载单个分P。返回产物路径与实际字节数。
+///
+/// 流程：
+/// 1. 取 playurl（真实可用清晰度）
+/// 2. 纯音频 → 只下 audio.m4s → 提取 AAC → 封装 .m4a
+/// 3. 视频 → 下 video.m4s + audio.m4s → 各自提取裸帧 → remux 成 MP4
+pub async fn download_one(
+    req: &BiliDownloadRequest,
+    total_pages: i64,
+    app: Option<&tauri::AppHandle>,
+) -> Result<BiliDownloadResult, String> {
+    // 直接 emit 而不走闭包回调：`&mut dyn FnMut` 不是 Send，
+    // 会污染整个 future 导致 Tauri 命令编译失败。
+    // AppHandle 本身是 Send+Sync，直接持有引用即可。
+    let report = |p: BiliProgress| {
+        if let Some(a) = app {
+            let _ = a.emit("bilibili:progress", p);
+        }
+    };
+    // 1) 播放信息
+    report(BiliProgress {
+        page: req.page,
+        total_pages,
+        percent: 0.0,
+        downloaded: 0,
+        total: 0,
+        stage: "解析播放地址".to_string(),
+    });
+    let (info, dash) = fetch_play_info(&req.bvid, req.cid, None).await?;
+
+    if req.audio_only {
+        let audio = pick_audio_stream(&dash)
+            .ok_or("该视频没有可用音轨，无法提取音频")?;
+        let urls = collect_urls(audio.base_url.as_deref(), audio.backup_url.as_deref());
+
+        report(BiliProgress {
+            page: req.page,
+            total_pages,
+            percent: 5.0,
+            downloaded: 0,
+            total: 0,
+            stage: "下载音频".to_string(),
+        });
+        let bytes = download_to_vec(&urls).await?;
+
+        report(BiliProgress {
+            page: req.page,
+            total_pages,
+            percent: 80.0,
+            downloaded: bytes.len() as u64,
+            total: bytes.len() as u64,
+            stage: "封装 m4a".to_string(),
+        });
+
+        let frames = aac_samples(&extract_samples(&bytes)?)?;
+        // 优先用 m4s 的 moov 里的真实参数；读不到再按 ADTS 头推断
+        let (sr, ch) = read_audio_params_from_moov(&bytes)
+            .unwrap_or_else(|| crate::file_convert::infer_audio_params(&frames));
+        crate::file_convert::remux_aac_to_m4a(
+            &req.output_path,
+            &frames,
+            sr,
+            ch,
+            None,
+        )?;
+
+        let size = std::fs::metadata(&req.output_path).map(|m| m.len()).unwrap_or(0);
+        report(BiliProgress {
+            page: req.page,
+            total_pages,
+            percent: 100.0,
+            downloaded: size,
+            total: size,
+            stage: "完成".to_string(),
+        });
+        return Ok(BiliDownloadResult {
+            output_path: req.output_path.clone(),
+            bytes: size,
+            quality_label: "仅音频".to_string(),
+        });
+    }
+
+    // 2) 视频：确定清晰度
+    if info.qualities.is_empty() {
+        return Err("没有可下载的清晰度（可能该视频需要登录）".to_string());
+    }
+    let qn = match req.qn {
+        Some(q) if info.qualities.iter().any(|x| x.qn == q) => q,
+        // 用户指定了不可用的清晰度 → 退到最高可用，并让上层知道实际值
+        _ => info.qualities.last().map(|q| q.qn).unwrap_or(32),
+    };
+    let vq = info
+        .qualities
+        .iter()
+        .find(|q| q.qn == qn)
+        .ok_or("未找到目标清晰度")?
+        .clone();
+
+    let vstream = pick_video_stream(&dash, qn).ok_or("未找到目标清晰的视频流")?;
+    let vurls = collect_urls(vstream.base_url.as_deref(), vstream.backup_url.as_deref());
+
+    // 3) 下载视频
+    report(BiliProgress {
+        page: req.page,
+        total_pages,
+        percent: 5.0,
+        downloaded: 0,
+        total: 0,
+        stage: format!("下载视频（{}）", vq.label),
+    });
+    let vbytes = download_to_vec(&vurls).await?;
+
+    // 4) 下载音频（有音轨时）
+    let abytes = if let Some(a) = pick_audio_stream(&dash) {
+        let aurls = collect_urls(a.base_url.as_deref(), a.backup_url.as_deref());
+        report(BiliProgress {
+            page: req.page,
+            total_pages,
+            percent: 55.0,
+            downloaded: vbytes.len() as u64,
+            total: 0,
+            stage: "下载音频".to_string(),
+        });
+        Some(download_to_vec(&aurls).await?)
+    } else {
+        None
+    };
+
+    // 5) 合并
+    report(BiliProgress {
+        page: req.page,
+        total_pages,
+        percent: 85.0,
+        downloaded: vbytes.len() as u64,
+        total: 0,
+        stage: "合并音视频".to_string(),
+    });
+
+    // 视频：sample → AVCC → Annex-B；音频：sample 即裸 AAC
+    let vframes = avcc_samples_to_annexb(&extract_samples(&vbytes)?)?;
+    let aframes = match &abytes {
+        Some(a) => aac_samples(&extract_samples(a)?)?,
+        None => Vec::new(),
+    };
+    // 音频参数：优先 m4s 的 moov，其次 ADTS 头，最后 44100/2 兜底
+    let (sr, ch) = abytes
+        .as_ref()
+        .and_then(|a| read_audio_params_from_moov(a))
+        .unwrap_or_else(|| crate::file_convert::infer_audio_params(&aframes));
+    // 帧率：用 mvhd 总时长 ÷ 视频帧数推算真实值。
+    // 写死 30 会让 25fps 视频的输出时长从 212s 变成 176.9s（实测踩过）。
+    let (fps_num, fps_den) =
+        read_video_fps(&vbytes, vframes.len()).unwrap_or((30, 1));
+
+    crate::file_convert::remux_av_to_mp4(
+        &req.output_path,
+        &vframes,
+        &aframes,
+        vq.width as u32,
+        vq.height as u32,
+        fps_num,
+        fps_den,
+        sr,
+        ch,
+        None,
+    )?;
+
+    let size = std::fs::metadata(&req.output_path).map(|m| m.len()).unwrap_or(0);
+    report(BiliProgress {
+        page: req.page,
+        total_pages,
+        percent: 100.0,
+        downloaded: size,
+        total: size,
+        stage: "完成".to_string(),
+    });
+    Ok(BiliDownloadResult {
+        output_path: req.output_path.clone(),
+        bytes: size,
+        quality_label: vq.label,
+    })
+}
+
+/// 把 base_url 与 backup_url 合成候选列表。
+fn collect_urls(base: Option<&str>, backups: Option<&[String]>) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if let Some(b) = base {
+        if !b.is_empty() {
+            v.push(b.to_string());
+        }
+    }
+    if let Some(list) = backups {
+        for b in list {
+            if !b.is_empty() && !v.contains(b) {
+                v.push(b.clone());
+            }
+        }
+    }
+    v
+}
+
+/// 把连续 Annex-B 字节流切成「一帧一个元素」。
+///
+/// 切分依据：遇到 `00 00 00 01` / `00 00 01` 起始码即开新帧。
+/// Mp4Muxer 要求逐个样本写入，因此必须切分。
+fn split_h264_frames(annexb: &[u8]) -> Vec<Vec<u8>> {
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    let mut cur: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < annexb.len() {
+        // 识别 3 或 4 字节起始码
+        let is4 = i + 4 <= annexb.len()
+            && annexb[i] == 0
+            && annexb[i + 1] == 0
+            && annexb[i + 2] == 0
+            && annexb[i + 3] == 1;
+        let is3 = i + 3 <= annexb.len()
+            && annexb[i] == 0
+            && annexb[i + 1] == 0
+            && annexb[i + 2] == 1;
+        if is4 || is3 {
+            if !cur.is_empty() {
+                frames.push(std::mem::take(&mut cur));
+            }
+            cur.extend_from_slice(&annexb[i..i + if is4 { 4 } else { 3 }]);
+            i += if is4 { 4 } else { 3 };
+            continue;
+        }
+        cur.push(annexb[i]);
+        i += 1;
+    }
+    if !cur.is_empty() {
+        frames.push(cur);
+    }
+    frames
+}
+
+/// AAC 裸流按「一帧一个元素」切分。
+///
+/// B 站 audio.m4s 的每个 sample 就是一帧，`extract_aac_raw` 已按 sample 边界
+/// 逐段拼出连续数据，但拼接后丢失了边界 —— 这里用 ADTS 头识别帧边界；
+/// 若数据无 ADTS 头（裸 AAC），则整体作为一帧交给 Muxer（MP4 允许大 sample，
+/// 只是时间戳粒度变粗，仍可播放）。
+fn split_aac_frames(raw: &[u8]) -> Vec<Vec<u8>> {
+    // 先判断是否为 ADTS 流
+    let looks_adts = raw.len() > 7 && raw[0] == 0xFF && (raw[1] & 0xF0) == 0xF0;
+    if !looks_adts {
+        return vec![raw.to_vec()];
+    }
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    let mut i = 0usize;
+    while i + 7 <= raw.len() {
+        if raw[i] != 0xFF || (raw[i + 1] & 0xF0) != 0xF0 {
+            // 不同步就前移一字节重新找
+            i += 1;
+            continue;
+        }
+        // ADTS 帧长：13 位，跨第 3~5 字节
+        let len = (((raw[i + 3] & 0x03) as usize) << 11)
+            | ((raw[i + 4] as usize) << 3)
+            | ((raw[i + 5] as usize) >> 5);
+        if len < 7 || i + len > raw.len() {
+            break;
+        }
+        // MP4 里的 AAC sample 不含 ADTS 头，去掉前 7 字节的头部
+        frames.push(raw[i + 7..i + len].to_vec());
+        i += len;
+    }
+    if frames.is_empty() {
+        vec![raw.to_vec()]
+    } else {
+        frames
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Tauri 命令
+// ════════════════════════════════════════════════════════════════════
+
+use tauri::{AppHandle, Emitter};
+
+/// 解析输入（链接/BV/av），返回视频信息。不做下载。
+#[tauri::command]
+pub async fn bilibili_resolve(input: String) -> Result<BiliVideoInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // 短链需要先跟随重定向；同步上下文里用 block_on 跑 async 解析
+        let id = tauri::async_runtime::block_on(async {
+            match parse_input(&input)? {
+                BiliIdInput::ShortLink(u) => resolve_short_link(&u).await,
+                other => Ok(other),
+            }
+        })?;
+        let bvid = tauri::async_runtime::block_on(async {
+            match id {
+                BiliIdInput::Bvid(b) => Ok(b),
+                BiliIdInput::Aid(a) => bvid_from_aid(a).await,
+                BiliIdInput::ShortLink(_) => Err("短链解析失败".to_string()),
+            }
+        })?;
+        tauri::async_runtime::block_on(fetch_video_info(&bvid))
+    })
+    .await
+    .map_err(|e| format!("解析任务异常: {e}"))?
+}
+
+/// 查询某分P 的可选清晰度（真实可下载的）。
+#[tauri::command]
+pub async fn bilibili_qualities(bvid: String, cid: i64) -> Result<BiliPlayInfo, String> {
+    let (info, _) = fetch_play_info(&bvid, cid, None).await?;
+    Ok(info)
+}
+
+/// 取消所有下载。
+#[tauri::command]
+pub fn bilibili_cancel() {
+    cancel_downloads();
+}
+
+/// 批量下载。逐项执行，全程通过 `bilibili:progress` 事件上报进度。
+///
+/// 返回每一项的结果（成功含路径与大小，失败含原因）。
+#[tauri::command]
+pub async fn bilibili_download(
+    app: AppHandle,
+    requests: Vec<BiliDownloadRequest>,
+) -> Result<Vec<Result<BiliDownloadResult, String>>, String> {
+    if requests.is_empty() {
+        return Err("没有要下载的任务".to_string());
+    }
+    reset_cancel();
+    let total = requests.len() as i64;
+    let mut results: Vec<Result<BiliDownloadResult, String>> = Vec::with_capacity(requests.len());
+
+    for (idx, req) in requests.iter().enumerate() {
+        if CANCEL.load(Ordering::SeqCst) {
+            results.push(Err("已取消".to_string()));
+            continue;
+        }
+        let r = download_one(req, total, Some(&app)).await;
+        // 逐项上报，让界面能立即标记该分P 完成/失败
+        let _ = app.emit(
+            "bilibili:item",
+            serde_json::json!({
+                "index": idx,
+                "page": req.page,
+                "ok": r.is_ok(),
+                "path": r.as_ref().ok().map(|x| x.output_path.clone()),
+                "quality": r.as_ref().ok().map(|x| x.quality_label.clone()),
+                "error": r.as_ref().err().cloned(),
+            }),
+        );
+        results.push(r);
+    }
+
+    Ok(results)
+}
+//  从 m4s 的 moov 读取真实媒体参数
+// ════════════════════════════════════════════════════════════════════
+
+/// 从 fMP4 读视频帧率。
+///
+/// ## 为什么不能用 stts
+///
+/// B 站的 m4s 是 fragmented MP4，**moov 里的 stts 是空的**
+/// （实测 timescale=16000 而 stts.entry_count=0），时长信息分散在
+/// 各 moof 的 trun/tfdt 中。早期实现去读 stts 首项 delta，
+/// 实际读到的是后续 box 的类型字符串（0x7374616E = "nats"），
+/// 于是算出荒谬的帧率 —— 实测 25fps 的视频被当成 30fps，
+/// 输出时长从 212s 变成 176.9s，音画严重不同步。
+///
+/// ## 正确做法
+///
+/// `mvhd` 的 timescale/duration 是完整总时长（fMP4 也会写），
+/// 而视频帧总数可以数 trun 里的 sample_count 累加。
+///   fps = 总帧数 / 总时长
+/// 再约分成整数分数交给 muxer。这样对 25 / 29.97 / 30 / 60 都成立。
+fn read_video_fps(fmp4: &[u8], total_samples: usize) -> Option<(u32, u32)> {
+    let dur = read_mvhd_duration_secs(fmp4)?;
+    if dur <= 0.0 || total_samples == 0 {
+        return None;
+    }
+    let fps = total_samples as f64 / dur;
+    // 约分：优先匹配常见的 NTSC/PAL 帧率，避免浮点误差
+    for (num, den) in [
+        (24000u32, 1001u32),
+        (30000, 1001),
+        (25, 1),
+        (30, 1),
+        (24, 1),
+        (60, 1),
+        (50, 1),
+        (48, 1),
+        (15, 1),
+        (120, 1),
+    ] {
+        let v = num as f64 / den as f64;
+        if (fps - v).abs() < 0.35 {
+            return Some((num, den));
+        }
+    }
+    // 兜底：按整数帧率
+    let rounded = fps.round().max(1.0);
+    Some((rounded as u32, 1))
+}
+
+/// 读 mvhd 的总时长（秒）。
+fn read_mvhd_duration_secs(fmp4: &[u8]) -> Option<f64> {
+    let mut pos = 0usize;
+    while pos + 8 <= fmp4.len() {
+        let size =
+            u32::from_be_bytes([fmp4[pos], fmp4[pos + 1], fmp4[pos + 2], fmp4[pos + 3]]) as usize;
+        let typ = &fmp4[pos + 4..pos + 8];
+        if size < 8 || pos + size > fmp4.len() {
+            return None;
+        }
+        if typ == b"moov" {
+            let end = pos + size;
+            let mut p = pos + 8;
+            while p + 8 <= end {
+                let s2 =
+                    u32::from_be_bytes([fmp4[p], fmp4[p + 1], fmp4[p + 2], fmp4[p + 3]]) as usize;
+                let t2 = &fmp4[p + 4..p + 8];
+                if s2 < 8 || p + s2 > end {
+                    break;
+                }
+                if t2 == b"mvhd" {
+                    let b = &fmp4[p..p + s2];
+                    if b.len() < 40 {
+                        return None;
+                    }
+                    let ver = b[8];
+                    let (ts, du) = if ver == 1 {
+                        // ver/flags(4) + ctime(8) + mtime(8) + timescale(4) + duration(8)
+                        if b.len() < 8 + 4 + 8 + 8 + 4 + 8 {
+                            return None;
+                        }
+                        (
+                            u32::from_be_bytes([b[8 + 4 + 8 + 8], b[8 + 4 + 8 + 9], b[8 + 4 + 8 + 10], b[8 + 4 + 8 + 11]]) as u64,
+                            u64::from_be_bytes([
+                                b[8 + 4 + 8 + 8 + 4],
+                                b[8 + 4 + 8 + 8 + 5],
+                                b[8 + 4 + 8 + 8 + 6],
+                                b[8 + 4 + 8 + 8 + 7],
+                                b[8 + 4 + 8 + 8 + 8],
+                                b[8 + 4 + 8 + 8 + 9],
+                                b[8 + 4 + 8 + 8 + 10],
+                                b[8 + 4 + 8 + 8 + 11],
+                            ]),
+                        )
+                    } else {
+                        // ver/flags(4) + ctime(4) + mtime(4) + timescale(4) + duration(4)
+                        if b.len() < 8 + 4 + 4 + 4 + 4 + 4 {
+                            return None;
+                        }
+                        (
+                            u32::from_be_bytes([b[20], b[21], b[22], b[23]]) as u64,
+                            u32::from_be_bytes([b[24], b[25], b[26], b[27]]) as u64,
+                        )
+                    };
+                    if ts == 0 {
+                        return None;
+                    }
+                    return Some(du as f64 / ts as f64);
+                }
+                p += s2;
+            }
+            return None;
+        }
+        pos += size;
+    }
+    None
+}
+
+/// 在 trak 内找 hdlr 的 handler_type，判断是否视频轨。
+fn trak_is_video(trak: &[u8]) -> bool {
+    let mut p = 8usize;
+    while p + 8 <= trak.len() {
+        let size = u32::from_be_bytes([trak[p], trak[p + 1], trak[p + 2], trak[p + 3]]) as usize;
+        let typ = &trak[p + 4..p + 8];
+        if size < 8 || p + size > trak.len() {
+            break;
+        }
+        if typ == b"mdia" {
+            return mdia_is_video(&trak[p..p + size]);
+        }
+        p += size;
+    }
+    false
+}
+
+fn mdia_is_video(mdia: &[u8]) -> bool {
+    let mut p = 8usize;
+    while p + 8 <= mdia.len() {
+        let size = u32::from_be_bytes([mdia[p], mdia[p + 1], mdia[p + 2], mdia[p + 3]]) as usize;
+        let typ = &mdia[p + 4..p + 8];
+        if size < 8 || p + size > mdia.len() {
+            break;
+        }
+        if typ == b"hdlr" {
+            // hdlr: version/flags(4) + pre_defined(4) + handler_type(4)
+            if p + 20 <= mdia.len() {
+                return &mdia[p + 16..p + 20] == b"vide";
+            }
+        }
+        p += size;
+    }
+    false
+}
+
+fn find_mdhd_timescale(node: &[u8]) -> Option<u32> {
+    let mut p = 8usize;
+    while p + 8 <= node.len() {
+        let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
+        let typ = &node[p + 4..p + 8];
+        if size < 8 || p + size > node.len() {
+            break;
+        }
+        if typ == b"mdia" {
+            return find_mdhd_timescale(&node[p..p + size]);
+        }
+        if typ == b"mdhd" {
+            let body = &node[p..p + size];
+            if body.len() < 12 {
+                return None;
+            }
+            let ver = body[8];
+            // v0: ver/flags(4)+ctime(4)+mtime(4)+timescale(4) → off = 8+4+4+4 = 20
+            // v1: ver/flags(4)+ctime(8)+mtime(8)+timescale(4) → off = 8+4+8+8 = 28
+            let off = if ver == 1 { 8 + 4 + 8 + 8 } else { 8 + 4 + 4 + 4 };
+            if off + 4 <= body.len() {
+                return Some(u32::from_be_bytes([
+                    body[off],
+                    body[off + 1],
+                    body[off + 2],
+                    body[off + 3],
+                ]));
+            }
+            return None;
+        }
+        p += size;
+    }
+    None
+}
+
+
+/// 从 fMP4 的 moov 里读音频采样率与声道数。
+/// mdhd.timescale 即采样率；声道数从 mp4a sample entry 的 channelcount 读。
+pub fn read_audio_params_from_moov(fmp4: &[u8]) -> Option<(u32, u32)> {
+    let mut pos = 0usize;
+    while pos + 8 <= fmp4.len() {
+        let size =
+            u32::from_be_bytes([fmp4[pos], fmp4[pos + 1], fmp4[pos + 2], fmp4[pos + 3]]) as usize;
+        let typ = &fmp4[pos + 4..pos + 8];
+        if size < 8 || pos + size > fmp4.len() {
+            return None;
+        }
+        if typ == b"moov" {
+            let end = pos + size;
+            let mut p = pos + 8;
+            while p + 8 <= end {
+                let s2 =
+                    u32::from_be_bytes([fmp4[p], fmp4[p + 1], fmp4[p + 2], fmp4[p + 3]]) as usize;
+                let t2 = &fmp4[p + 4..p + 8];
+                if s2 < 8 || p + s2 > end {
+                    break;
+                }
+                if t2 == b"trak" {
+                    let trak = &fmp4[p..p + s2];
+                    if !trak_is_video(trak) {
+                        // 采样率（mdhd.timescale）是关键：写错会让整条音轨时长按比例偏移
+                        // （实测把 48000 当 44100 用，212s 的视频音频轨变成 231s）。
+                        // 声道数读不到时按 2 兜底 —— 不能因为声道数失败就丢掉采样率。
+                        if let Some(ts) = find_mdhd_timescale(trak) {
+                            let ch = find_mp4a_channelcount(trak).unwrap_or(2).max(1);
+                            return Some((ts, ch));
+                        }
+                    }
+                }
+                p += s2;
+            }
+            return None;
+        }
+        pos += size;
+    }
+    None
+}
+
+/// 在 trak 内找 stsd → mp4a 的 channelcount。
+fn find_mp4a_channelcount(node: &[u8]) -> Option<u32> {
+    let mut p = 8usize;
+    while p + 8 <= node.len() {
+        let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
+        let typ = &node[p + 4..p + 8];
+        if size < 8 || p + size > node.len() {
+            break;
+        }
+        if typ == b"stbl" {
+            return find_mp4a_channelcount(&node[p..p + size]);
+        }
+        if typ == b"stsd" {
+            let body = &node[p..p + size];
+            let mut q = 16usize;
+            while q + 8 <= body.len() {
+                let es =
+                    u32::from_be_bytes([body[q], body[q + 1], body[q + 2], body[q + 3]]) as usize;
+                let et = &body[q + 4..q + 8];
+                if es < 8 || q + es > body.len() {
+                    break;
+                }
+                if et == b"mp4a" {
+                    // mp4a sample entry:
+                    // 8(box) + 6(reserved) + 2(data_ref_idx) + 8(ver/rev/vendor) + 2(channelcount)
+                    let cc_off = q + 8 + 6 + 2 + 8;
+                    if cc_off + 2 <= body.len() {
+                        return Some(u16::from_be_bytes([body[cc_off], body[cc_off + 1]]) as u32);
+                    }
+                }
+                q += es;
+            }
+            return None;
+        }
+        p += size;
+    }
+    None
+}

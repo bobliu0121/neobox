@@ -603,6 +603,100 @@ fn is_video_file(path: &str) -> bool {
     ["mp4", "webm", "mov", "mkv", "avi", "m4v"].contains(&ext.as_str())
 }
 
+/// 把「已编码的裸 H.264 Annex-B 帧序列 + 裸 AAC 帧序列」重新封装成 MP4。
+///
+/// 专为 B 站 DASH 下载设计：它的 video.m4s / audio.m4s 里装的就是编好的帧，
+/// 不需要重新编码，只需换容器（remux）。相比走完整转码链路，
+/// 速度快一个数量级且画质零损失。
+///
+/// * `video_frames` —— 每个元素是一帧的 Annex-B 数据（含起始码）
+/// * `audio_frames` —— 每个元素是一帧 AAC 原始数据（无 ADTS 头，MP4 用 ASC 描述参数）
+/// * `fps_num/fps_den` —— 用于写 stts；B 站常用 30000/1001 或 30/1
+/// * `sr/ch` —— 音频采样率与声道数
+/// * `audio_asc` —— AAC 的 AudioSpecificConfig（来自 m4s 的 esds，否则按 sr/ch 生成）
+pub fn remux_av_to_mp4(
+    output: &str,
+    video_frames: &[Vec<u8>],
+    audio_frames: &[Vec<u8>],
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    sr: u32,
+    ch: u32,
+    audio_asc: Option<Vec<u8>>,
+) -> Result<(), String> {
+    let has_audio = !audio_frames.is_empty();
+    let asc = audio_asc.unwrap_or_else(|| aac_asc(sr, ch));
+    let mut mux = Mp4Muxer::new(
+        output,
+        width,
+        height,
+        fps_num,
+        fps_den,
+        sr,
+        ch,
+        has_audio,
+        asc,
+    )?;
+    for f in video_frames {
+        mux.add_video(f)?;
+    }
+    for f in audio_frames {
+        mux.add_audio(f)?;
+    }
+    mux.finish().map_err(|e| format!("写入 MP4 失败: {e}"))
+}
+
+/// 仅把裸 AAC 帧封装成 .m4a（纯音频下载用）。
+pub fn remux_aac_to_m4a(
+    output: &str,
+    audio_frames: &[Vec<u8>],
+    sr: u32,
+    ch: u32,
+    audio_asc: Option<Vec<u8>>,
+) -> Result<(), String> {
+    if audio_frames.is_empty() {
+        return Err("没有音频帧可封装".to_string());
+    }
+    let asc = audio_asc.unwrap_or_else(|| aac_asc(sr, ch));
+    let mut mux = Mp4Muxer::new(output, 0, 0, 0, 0, sr, ch, true, asc)?;
+    for f in audio_frames {
+        mux.add_audio(f)?;
+    }
+    mux.finish().map_err(|e| format!("写入 m4a 失败: {e}"))
+}
+
+/// 从 AAC 裸帧流中解析采样率与声道数（读第一个 ADTS 头）。
+///
+/// B 站的 audio.m4s 经我们提取后是**裸 AAC 帧**（无 ADTS 头），
+/// 但若来源带 ADTS 则可用此函数兜底取参数。
+fn parse_adts_header(frame: &[u8]) -> Option<(u32, u32)> {
+    if frame.len() < 7 || frame[0] != 0xFF || (frame[1] & 0xF0) != 0xF0 {
+        return None;
+    }
+    // ADTS 采样率索引
+    const SR_TABLE: [u32; 13] = [
+        96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+    ];
+    let sr_idx = ((frame[2] >> 2) & 0x0F) as usize;
+    let ch_cfg = (((frame[2] & 0x01) << 2) | ((frame[3] >> 6) & 0x03)) as u32;
+    let sr = *SR_TABLE.get(sr_idx)?;
+    Some((sr, ch_cfg))
+}
+
+/// 供 bilibili 模块使用：从音频裸帧推断采样率/声道。
+/// 找不到 ADTS 头时返回 B 站常见默认值（44100/2）。
+pub fn infer_audio_params(audio_frames: &[Vec<u8>]) -> (u32, u32) {
+    for f in audio_frames.iter().take(4) {
+        if let Some((sr, ch)) = parse_adts_header(f) {
+            return (sr, ch.max(1));
+        }
+    }
+    (44100, 2)
+}
+
+
 /// 音视频倒放：视频同时倒放画面与声音，音频只倒放声音。
 /// 使用 Media Foundation，不依赖外部 ffmpeg。
 ///

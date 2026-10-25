@@ -66,7 +66,8 @@
     "screenTest": "螢幕檢測",
     "wallpaper": "桌布管理",
     "videoConverter": "影片轉換",
-    "mkaMuxer": "MKA 合成"
+    "mkaMuxer": "MKA 合成",
+    "bilibiliDownload": "B 站下載"
   },
   "customPage": {
     "title": "自訂頁面",
@@ -880,7 +881,8 @@
     "resolutionApplied": "解析度已應用",
     "screenTestDesc": "檢測顯示器壞點、響應時間、重新整理率與畫面均勻性",
     "videoConverterDesc": "影片轉 GIF 動圖、首幀圖片，或擷取音訊",
-    "mkaMuxerDesc": "音訊 + 字幕 + 封面合成為 MKA 檔案"
+    "mkaMuxerDesc": "音訊 + 字幕 + 封面合成為 MKA 檔案",
+    "bilibiliDownloadDesc": "下載 B 站影片或音訊（免登入，最高 480P）"
   },
   "timeSync": {
     "title": "時間校正",

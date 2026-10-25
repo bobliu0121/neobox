@@ -66,7 +66,8 @@
     "resolutionConverter": "Resolution Converter",
     "wallpaper": "Wallpapers",
     "videoConverter": "Video Converter",
-    "mkaMuxer": "MKA Muxer"
+    "mkaMuxer": "MKA Muxer",
+    "bilibiliDownload": "Bilibili Download"
   },
   "customPage": {
     "title": "Custom Dashboard",
@@ -940,7 +941,8 @@
     "selectDisplay": "Select display",
     "selectResolution": "Select resolution",
     "videoConverterDesc": "Convert video to GIF, a still frame, or extract audio",
-    "mkaMuxerDesc": "Combine audio, subtitles and cover art into an MKA file"
+    "mkaMuxerDesc": "Combine audio, subtitles and cover art into an MKA file",
+    "bilibiliDownloadDesc": "Download Bilibili video or audio (no login, up to 480P)"
   },
   "contextMenu": {
     "title": "Context Menu & This PC",

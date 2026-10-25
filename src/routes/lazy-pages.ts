@@ -58,6 +58,7 @@ export const AudioReversePage = lazy(() => import("@/pages/AudioReversePage"));
 export const AudioSpeedPage = lazy(() => import("@/pages/AudioSpeedPage"));
 export const VideoConverterPage = lazy(() => import("@/pages/VideoConverterPage"));
 export const MkaMuxerPage = lazy(() => import("@/pages/MkaMuxerPage"));
+export const BilibiliDownloadPage = lazy(() => import("@/pages/BilibiliDownloadPage"));
 export const MusicPage = lazy(() => import("@/pages/MusicPage"));
 
 /**
@@ -122,6 +123,7 @@ const ROUTE_PRELOADERS: Record<string, () => Promise<unknown>> = {
   "/audio-speed": () => import("@/pages/AudioSpeedPage"),
   "/video-converter": () => import("@/pages/VideoConverterPage"),
   "/mka-muxer": () => import("@/pages/MkaMuxerPage"),
+  "/bilibili-download": () => import("@/pages/BilibiliDownloadPage"),
   "/autoclicker": () => import("@/pages/AutoClickerPage"),
 };
 

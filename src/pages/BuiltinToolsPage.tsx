@@ -63,6 +63,7 @@ const defaultTools: ViewItem[] = [
   { id: "context-menu", path: "/context-menu", icon: MousePointer2, titleKey: "sidebar.contextMenu", descriptionKey: "builtinTools.contextMenuDesc", color: "#3B82F6" },
   { id: "hidden-features", path: "/hidden-features", icon: FlaskConical, titleKey: "sidebar.hiddenFeatures", descriptionKey: "builtinTools.hiddenFeaturesDesc", color: "#E67E22", beta: true },
   { id: "download-accelerator", path: "/download-accelerator", icon: DownloadCloud, titleKey: "sidebar.downloadAccelerator", descriptionKey: "builtinTools.downloadAcceleratorDesc", color: "#00C896" },
+  { id: "bilibili-download", path: "/bilibili-download", icon: DownloadCloud, titleKey: "sidebar.bilibiliDownload", descriptionKey: "builtinTools.bilibiliDownloadDesc", color: "#FB7299" },
   { id: "speedtest", path: "/speedtest", icon: Gauge, titleKey: "sidebar.speedtest", descriptionKey: "builtinTools.speedtestDesc", color: "#00B4D8" },
   { id: "disk-health", path: "/disk-health", icon: HardDrive, titleKey: "sidebar.diskHealth", descriptionKey: "builtinTools.diskHealthDesc", color: "#00B4D8" },
   { id: "runtime-repair", path: "/runtime-repair", icon: Braces, titleKey: "sidebar.runtimeRepair", descriptionKey: "builtinTools.runtimeRepairDesc", color: "#4A90E2" },
