@@ -12,6 +12,9 @@ fn main() {
     let input = args[2].clone();
     let output = args.get(3).cloned().unwrap_or_default();
     let speed: f64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3.0);
+    // 传 `audio` 作为任意位置的附加参数即启用「仅提取音频」，便于验证该分支：
+    //   media_debug speed in.mp4 out.m4a 1.5 audio
+    let audio_only = args.iter().any(|a| a == "audio");
 
     if mode == "enc" {
         enc_probe(&input);
@@ -56,10 +59,13 @@ fn main() {
     let r = tauri::async_runtime::block_on(async move {
         match mode.as_str() {
             "reverse" => {
-                neobox_lib::file_convert::reverse_media(input, output).await.map(|_| None)
+                neobox_lib::file_convert::reverse_media(input, output, Some(audio_only))
+                    .await
+                    .map(|_| None)
             }
             "speed" => {
-                neobox_lib::file_convert::change_media_speed(input, output, speed).await
+                neobox_lib::file_convert::change_media_speed(input, output, speed, Some(audio_only))
+                    .await
             }
             _ => Err("unknown mode".to_string()),
         }

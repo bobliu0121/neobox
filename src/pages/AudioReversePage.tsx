@@ -21,6 +21,15 @@ import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useConversionStore } from "@/stores/conversion-store";
+import { ThemeSwitch } from "@/components/special/theme-switch";
+
+/** 视频类输入：开启「仅提取音频」后，这类文件的输出要改成 .m4a */
+const VIDEO_EXTS = ["mp4", "webm", "mov", "mkv", "avi", "m4v"];
+
+function isVideoPath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXTS.includes(ext);
+}
 import { hexToRgba } from "@/lib/color-utils";
 
 export default function AudioReversePage() {
@@ -36,6 +45,17 @@ export default function AudioReversePage() {
 
   const [inputPath, setInputPath] = useState<string | null>(null);
   const [outputPath, setOutputPath] = useState<string | null>(null);
+  /** 仅提取音频：对视频文件跳过画面，只把音轨倒放后输出 .m4a */
+  const [audioOnly, setAudioOnly] = useState(false);
+
+  /**
+   * 实际输出后缀。
+   * 开启「仅提取音频」且输入是视频时强制 .m4a —— 后端写的是 AAC-in-MP4，
+   * 沿用 .mp4 会让系统按视频打开（黑屏）。其余情况保持输入文件原后缀。
+   */
+  const effectiveExt = audioOnly && inputPath && isVideoPath(inputPath)
+    ? "m4a"
+    : (inputPath?.split(".").pop() || "mp3");
 
   // 后台任务：页面切走也能继续，重新进入仍显示状态
   const reverseJob = useConversionStore((s) => s.reverseJob);
@@ -77,19 +97,18 @@ export default function AudioReversePage() {
   const handlePickOutput = useCallback(async () => {
     if (!inputPath) return;
     const base = inputPath.replace(/\.[^.\\/]+$/, "");
-    const ext = inputPath.split(".").pop() || "mp3";
-    const defaultName = `${base}_reversed.${ext}`;
+    const defaultName = `${base}_reversed.${effectiveExt}`;
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const path = await save({
         defaultPath: defaultName,
-        filters: [{ name: "输出文件", extensions: [ext] }],
+        filters: [{ name: "输出文件", extensions: [effectiveExt] }],
       });
       if (path) setOutputPath(path);
     } catch (e) {
       toast({ title: String(e), status: "error", duration: 3000 });
     }
-  }, [inputPath, toast]);
+  }, [inputPath, effectiveExt, toast]);
 
   const handleProcess = useCallback(async () => {
     if (!inputPath) {
@@ -99,14 +118,14 @@ export default function AudioReversePage() {
     // 未手动选择输出位置时，自动保存到输入文件所在目录
     const target =
       outputPath ??
-      inputPath.replace(/\.[^.\\/]+$/, "") + "_reversed." + (inputPath.split(".").pop() || "mp3");
+      inputPath.replace(/\.[^.\\/]+$/, "") + "_reversed." + effectiveExt;
     if (inputPath === target) {
       toast({ title: "输出文件不能和输入文件相同", status: "warning", duration: 2500 });
       return;
     }
     // 不 await：页面切走后 Promise 仍在全局 store 中继续执行
-    void runReverseMedia({ inputPath, outputPath: target });
-  }, [inputPath, outputPath, runReverseMedia, toast]);
+    void runReverseMedia({ inputPath, outputPath: target, audioOnly });
+  }, [inputPath, outputPath, effectiveExt, audioOnly, runReverseMedia, toast]);
 
   return (
     <Box pt={8} pb={8} {...dropProps}>
@@ -149,6 +168,37 @@ export default function AudioReversePage() {
                 <Text fontSize="sm" color={subTextColor} isTruncated maxW="400px">
                   {inputPath || "未选择"}
                 </Text>
+              </HStack>
+            </Box>
+
+            {/* 仅提取音频：对视频输入跳过画面，只把音轨倒放后输出 .m4a */}
+            <Box>
+              <HStack justify="space-between" align="flex-start">
+                <Box>
+                  <Text fontSize="sm" fontWeight="bold" color={headingColor}>
+                    仅提取音频（不输出画面）
+                  </Text>
+                  <Text fontSize="xs" color={subTextColor} mt={1}>
+                    {inputPath && isVideoPath(inputPath)
+                      ? `视频将只处理音轨，输出为 .m4a（当前：${effectiveExt}）`
+                      : "开启后对视频只处理音轨并输出 .m4a；音频文件不受影响"}
+                  </Text>
+                  {audioOnly && inputPath && isVideoPath(inputPath) && (
+                    <Text fontSize="xs" color="#d69e2e" mt={1}>
+                      若该视频本身不含音轨，处理会直接报错提示。
+                    </Text>
+                  )}
+                </Box>
+                <ThemeSwitch
+                  isChecked={audioOnly}
+                  onChange={(e) => {
+                    setAudioOnly(e.target.checked);
+                    // 后缀可能变化（.mp4 → .m4a），清掉旧的手选输出路径避免扩展名不匹配
+                    setOutputPath(null);
+                  }}
+                  size="lg"
+                  flexShrink={0}
+                />
               </HStack>
             </Box>
 

@@ -25,6 +25,7 @@ import { useAdaptiveTextColor } from "@/hooks/use-adaptive-text-color";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useConversionStore } from "@/stores/conversion-store";
+import { ThemeSwitch } from "@/components/special/theme-switch";
 import { hexToRgba } from "@/lib/color-utils";
 
 const SPEED_MIN = 0.01;
@@ -32,6 +33,14 @@ const SPEED_MAX = 100;
 /** 滑块按对数刻度：log10(0.01)=-2 … log10(100)=2，1x 正居中，x 与 1/x 对称 */
 const LOG_MIN = Math.log10(SPEED_MIN);
 const LOG_MAX = Math.log10(SPEED_MAX);
+
+/** 视频类输入：开启「仅提取音频」后，这类文件的输出要改成 .m4a */
+const VIDEO_EXTS = ["mp4", "webm", "mov", "mkv", "avi", "m4v"];
+
+function isVideoPath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXTS.includes(ext);
+}
 
 /** 把倍速值格式化为简洁文本（去多余零） */
 function formatSpeed(s: number): string {
@@ -52,7 +61,20 @@ export default function AudioSpeedPage() {
   const [inputPath, setInputPath] = useState<string | null>(null);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1.0);
+  /** 仅提取音频：对视频文件跳过画面，只把音轨变速后输出 .m4a */
+  const [audioOnly, setAudioOnly] = useState(false);
   const speedInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * 实际输出后缀。
+   * - 开启「仅提取音频」且输入是视频 → 强制 .m4a：
+   *   后端写入的是 AAC-in-MP4，用 .m4a 才能让播放器/资源管理器正确识别为音频；
+   *   若沿用 .mp4，系统可能按视频打开导致黑屏。
+   * - 其余情况保持输入文件原有的后缀（音频变速仍是原来的容器）。
+   */
+  const effectiveExt = audioOnly && inputPath && isVideoPath(inputPath)
+    ? "m4a"
+    : (inputPath?.split(".").pop() || "mp3");
 
   // 后台任务：页面切走也能继续，重新进入仍显示状态
   const speedJob = useConversionStore((s) => s.speedJob);
@@ -106,19 +128,18 @@ export default function AudioSpeedPage() {
   const handlePickOutput = useCallback(async () => {
     if (!inputPath) return;
     const base = inputPath.replace(/\.[^.\\/]+$/, "");
-    const ext = inputPath.split(".").pop() || "mp3";
-    const defaultName = `${base}_speed${formatSpeed(speed)}.${ext}`;
+    const defaultName = `${base}_speed${formatSpeed(speed)}.${effectiveExt}`;
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const path = await save({
         defaultPath: defaultName,
-        filters: [{ name: "输出文件", extensions: [ext] }],
+        filters: [{ name: "输出文件", extensions: [effectiveExt] }],
       });
       if (path) setOutputPath(path);
     } catch (e) {
       toast({ title: String(e), status: "error", duration: 3000 });
     }
-  }, [inputPath, speed, toast]);
+  }, [inputPath, speed, effectiveExt, toast]);
 
   const handleProcess = useCallback(async () => {
     if (!inputPath) {
@@ -126,16 +147,22 @@ export default function AudioSpeedPage() {
       return;
     }
     const speedLabel = formatSpeed(speed);
+    // 手选路径优先，但要保证后缀与当前模式一致：
+    // 开启「仅提取音频」后产物是 AAC-in-MP4；若用户此前手选了 .mp4，
+    // 系统会按视频打开导致黑屏 —— 这里强制纠正扩展名为 .m4a。
+    const pickedOutput = outputPath && effectiveExt === "m4a" && !/\.m4a$/i.test(outputPath)
+      ? outputPath.replace(/\.[^.\/]+$/, "") + ".m4a"
+      : outputPath;
     const target =
-      outputPath ??
-      inputPath.replace(/\.[^.\\/]+$/, "") + "_speed" + speedLabel + "." + (inputPath.split(".").pop() || "mp3");
+      pickedOutput ??
+      inputPath.replace(/\.[^.\\/]+$/, "") + "_speed" + speedLabel + "." + effectiveExt;
     if (inputPath === target) {
       toast({ title: "输出文件不能和输入文件相同", status: "warning", duration: 2500 });
       return;
     }
     // 不 await：页面切走后 Promise 仍在全局 store 中继续执行
-    void runSpeedMedia({ inputPath, outputPath: target, speed });
-  }, [inputPath, outputPath, speed, runSpeedMedia, toast]);
+    void runSpeedMedia({ inputPath, outputPath: target, speed, audioOnly });
+  }, [inputPath, outputPath, speed, effectiveExt, audioOnly, runSpeedMedia, toast]);
 
   return (
     <Box pt={8} pb={8} {...dropProps}>
@@ -233,6 +260,37 @@ export default function AudioSpeedPage() {
                 <Text fontSize="xs" color={subTextColor}>0.01x (1/100 慢速)</Text>
                 <Text fontSize="xs" fontWeight="bold" color={headingColor}>1x (正常)</Text>
                 <Text fontSize="xs" color={subTextColor}>100x (极速)</Text>
+              </HStack>
+            </Box>
+
+            {/* 仅提取音频：对视频输入跳过画面，只把音轨变速后输出 .m4a（体积小、处理快） */}
+            <Box>
+              <HStack justify="space-between" align="flex-start">
+                <Box>
+                  <Text fontSize="sm" fontWeight="bold" color={headingColor}>
+                    仅提取音频（不输出画面）
+                  </Text>
+                  <Text fontSize="xs" color={subTextColor} mt={1}>
+                    {inputPath && isVideoPath(inputPath)
+                      ? `视频将只处理音轨，输出为 .m4a（当前：${effectiveExt}）`
+                      : "开启后对视频只处理音轨并输出 .m4a；音频文件不受影响"}
+                  </Text>
+                  {audioOnly && inputPath && isVideoPath(inputPath) && (
+                    <Text fontSize="xs" color="#d69e2e" mt={1}>
+                      若该视频本身不含音轨，处理会直接报错提示。
+                    </Text>
+                  )}
+                </Box>
+                <ThemeSwitch
+                  isChecked={audioOnly}
+                  onChange={(e) => {
+                    setAudioOnly(e.target.checked);
+                    // 后缀可能变化（.mp4 → .m4a），旧的手选输出路径要清掉，避免扩展名不匹配
+                    setOutputPath(null);
+                  }}
+                  size="lg"
+                  flexShrink={0}
+                />
               </HStack>
             </Box>
 

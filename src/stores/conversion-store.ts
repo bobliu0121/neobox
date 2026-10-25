@@ -63,12 +63,16 @@ interface MkaMuxParams {
 interface ReverseMediaParams {
   inputPath: string;
   outputPath: string;
+  /** 仅提取音频轨处理，输出 .m4a（丢弃画面）。视频无音轨时后端会明确报错。 */
+  audioOnly?: boolean;
 }
 
 interface SpeedMediaParams {
   inputPath: string;
   outputPath: string;
   speed: number;
+  /** 仅提取音频轨处理，输出 .m4a（丢弃画面）。视频无音轨时后端会明确报错。 */
+  audioOnly?: boolean;
 }
 
 interface ConversionState {
@@ -247,6 +251,8 @@ export const useConversionStore = create<ConversionState>((set) => ({
       await invoke("reverse_media", {
         inputPath: params.inputPath,
         outputPath: params.outputPath,
+        // Tauri 侧 Option<bool>：显式传布尔值，缺省时后端按 false 处理
+        audioOnly: params.audioOnly ?? false,
       });
       const result: MediaOpResult = { output_path: params.outputPath, warning: null };
       set({
@@ -309,6 +315,7 @@ export const useConversionStore = create<ConversionState>((set) => ({
         inputPath: params.inputPath,
         outputPath: params.outputPath,
         speed: params.speed,
+        audioOnly: params.audioOnly ?? false,
       });
       const result: MediaOpResult = { output_path: params.outputPath, warning };
       set({

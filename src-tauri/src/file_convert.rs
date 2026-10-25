@@ -605,9 +605,22 @@ fn is_video_file(path: &str) -> bool {
 
 /// 音视频倒放：视频同时倒放画面与声音，音频只倒放声音。
 /// 使用 Media Foundation，不依赖外部 ffmpeg。
+///
+/// `audio_only`：仅提取音频轨做倒放，输出 `.m4a`（AAC-in-MP4），丢弃画面。
+/// 对视频文件开启时走音频路径（只解码音频轨，比整段视频解码快得多），
+/// 但也因此要求源文件确实含音轨 —— 无音轨会直接报错而不是产出空文件。
 #[tauri::command]
-pub async fn reverse_media(input_path: String, output_path: String) -> Result<(), String> {
+pub async fn reverse_media(
+    input_path: String,
+    output_path: String,
+    audio_only: Option<bool>,
+) -> Result<(), String> {
+    let audio_only = audio_only.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
+        // 仅提取音频：无论输入是音频还是视频，都只处理音轨
+        if audio_only {
+            return reverse_audio_mf(&input_path, &output_path);
+        }
         if is_video_file(&input_path) {
             // 倒放不放大数据量，忽略提示
             let _ = process_video_media(&input_path, &output_path, MediaOp::Reverse)?;
@@ -650,7 +663,7 @@ fn reverse_audio_mf(input: &str, output: &str) -> Result<(), String> {
                 .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
             reader
                 .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
-                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+                .map_err(|e| format!("该文件不含可用的音频轨，无法提取音频（请关闭「仅提取音频」开关，或改用含声音的文件）: {e}"))?;
 
             // 2. 设置输出为 PCM 16-bit
             let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
@@ -721,8 +734,23 @@ fn reverse_audio_mf(input: &str, output: &str) -> Result<(), String> {
             }
 
             // 5. 倒放：按帧反转采样（编码时按映射取用，不预先复制整份采样，节省内存）
+            //
+            // 先校验取到了音频数据。视频文件被「仅提取音频」导向本函数时，
+            // 若源文件没有音轨，上面循环会读到 EOF 立即结束、all_samples 为空，
+            // 此时 channels 可能为 0 → `len() / 0` 会直接 panic；
+            // 即便不为 0 也会产出 0 字节的空文件，用户只会看到"处理成功但没声音"。
+            // 这里明确报错，让用户知道该关掉开关或换文件。
+            if all_samples.is_empty() || channels == 0 {
+                return Err(
+                    "源文件不包含音轨，无法提取音频。请关闭「仅提取音频」开关后重试，或改用含声音的文件。"
+                        .to_string(),
+                );
+            }
             let samples_per_frame = channels as usize;
             let frame_count = all_samples.len() / samples_per_frame;
+            if frame_count == 0 {
+                return Err("音频数据为空，无法倒放。".to_string());
+            }
             write_audio_aac_mp4(
                 output,
                 &all_samples,
@@ -744,8 +772,18 @@ fn reverse_audio_mf(input: &str, output: &str) -> Result<(), String> {
 /// 使用 Media Foundation，不依赖外部 ffmpeg。
 /// 返回 Ok(Some(提示)) 表示处理成功但带有超限提示；Ok(None) 表示正常完成。
 #[tauri::command]
-pub async fn change_media_speed(input_path: String, output_path: String, speed: f64) -> Result<Option<String>, String> {
+pub async fn change_media_speed(
+    input_path: String,
+    output_path: String,
+    speed: f64,
+    audio_only: Option<bool>,
+) -> Result<Option<String>, String> {
+    let audio_only = audio_only.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
+        // 仅提取音频：视频输入也只处理音轨，输出 .m4a
+        if audio_only {
+            return change_audio_speed_mf(&input_path, &output_path, speed);
+        }
         if is_video_file(&input_path) {
             process_video_media(&input_path, &output_path, MediaOp::Speed(speed))
         } else {
@@ -782,7 +820,7 @@ fn change_audio_speed_mf(input: &str, output: &str, speed: f64) -> Result<Option
                 .map_err(|e| format!("关闭其它轨道失败: {e}"))?;
             reader
                 .SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, true)
-                .map_err(|e| format!("选择音频轨道失败: {e}"))?;
+                .map_err(|e| format!("该文件不含可用的音频轨，无法提取音频（请关闭「仅提取音频」开关，或改用含声音的文件）: {e}"))?;
 
             // 2. 设置输出为 PCM 16-bit
             let pcm_req = MFCreateMediaType().map_err(|e| format!("创建媒体类型失败: {e}"))?;
@@ -854,8 +892,20 @@ fn change_audio_speed_mf(input: &str, output: &str, speed: f64) -> Result<Option
 
             // 5. 加速/减速：通过抽样调整采样点数量，保持采样率不变
             // 这样不受 MP3 编码器的采样率限制
+            //
+            // 与倒放同理：视频经「仅提取音频」进入本函数时，无音轨会让 all_samples 为空、
+            // channels 可能为 0，`len() / 0` 会 panic。这里提前拦住并给出可操作提示。
+            if all_samples.is_empty() || channels == 0 {
+                return Err(
+                    "源文件不包含音轨，无法提取音频。请关闭「仅提取音频」开关后重试，或改用含声音的文件。"
+                        .to_string(),
+                );
+            }
             let samples_per_frame = channels as usize;
             let original_frame_count = all_samples.len() / samples_per_frame;
+            if original_frame_count == 0 {
+                return Err("音频数据为空，无法调整速度。".to_string());
+            }
 
             // 计算目标采样点数量
             // speed = 2.0 表示 2 倍速度，即播放时间减半，采样点数量减半
