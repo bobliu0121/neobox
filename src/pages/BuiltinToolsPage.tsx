@@ -48,6 +48,7 @@ const LS_KEY = "neobox_builtin_tools_order_v2";
  * 用户仍可在页面上拖动自定义。
  */
 const defaultTools: ViewItem[] = [
+  { id: "bilibili-download", path: "/bilibili-download", icon: DownloadCloud, titleKey: "sidebar.bilibiliDownload", descriptionKey: "builtinTools.bilibiliDownloadDesc", color: "#FB7299" },
   { id: "overlay-panel", path: "/overlay-panel", icon: Layout, titleKey: "sidebar.overlayPanel", descriptionKey: "builtinTools.overlayPanelDesc", color: "#9B59B6" },
   { id: "resolution-converter", path: "/resolution-converter", icon: Monitor, titleKey: "sidebar.resolutionConverter", descriptionKey: "builtinTools.resolutionConverterDesc", color: "#4A90E2" },
   { id: "screen-test", path: "/screen-test", icon: ScanLine, titleKey: "sidebar.screenTest", descriptionKey: "builtinTools.screenTestDesc", color: "#38B2AC" },
@@ -63,7 +64,6 @@ const defaultTools: ViewItem[] = [
   { id: "context-menu", path: "/context-menu", icon: MousePointer2, titleKey: "sidebar.contextMenu", descriptionKey: "builtinTools.contextMenuDesc", color: "#3B82F6" },
   { id: "hidden-features", path: "/hidden-features", icon: FlaskConical, titleKey: "sidebar.hiddenFeatures", descriptionKey: "builtinTools.hiddenFeaturesDesc", color: "#E67E22", beta: true },
   { id: "download-accelerator", path: "/download-accelerator", icon: DownloadCloud, titleKey: "sidebar.downloadAccelerator", descriptionKey: "builtinTools.downloadAcceleratorDesc", color: "#00C896" },
-  { id: "bilibili-download", path: "/bilibili-download", icon: DownloadCloud, titleKey: "sidebar.bilibiliDownload", descriptionKey: "builtinTools.bilibiliDownloadDesc", color: "#FB7299" },
   { id: "speedtest", path: "/speedtest", icon: Gauge, titleKey: "sidebar.speedtest", descriptionKey: "builtinTools.speedtestDesc", color: "#00B4D8" },
   { id: "disk-health", path: "/disk-health", icon: HardDrive, titleKey: "sidebar.diskHealth", descriptionKey: "builtinTools.diskHealthDesc", color: "#00B4D8" },
   { id: "runtime-repair", path: "/runtime-repair", icon: Braces, titleKey: "sidebar.runtimeRepair", descriptionKey: "builtinTools.runtimeRepairDesc", color: "#4A90E2" },
@@ -100,9 +100,12 @@ function applyOrder(allTools: ViewItem[], orderIds: string[]): ViewItem[] {
       map.delete(id);
     }
   }
-  // Append any new tools not in the saved order
-  for (const tool of map.values()) {
-    ordered.push(tool);
+  // 新增的工具（不在用户已保存的顺序里）**放到最前面**，而不是追加到末尾。
+  // 原因：用户的 localStorage 里存的是旧卡片顺序（比如 22 项），
+  // 若把新卡片追加到末尾，它会被挤到很靠下的位置，用户滚动也找不到，
+  // 表现为「明明更新了却看不到入口」。前置能保证新功能一眼可见。
+  for (const tool of [...map.values()].reverse()) {
+    ordered.unshift(tool);
   }
   return ordered;
 }
