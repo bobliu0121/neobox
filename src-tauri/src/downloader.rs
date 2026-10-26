@@ -289,7 +289,36 @@ pub async fn download_file(
     let url = normalize_gitcode_url(&url);
     let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
 
-    let total_size = response.content_length().unwrap_or(0);
+    // 总大小以 Content-Length 为准；但 GitHub Release 的下载会先 302 到 CDN，
+    // 部分 CDN 用分块传输、不返回 Content-Length，此时 content_length() 为 None。
+    // 原实现直接取 0，导致 progress 恒为 0 —— 进度条不动、一直显示 0%，
+    // 用户以为卡死。这里在缺失时用一次 Range 请求探测 Content-Range 里的总长度。
+    let mut total_size = response.content_length().unwrap_or(0);
+    if total_size == 0 {
+        let probe = client
+            .get(&url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .await
+            .ok();
+        if let Some(pr) = probe {
+            if pr.status().as_u16() == 206 {
+                // Content-Range: bytes 0-0/12345678
+                if let Some(cr) = pr.headers().get("content-range") {
+                    if let Ok(s) = cr.to_str() {
+                        if let Some(slash) = s.rfind('/') {
+                            if let Ok(n) = s[slash + 1..].trim().parse::<u64>() {
+                                if n > 0 {
+                                    total_size = n;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    log::info!("[update] 下载开始，总大小 = {} 字节 ({})", total_size, url);
 
     let download_path = match dirs::download_dir() {
         Some(mut path) => {
@@ -331,8 +360,10 @@ pub async fn download_file(
             file.write_all(&chunk).map_err(|e| e.to_string())?;
             downloaded += chunk.len() as u64;
 
+            // 用浮点算百分比：整数除法会让每 1% 才跳一次、且大文件时会明显卡顿。
+            // total_size 未知（仍为 0）时返回 0，由前端维持「下载中」状态而不是回退。
             let progress = if total_size > 0 {
-                (downloaded * 100) / total_size
+                ((downloaded as f64 / total_size as f64) * 100.0).min(100.0) as u64
             } else {
                 0
             };

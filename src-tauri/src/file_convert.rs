@@ -2361,24 +2361,47 @@ impl Mp4Muxer {
             be32(moov, 0);
             be32(moov, 1);
             let p5 = box_start(moov, b"avc1");
-            be32(moov, 0);
-            be32(moov, 1);
-            be16(moov, 0);
-            be16(moov, 0);
-            be32(moov, 0);
-            be32(moov, 0);
-            be32(moov, 0);
-            be16(moov, self.vw as u16);
-            be16(moov, self.vh as u16);
-            be32(moov, 0x0048_0000);
-            be32(moov, 0x0048_0000);
-            be32(moov, 0);
-            be16(moov, 1);
-            for _ in 0..32 {
-                moov.push(0);
+            // ⚠️ VisualSampleEntry 的字段布局（ISO/IEC 14496-12 §12.1.3）。
+            // 这里曾经把 reserved 写成 be32+be32（8 字节），比规范多 2 字节，
+            // 导致其后所有字段（含 width/height/depth/frame_count）整体错位 2 字节：
+            // 实测生成的 avc1 里 reserved[6] 变成了 "avc1" 字样、width/height 读到 0、
+            // frame_count 变成 0 —— 播放器无法解析 sample entry，
+            // 于是报「不支持的 avc1 格式」，表现就是只有声音没有画面。
+            //
+            // 正确布局（紧随 box_start 写出的 8 字节 box 头之后）：
+            //   reserved[6]           6 字节 全 0
+            //   data_reference_index  2 字节 = 1（引用 dref 第 1 项）
+            //   pre_defined           2 字节 = 0
+            //   reserved              2 字节 = 0
+            //   pre_defined[3]       12 字节 全 0
+            //   width                 2 字节
+            //   height                2 字节
+            //   horizresolution       4 字节 = 0x00480000 (72dpi)
+            //   vertresolution        4 字节 = 0x00480000 (72dpi)
+            //   reserved              4 字节 = 0
+            //   frame_count           2 字节 = 1
+            //   compressorname       32 字节 全 0（长度字节 + 内容）
+            //   depth                 2 字节 = 0x0018 (24)
+            //   pre_defined           2 字节 = -1 (0xFFFF)
+            be32(moov, 0); // reserved[0..4]
+            be16(moov, 0); // reserved[4..6]
+            be16(moov, 1); // data_reference_index = 1
+            be16(moov, 0); // pre_defined
+            be16(moov, 0); // reserved
+            for _ in 0..3 {
+                be32(moov, 0); // pre_defined[3] = 12 字节
             }
-            be16(moov, 0x18);
-            be16(moov, 0xFFFF);
+            be16(moov, self.vw as u16); // width
+            be16(moov, self.vh as u16); // height
+            be32(moov, 0x0048_0000); // horizresolution
+            be32(moov, 0x0048_0000); // vertresolution
+            be32(moov, 0); // reserved
+            be16(moov, 1); // frame_count
+            for _ in 0..32 {
+                moov.push(0); // compressorname（长度字节 + 31 字节内容，全 0）
+            }
+            be16(moov, 0x0018); // depth = 24
+            be16(moov, 0xFFFF); // pre_defined = -1
             let p6 = box_start(moov, b"avcC");
             moov.push(1);
             if self.v_sps.len() >= 4 {

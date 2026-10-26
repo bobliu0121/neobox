@@ -95,8 +95,12 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
     const id = setInterval(() => {
       const target = targetProgressRef.current;
       const current = displayProgressRef.current;
-      // 目标值 ≤ 当前显示值时保持不动（进度只涨不跌）；否则缓动逼近
-      const next = Math.max(current, current + (target - current) * 0.4);
+      // 目标值 ≤ 当前显示值时保持不动（进度只涨不跌）；否则缓动逼近。
+      // ⚠️ 必须「吸附」：缓动 forever 只会无限逼近而永远到不了目标，
+      // 实测会在 99.6% 附近反复逼近却到不了 100%，用户看到的就是
+      // 「进度显示不正确 / 卡在 99% 不动」。差值 < 0.5 时直接跳到目标值。
+      const diff = target - current;
+      const next = diff <= 0 ? current : (diff < 0.5 ? target : current + diff * 0.4);
       if (next !== current) {
         displayProgressRef.current = next;
         setDisplayProgress(next);
