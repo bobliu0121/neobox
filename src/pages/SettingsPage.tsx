@@ -73,6 +73,7 @@ import { LiquidGlassMenuItem } from "@/components/special/liquid-glass-menu-item
 import { ThemeSwitch } from "@/components/special/theme-switch";
 import { CustomSelect } from "@/components/special/custom-select";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useSearchParams } from "react-router-dom";
 import { useUpdate } from "@/contexts/update-context";
 import { HotkeyRecorder } from "@/components/hotkey-recorder";
@@ -2588,7 +2589,30 @@ function AboutSettings() {
   const ORIGIN_AUTHOR_NAME = "MuLiuSaMa";
   const ORIGIN_REPO_URL = "https://github.com/MuLiuSaMa/NexBox";
 
-  const currentVersion = "1.2.1";
+  // ⚠️ 版本号必须运行时从 Tauri 读取，不能硬编码。
+  // 这里曾写死 "1.2.1"，导致「关于」页永远显示 1.2.1，
+  // 与 package.json / tauri.conf.json / Cargo.toml 的实际版本脱节
+  // （发版时改了配置文件却忘了改这一行，用户就会看到错误的版本）。
+  // getVersion() 读的是 tauri.conf.json 的 version，即打包进 exe 的真实版本。
+  const [currentVersion, setCurrentVersion] = useState("");
+
+  // 从 Tauri 读真实版本（源为 tauri.conf.json 的 version，即打包进 exe 的版本）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const v = await getVersion();
+        if (!cancelled && v) setCurrentVersion(v);
+      } catch (e) {
+        // 拿不到就回退到包版本，至少不会显示空白
+        console.error("读取应用版本失败:", e);
+        if (!cancelled) setCurrentVersion("1.3.1");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [currentRelease, setCurrentRelease] = useState<ReleaseInfo | null>(null);
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(true);
 
@@ -2603,26 +2627,34 @@ function AboutSettings() {
   } = useUpdate();
 
   useEffect(() => {
+    // 版本号现在是异步从 Tauri 读取的：未拿到之前不要发起请求，
+    // 否则会去拉 "v"（空版本）导致 changelog 取错或失败。
+    if (!currentVersion) return;
+    let cancelled = false;
     const fetchCurrentRelease = async () => {
       try {
         setIsLoadingChangelog(true);
         const release = await fetchReleaseByTag(`v${currentVersion}`);
+        if (cancelled) return;
         if (release) {
           setCurrentRelease(release);
         } else {
           // 尝试不带 v 前缀
           const releaseWithoutV = await fetchReleaseByTag(currentVersion);
-          setCurrentRelease(releaseWithoutV);
+          if (!cancelled) setCurrentRelease(releaseWithoutV);
         }
       } catch (error) {
         console.error("Failed to fetch current release:", error);
       } finally {
-        setIsLoadingChangelog(false);
+        if (!cancelled) setIsLoadingChangelog(false);
       }
     };
 
-    fetchCurrentRelease();
-  }, []);
+    void fetchCurrentRelease();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentVersion]);
 
   const handleOpenLink = async (url: string) => {
     console.log("[AboutSettings] handleOpenLink:", url);

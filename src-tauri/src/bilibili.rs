@@ -600,7 +600,12 @@ pub fn read_sps_pps_from_moov(fmp4: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
             return None;
         }
         if typ == b"moov" {
-            return find_avcc(&fmp4[pos + 8..pos + size]);
+            // ⚠️ 必须传**含 box 头**的完整 moov 切片。
+            // find_avcc 内部从 p=8 开始遍历子 box（跳过 8 字节 box 头），
+            // 若这里先跳过 8 字节再传 content，就会再跳一次 → 直接读到 0 字节，
+            // 遍历立即失败 → 取不到 avcC → avcC 退化成假 profile(66)/level(40)，
+            // 与真实 High Profile(100) 不符，播放器报「不支持的 avc1 格式」只放声音。
+            return find_avcc(&fmp4[pos..pos + size]);
         }
         pos += size;
     }
@@ -609,7 +614,20 @@ pub fn read_sps_pps_from_moov(fmp4: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 
 /// 递归在 trak/mdia/minf/stbl/stsd 中找到 avcC 并解析。
 fn find_avcc(node: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let mut p = 8usize;
+    find_avcc_from(node, 8)
+}
+
+/// 同 `find_avcc`，但从指定偏移开始遍历子 box。
+///
+/// 需要它是因为不同容器的“子 box 起始位置”不同：
+///   - trak/mdia/minf/stbl：紧跟在 8 字节 box 头之后 → 偏移 8
+///   - stsd：还要跳过 ver/flags + entry_count → 偏移 16
+///   - avc1（VisualSampleEntry）：有 70 字节固定字段 → 偏移 78
+/// 早期实现一律用 8，导致 stsd/avc1 层解析错位、取不到 avcC，
+/// 最终 avcC 退化写入兜底的假 profile(66)/level(40)，
+/// 与真实 High Profile(100) 不符 → 播放器报「不支持的 avc1 格式」。
+fn find_avcc_from(node: &[u8], start: usize) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut p = start;
     while p + 8 <= node.len() {
         let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
         let typ = &node[p + 4..p + 8];
@@ -623,17 +641,46 @@ fn find_avcc(node: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
                 }
             }
             b"stsd" => {
-                // stsd: ver/flags(4)+entry_count(4)，随后是 sample entry
-                // sample entry: 8(boxhdr)+6(reserved)+2(data_ref)+16(visual fields)+...
-                // 我们只需在其内部继续找 avcC，所以直接扫这段
-                if let Some(r) = find_avcc(&node[p..p + size]) {
-                    return Some(r);
+                // stsd 结构：size(4) + 'stsd'(4) + ver/flags(4) + entry_count(4) + sample entry...
+                // 引导到第一个 sample entry 时，必须跳过 16 字节头部，
+                // 不能沿用 find_avcc 默认的 8 字节（那会把 ver/flags 当作 box size 读取 → 解析失败）。
+                if size >= 16 {
+                    let entry = &node[p..p + size];
+                    if let Some(r) = find_avcc_from(entry, 16) {
+                        return Some(r);
+                    }
                 }
             }
             b"avc1" | b"avc3" => {
-                // avc1 内部：8 + 6 + 2 + 16 + 2(width) + 2(height) ... 直接在其 body 里找 avcC
-                if let Some(r) = find_avcc(&node[p..p + size]) {
-                    return Some(r);
+                // VisualSampleEntry 的固定字段共 **86 字节**（含 8 字节 box 头），
+                // 子 box（avcC）从偏移 86 开始。逐项核算（ISO/IEC 14496-12 §12.1.3）：
+                //     8  box 头
+                //   + 6  reserved[6]
+                //   + 2  data_reference_index
+                //   + 2  pre_defined
+                //   + 2  reserved
+                //   +12  pre_defined[3]
+                //   + 2  width
+                //   + 2  height
+                //   + 4  horizresolution
+                //   + 4  vertresolution
+                //   + 4  reserved
+                //   + 2  frame_count
+                //   +32  compressorname
+                //   + 2  depth
+                //   + 2  pre_defined
+                //  = 86
+                //
+                // ⚠️ 这里曾写成 78，少了 8 字节（漏算 box 头 + reserved[6]），
+                // 于是把 depth/pre_defined 当成 box size 读（得到 0x0018FFFF 这种荒谬值），
+                // 遍历立即失败 → 取不到 avcC → avcC 退化写入假 profile(66)/level(40)，
+                // 而源流真实编码是 avc1.64001F（profile=100 High / level=31）。
+                // 解码器发现 avcC 与实际码流不符，报「不支持的 avc1 格式」，只放音频。
+                if size >= 86 {
+                    let entry = &node[p..p + size];
+                    if let Some(r) = find_avcc_from(entry, 86) {
+                        return Some(r);
+                    }
                 }
             }
             b"avcC" => {
