@@ -630,6 +630,8 @@ pub fn remux_av_to_mp4(
     // 必须由调用方从 moov 读出后传入；否则 avcC 会退化成兜底假值，
     // 播放器无法建解码器 —— 实测表现为「只有声音没有画面」。
     sps_pps: Option<(Vec<u8>, Vec<u8>)>,
+    // 每个视频样本的合成时间偏移（1e7 刻度）。空表示无 B 帧、不需要 ctts。
+    v_ctos: &[i64],
 ) -> Result<(), String> {
     let has_audio = !audio_frames.is_empty();
     let asc = audio_asc.unwrap_or_else(|| aac_asc(sr, ch));
@@ -652,8 +654,15 @@ pub fn remux_av_to_mp4(
             mux.v_pps = pps;
         }
     }
-    for f in video_frames {
-        mux.add_video(f)?;
+    // 有 cto 数据时逐帧写入偏移，供 ctts 表使用；否则退回普通写入。
+    if v_ctos.len() == video_frames.len() && !v_ctos.is_empty() {
+        for (f, cto) in video_frames.iter().zip(v_ctos.iter()) {
+            mux.add_video_with_cto(f, *cto)?;
+        }
+    } else {
+        for f in video_frames {
+            mux.add_video(f)?;
+        }
     }
     for f in audio_frames {
         mux.add_audio(f)?;
@@ -2059,6 +2068,14 @@ struct Mp4Muxer {
     v_pps: Vec<u8>,
     v_sample_sizes: Vec<u32>,
     v_sample_offsets: Vec<u64>,
+    /// 每个视频样本的**合成时间偏移**（Composition Time Offset，单位=时间刻度）。
+    ///
+    /// 为什么必须有：B 站等来源的 AVC 流含 B 帧（双向预测帧），B 帧的**解码顺序**
+    /// 与**显示顺序**不同。MP4 里由 `stts` 描述解码时间、由 `ctts` 描述合成（显示）
+    /// 时间偏移。若只写 stts 不写 ctts，所有帧的显示时间等于解码时间，
+    /// 解码器按错序输出 B 帧 → 画面无法正确解码，播放器报「不支持的 avc1 格式」
+    /// 并只放音频（实测 42/42 个 trun 均携带非零 cto，值如 277/1044/46…）。
+    v_sample_ctos: Vec<i64>,
     sr: u32,
     ch: u32,
     a_sample_sizes: Vec<u32>,
@@ -2093,6 +2110,7 @@ impl Mp4Muxer {
             v_pps: Vec::new(),
             v_sample_sizes: Vec::new(),
             v_sample_offsets: Vec::new(),
+            v_sample_ctos: Vec::new(),
             sr,
             ch,
             a_sample_sizes: Vec::new(),
@@ -2161,6 +2179,16 @@ impl Mp4Muxer {
             .write_all(&avcc)
             .map_err(|e| format!("写入视频样本失败: {e}"))?;
         self.file_pos += avcc.len() as u64;
+        Ok(())
+    }
+
+    /// 写入一个视频样本，并记录其合成时间偏移（用于生成 ctts）。
+    ///
+    /// `cto` 单位与 mdhd.timescale 一致（本项目视频轨时间刻度为 1e7）。
+    /// 调用方需把源流里的 cto（源 timescale 刻度）换算到 1e7 刻度后再传入。
+    fn add_video_with_cto(&mut self, annexb: &[u8], cto: i64) -> Result<(), String> {
+        self.add_video(annexb)?;
+        self.v_sample_ctos.push(cto);
         Ok(())
     }
 
@@ -2436,6 +2464,53 @@ impl Mp4Muxer {
             };
             be32(moov, v_delta);
             box_end(moov, p4);
+
+            // ctts（Composition Time to Sample）：描述每个样本的显示时间相对解码时间的偏移。
+            //
+            // 这是 B 帧能正确播放的关键。AVC 流含 B 帧时，解码顺序 ≠ 显示顺序：
+            //   - stts 给出解码时间（DTS）
+            //   - ctts 给出合成时间偏移（CTO），显示时间 PTS = DTS + CTO
+            // 缺少 ctts 时解码器认为 PTS == DTS，B 帧会被按错误顺序输出，
+            // 表现为画面无法解码（播放器报「不支持的 avc1 格式」，只放音频）。
+            //
+            // 实测 B 站源流的 trun 全部携带非零 cto（如 277/1044/46…，源时间刻度 16000），
+            // 因此这里必须写入。box 顺序遵循 ISO 14496-12：stts → ctts → stsc → stsz → stco/co64。
+            //
+            // 写入策略：CTO 通常呈周期性重复，可合并为「(样本数, 偏移)」计数对；
+            // version=0 时偏移为无符号（全非负才可用），否则用 version=1（有符号）。
+            if self.v_sample_ctos.len() == self.v_sample_sizes.len() && !self.v_sample_ctos.is_empty() {
+                // 合并相邻相同偏移，减少表项数
+                let mut runs: Vec<(u32, i64)> = Vec::new();
+                for &cto in &self.v_sample_ctos {
+                    match runs.last_mut() {
+                        Some((cnt, val)) if *val == cto => *cnt += 1,
+                        _ => runs.push((1, cto)),
+                    }
+                }
+                let all_non_negative = self.v_sample_ctos.iter().all(|&c| c >= 0);
+                let p4 = box_start(moov, b"ctts");
+                if all_non_negative {
+                    // version=0：off 为 u32
+                    be32(moov, 0);
+                    be32(moov, runs.len() as u32);
+                    for (cnt, val) in &runs {
+                        be32(moov, *cnt);
+                        be32(moov, *val as u32);
+                    }
+                } else {
+                    // version=1：off 为 i32（允许负偏移）
+                    be32(moov, 0x0100_0000);
+                    be32(moov, runs.len() as u32);
+                    for (cnt, val) in &runs {
+                        be32(moov, *cnt);
+                        // version=1 时该字段按有符号 i32 解释；
+                        // be32 只接受 u32，故按二进制补码转回（负数会自然变成其补码）
+                        be32(moov, *val as i32 as u32);
+                    }
+                }
+                box_end(moov, p4);
+            }
+
             let p4 = box_start(moov, b"stsc");
             be32(moov, 0);
             be32(moov, 1);

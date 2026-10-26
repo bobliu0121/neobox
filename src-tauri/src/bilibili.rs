@@ -716,9 +716,11 @@ fn parse_avcc_body(avcc: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 /// （实测首个 sample 前 4 字节是 0x21114500，即 AAC 帧头而非长度）。
 ///
 /// 正确做法：读 trun 得到 sizes，再按顺序从紧随其后的 mdat 切割。
-fn parse_fmp4_samples(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+fn parse_fmp4_samples(data: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<i64>), String> {
     let mut samples: Vec<Vec<u8>> = Vec::new();
+    let mut ctos: Vec<i64> = Vec::new();
     let mut pending_sizes: Vec<usize> = Vec::new();
+    let mut pending_ctos: Vec<i64> = Vec::new();
     let mut pos = 0usize;
 
     while pos + 8 <= data.len() {
@@ -728,20 +730,27 @@ fn parse_fmp4_samples(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
             break;
         }
         if typ == b"moof" {
-            // 收集本 moof 内所有 trun 的 sample sizes
+            // 收集本 moof 内所有 trun 的 sample sizes 与合成时间偏移
             pending_sizes.clear();
-            collect_trun_sizes(&data[pos..pos + size], &mut pending_sizes);
+            pending_ctos.clear();
+            collect_trun_sizes(&data[pos..pos + size], &mut pending_sizes, &mut pending_ctos);
         } else if typ == b"mdat" && !pending_sizes.is_empty() {
             let payload = &data[pos + 8..pos + size];
             let mut off = 0usize;
-            for sz in pending_sizes.iter() {
+            for (i, sz) in pending_sizes.iter().enumerate() {
                 if off + sz > payload.len() {
                     break;
                 }
                 samples.push(payload[off..off + sz].to_vec());
+                // 把本 sample 的合成时间偏移并入最终列表。
+                // ⚠️ 这里曾经漏掉合并（只 clear 了 pending_ctos），
+                // 导致最终 ctos 恒为空 → 不写 ctts → B 帧显示顺序错乱、
+                // 播放器报「不支持的 avc1 格式」只有声音。已修正。
+                ctos.push(*pending_ctos.get(i).unwrap_or(&0));
                 off += sz;
             }
             pending_sizes.clear();
+            pending_ctos.clear();
         }
         pos += size;
     }
@@ -749,11 +758,12 @@ fn parse_fmp4_samples(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     if samples.is_empty() {
         return Err("未从媒体流中解析出任何 sample".to_string());
     }
-    Ok(samples)
+    // cto 数量应与样本数一致；不一致时交由调用方决定是否忽略
+    Ok((samples, ctos))
 }
 
 /// 递归找 moof → traf → trun，按 flags 解析每个 sample 的大小。
-fn collect_trun_sizes(node: &[u8], out: &mut Vec<usize>) {
+fn collect_trun_sizes(node: &[u8], out: &mut Vec<usize>, ctos: &mut Vec<i64>) {
     let mut p = 8usize; // 跳过 box 头
     while p + 8 <= node.len() {
         let size = u32::from_be_bytes([node[p], node[p + 1], node[p + 2], node[p + 3]]) as usize;
@@ -762,15 +772,15 @@ fn collect_trun_sizes(node: &[u8], out: &mut Vec<usize>) {
             break;
         }
         if typ == b"traf" {
-            collect_trun_sizes(&node[p..p + size], out);
+            collect_trun_sizes(&node[p..p + size], out, ctos);
         } else if typ == b"trun" {
-            read_one_trun(&node[p..p + size], out);
+            read_one_trun(&node[p..p + size], out, ctos);
         }
         p += size;
     }
 }
 
-fn read_one_trun(trun: &[u8], out: &mut Vec<usize>) {
+fn read_one_trun(trun: &[u8], out: &mut Vec<usize>, ctos: &mut Vec<i64>) {
     if trun.len() < 16 {
         return;
     }
@@ -824,7 +834,15 @@ fn read_one_trun(trun: &[u8], out: &mut Vec<usize>) {
             off += 4;
         }
         if has_cto {
+            // 记录合成时间偏移：这是 B 帧正确显示的关键，必须带出去写进 ctts。
+            // 规范：trun version=0 时为 u32，version=1 时为 i32（可负）。
+            let trun_ver = trun[8];
+            let raw = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+            let cto = if trun_ver == 1 { raw as i32 as i64 } else { raw as i64 };
             off += 4;
+            if sz > 0 {
+                ctos.push(cto);
+            }
         }
         if sz > 0 {
             out.push(sz);
@@ -833,7 +851,7 @@ fn read_one_trun(trun: &[u8], out: &mut Vec<usize>) {
 }
 
 /// 取出所有 sample 的原始字节（音频：裸 AAC；视频：AVCC 格式的 NAL 长度前缀流）。
-fn extract_samples(fmp4: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+fn extract_samples(fmp4: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<i64>), String> {
     parse_fmp4_samples(fmp4)
 }
 
@@ -942,7 +960,8 @@ pub async fn download_one(
             stage: "封装 m4a".to_string(),
         });
 
-        let frames = aac_samples(&extract_samples(&bytes)?)?;
+        let (a_samples_a, _) = extract_samples(&bytes)?;
+        let frames = aac_samples(&a_samples_a)?;
         // 优先用 m4s 的 moov 里的真实参数；读不到再按 ADTS 头推断
         let (sr, ch) = read_audio_params_from_moov(&bytes)
             .unwrap_or_else(|| crate::file_convert::infer_audio_params(&frames));
@@ -1027,9 +1046,14 @@ pub async fn download_one(
     });
 
     // 视频：sample → AVCC → Annex-B；音频：sample 即裸 AAC
-    let vframes = avcc_samples_to_annexb(&extract_samples(&vbytes)?)?;
+    // 视频：sample → AVCC → Annex-B；同时取出合成时间偏移（B 帧重排序所需）
+    let (v_samples, v_ctos) = extract_samples(&vbytes)?;
+    let vframes = avcc_samples_to_annexb(&v_samples)?;
     let aframes = match &abytes {
-        Some(a) => aac_samples(&extract_samples(a)?)?,
+        Some(a) => {
+            let (a_samples_b, _) = extract_samples(a)?;
+            aac_samples(&a_samples_b)?
+        }
         None => Vec::new(),
     };
     // 音频参数：优先 m4s 的 moov，其次 ADTS 头，最后 44100/2 兜底
@@ -1048,6 +1072,28 @@ pub async fn download_one(
     if sps_pps.is_none() {
         log::warn!("[bilibili] 未能从 m4s 的 moov 读取 SPS/PPS，画面可能无法解码");
     }
+    // 合成时间偏移换算：源流用 mdhd.timescale 刻度（实测 16000），
+    // 而 muxer 的视频轨时间刻度是 1e7。必须换算，否则 B 帧显示时刻错乱。
+    let src_timescale = find_mdhd_timescale_of_first_video(&vbytes).unwrap_or(16000) as i64;
+    let ctos_1e7: Vec<i64> = if v_ctos.len() == vframes.len() {
+        v_ctos
+            .iter()
+            .map(|&c| if src_timescale > 0 { c * 10_000_000 / src_timescale } else { c })
+            .collect()
+    } else {
+        // 数量不匹配（解析异常）时退化为全 0：不写 ctts 也不至于产生错误的偏移
+        Vec::new()
+    };
+    if !ctos_1e7.is_empty() {
+        let nonzero = ctos_1e7.iter().filter(|&&c| c != 0).count();
+        log::info!(
+            "[bilibili] ctts: 共 {} 个样本，其中 {} 个非零偏移（源刻度 {} -> 1e7）",
+            ctos_1e7.len(),
+            nonzero,
+            src_timescale
+        );
+    }
+
     crate::file_convert::remux_av_to_mp4(
         &req.output_path,
         &vframes,
@@ -1060,6 +1106,7 @@ pub async fn download_one(
         ch,
         None,
         sps_pps,
+        &ctos_1e7,
     )?;
 
     let size = std::fs::metadata(&req.output_path).map(|m| m.len()).unwrap_or(0);
