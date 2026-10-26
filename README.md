@@ -1,7 +1,7 @@
 # NeoBox
 
 > Windows 桌面工具箱 · 硬件监控 / 系统优化 / 桌面工具<br>
-> 当前版本：**v1.3.0** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
+> 当前版本：**v1.3.1** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
 
 NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所有功能均在本地运行，把常用的系统监控、维护和桌面增强能力整合到一个轻量界面里，不依赖云端账号。
 
