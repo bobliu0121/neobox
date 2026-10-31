@@ -766,10 +766,19 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
 
       await Promise.all(
         tasks.map(async (task) => {
+          const t0 = performance.now();
           try {
             await task.fn();
+            // 调试输出：每个启动任务的耗时。用于定位「启动画面迟迟不消失」时
+            // 究竟是哪个任务卡住（前端 console 不进 Rust 日志，所以同时打两条）
+            console.info(
+              `[Startup] task=${task.name} ok in ${Math.round(performance.now() - t0)}ms`,
+            );
           } catch (error) {
             console.error(`Failed to load ${task.name}:`, error);
+            console.info(
+              `[Startup] task=${task.name} FAILED after ${Math.round(performance.now() - t0)}ms`,
+            );
           } finally {
             completedWeight += task.weight;
             updateProgress();
@@ -777,8 +786,10 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
         })
       );
 
+      console.info("[Startup] all tasks done -> progress 100");
       setStartupProgress(100);
       setTimeout(() => {
+        console.info("[Startup] setIsStartupComplete(true) -> splash unmount");
         setIsStartupComplete(true);
       }, 100);
     };

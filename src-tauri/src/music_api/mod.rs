@@ -17,6 +17,46 @@ use tauri_plugin_store::StoreExt;
 use url::Url;
 use models::*;
 
+/// 统一的歌曲取址耗时/结果日志。
+///
+/// 为什么要专门加：用户报「某些平台点击播放有明显延迟」「某些平台无法播放」，
+/// 这类问题靠截图无法判断（截图只能看到最后有没有出声，看不到卡在哪一步）。
+/// 因此每个平台的 song_url 命令都通过本函数打印一行结构化日志：
+///   provider / 耗时 / 是否可播 / 命中音质 / 失败原因
+///
+/// 级别选择：
+/// - 成功取址 → `debug`（正常播放时不刷屏；排查时把日志级别调到 debug 即可看到耗时）
+/// - 取址失败 → `warn`（始终可见，因为失败必然需要用户感知）
+///
+/// 排查用法：`grep [MusicURL] neobox.log`
+pub(crate) fn log_song_url(
+    provider: &str,
+    started: std::time::Instant,
+    result: &Result<SongUrlResult, String>,
+) {
+    let elapsed = started.elapsed().as_millis();
+    match result {
+        Ok(r) => {
+            if r.playable && r.url.is_some() {
+                log::debug!(
+                    "[MusicURL] provider={provider} elapsed={elapsed}ms playable=true level={} trial={}",
+                    r.level,
+                    r.trial
+                );
+            } else {
+                log::warn!(
+                    "[MusicURL] provider={provider} elapsed={elapsed}ms playable=false reason={} message={}",
+                    r.reason.clone().unwrap_or_else(|| "-".into()),
+                    r.message.clone().unwrap_or_else(|| "-".into())
+                );
+            }
+        }
+        Err(e) => {
+            log::warn!("[MusicURL] provider={provider} elapsed={elapsed}ms error={e}");
+        }
+    }
+}
+
 // ============================================================
 //  Tauri Commands - 网易云
 // ============================================================
@@ -29,8 +69,11 @@ pub async fn music_search(keywords: String, limit: Option<u32>) -> Result<Vec<So
 
 #[tauri::command]
 pub async fn music_song_url(id: String, quality: Option<String>) -> Result<SongUrlResult, String> {
+    let started = std::time::Instant::now();
     let app_cookie = get_app_cookie().await;
-    netease::song_url(&id, &quality.unwrap_or_else(|| "hires".into()), &app_cookie).await
+    let r = netease::song_url(&id, &quality.unwrap_or_else(|| "hires".into()), &app_cookie).await;
+    log_song_url("netease", started, &r);
+    r
 }
 
 #[tauri::command]
@@ -282,8 +325,9 @@ pub async fn kugou_song_url(
     sq_hash: Option<String>,
     res_hash: Option<String>,
 ) -> Result<SongUrlResult, String> {
+    let started = std::time::Instant::now();
     let cookie = load_provider_cookie(&app, "kugou").await;
-    kugou::song_url(
+    let r = kugou::song_url(
         &hash,
         &album_id.unwrap_or_default(),
         &album_audio_id.unwrap_or_default(),
@@ -293,7 +337,9 @@ pub async fn kugou_song_url(
         &sq_hash.unwrap_or_default(),
         &res_hash.unwrap_or_default(),
     )
-    .await
+    .await;
+    log_song_url("kugou", started, &r);
+    r
 }
 
 #[tauri::command]
@@ -398,8 +444,11 @@ pub async fn qq_song_url(
     media_mid: Option<String>,
     quality: Option<String>,
 ) -> Result<SongUrlResult, String> {
+    let started = std::time::Instant::now();
     let cookie = load_provider_cookie(&app, "qqmusic").await;
-    qqmusic::song_url(&mid, &media_mid.unwrap_or_default(), &quality.unwrap_or_else(|| "hires".into()), &cookie).await
+    let r = qqmusic::song_url(&mid, &media_mid.unwrap_or_default(), &quality.unwrap_or_else(|| "hires".into()), &cookie).await;
+    log_song_url("qqmusic", started, &r);
+    r
 }
 
 #[tauri::command]
@@ -534,16 +583,19 @@ pub async fn migu_song_url(
     copyright_id: String,
     quality: Option<String>,
 ) -> Result<SongUrlResult, String> {
+    let started = std::time::Instant::now();
     let cookie = load_provider_cookie(&app, "migu").await;
     let uid = load_migu_uid(&app).await;
-    migu::song_url(
+    let r = migu::song_url(
         &cookie,
         &uid,
         &content_id,
         &copyright_id,
         &quality.unwrap_or_else(|| "lossless".into()),
     )
-    .await
+    .await;
+    log_song_url("migu", started, &r);
+    r
 }
 
 #[tauri::command]

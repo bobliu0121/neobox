@@ -1172,17 +1172,37 @@ pub fn save_wallpaper_edit(path: String, data_url: String) -> Result<(), String>
 
 /// 扫描壁纸文件夹，返回支持的图片/网页文件绝对路径。
 /// `recursive` 为 true 时递归包含子文件夹。
+///
+/// 必须是 async 命令：同步命令由 Tauri 在主线程执行，递归 `walkdir` 扫描
+/// 图库（几万条目、机械硬盘）会把主线程连同整个 UI 一起卡死，
+/// 表现为「一打开壁纸页就转圈、连标题栏都不响应」。
+/// 这里把真正的遍历丢进 `spawn_blocking`，主线程只等待结果。
 #[tauri::command]
-pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec<String>, String> {
+pub async fn scan_wallpaper_folder(
+    dir: String,
+    recursive: Option<bool>,
+) -> Result<Vec<String>, String> {
+    log::info!("[Wallpaper] scan 开始: dir={dir} recursive={recursive:?}");
+    let out = tokio::task::spawn_blocking(move || scan_wallpaper_folder_sync(&dir, recursive.unwrap_or(false)))
+        .await
+        .map_err(|e| format!("扫描任务异常: {e}"))?;
+    if let Ok(ref files) = out {
+        log::info!("[Wallpaper] scan 完成: {} 个文件", files.len());
+    }
+    out
+}
+
+/// 同步扫描实现（只在阻塞线程池里跑，绝不直接暴露给前端调用）。
+fn scan_wallpaper_folder_sync(dir: &str, recursive: bool) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
-    let root = Path::new(&dir);
+    let root = Path::new(dir);
     if !root.is_dir() {
         return Err("文件夹不存在".to_string());
     }
 
-    let mut visit = |path: &Path| {
+    let visit = |path: &Path, out: &mut Vec<String>| {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
+            let ext_lower = ext.to_ascii_lowercase();
             if WALLPAPER_EXTS.contains(&ext_lower.as_str()) {
                 if let Some(s) = path.to_str() {
                     out.push(s.to_string());
@@ -1191,14 +1211,14 @@ pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec
         }
     };
 
-    if recursive.unwrap_or(false) {
+    if recursive {
         for entry in walkdir::WalkDir::new(root)
             .follow_links(false)
             .into_iter()
             .filter_map(|e| e.ok())
         {
             if entry.file_type().is_file() {
-                visit(entry.path());
+                visit(entry.path(), &mut out);
             }
         }
     } else {
@@ -1206,10 +1226,202 @@ pub fn scan_wallpaper_folder(dir: String, recursive: Option<bool>) -> Result<Vec
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                visit(&path);
+                visit(&path, &mut out);
             }
         }
     }
     out.sort();
     Ok(out)
+}
+
+/// 缩略图最长边（px）。网格里每格只有约 120–200 px 宽，
+/// 生成 256 px 已足够清晰，同时把解码/传输量压到原图的 1/50 左右。
+const WALLPAPER_THUMB_EDGE: u32 = 256;
+
+/// 缩略图缓存目录名（位于 `app_data_dir` 下）
+const WALLPAPER_THUMB_DIR: &str = "wallpaper_thumbnails";
+
+/// 批量生成壁纸缩略图（带磁盘缓存）。
+///
+/// 为什么必须走缩略图：网格原来用 `convertFileSrc` 直接加载**原始图片**。
+/// 4K 壁纸单张解码就要 30–60 ms、占几十 MB 内存，一屏几十张时会长时间卡住
+/// 渲染线程 —— 这就是「打开壁纸管理页严重卡顿」的主因。
+///
+/// 返回 `原路径 -> 缩略图缓存绝对路径`；无法生成（视频/HTML/损坏文件）的项
+/// 不在返回里，前端据此回退到图标占位。
+#[tauri::command]
+pub async fn get_wallpaper_thumbnails(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    if paths.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map(|d| d.join(WALLPAPER_THUMB_DIR))
+        .map_err(|e| format!("获取缓存目录失败: {e}"))?;
+    log::info!(
+        "[Wallpaper] 缩略图请求: {} 个路径, 缓存目录={}",
+        paths.len(),
+        cache_dir.display()
+    );
+
+    // 解码 + 缩放是纯 CPU 活，必须离开主线程；同时限制并发，
+    // 避免几十张大图同时解码把内存和磁盘 IO 打满（低端/虚拟机环境更明显）。
+    let count = paths.len();
+    let out = tokio::task::spawn_blocking(move || build_wallpaper_thumbnails(&cache_dir, &paths))
+        .await
+        .map_err(|e| format!("缩略图任务异常: {e}"))?;
+    if let Ok(ref map) = out {
+        log::info!("[Wallpaper] 缩略图完成: {}/{} 成功", map.len(), count);
+    }
+    out
+}
+
+/// 多线程生成壁纸缩略图，返回成功项映射。
+fn build_wallpaper_thumbnails(
+    cache_dir: &Path,
+    paths: &[String],
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    if let Err(e) = std::fs::create_dir_all(cache_dir) {
+        return Err(format!("创建缩略图缓存目录失败: {e}"));
+    }
+
+    // 只处理静态图片；GIF/视频/HTML 由前端走各自的预览方式（视频用 Shell 缩略图）。
+    let targets: Vec<(String, PathBuf)> = paths
+        .iter()
+        .filter(|p| {
+            Path::new(p)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| {
+                    let e = e.to_ascii_lowercase();
+                    matches!(
+                        e.as_str(),
+                        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff" | "jfif"
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .map(|p| (p.clone(), wallpaper_thumb_cache_path(cache_dir, p)))
+        .collect();
+
+    if targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let all = Arc::new(targets);
+    let index = Arc::new(AtomicUsize::new(0));
+    let results: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // 并发数取 CPU 一半（至少 2），留出余量给 UI 线程和文件缓存
+    let workers = std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(2))
+        .unwrap_or(2)
+        .min(all.len())
+        .min(8);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let all = Arc::clone(&all);
+            let index = Arc::clone(&index);
+            let results = Arc::clone(&results);
+            scope.spawn(move || loop {
+                let i = index.fetch_add(1, Ordering::SeqCst);
+                let Some((src, cache)) = all.get(i) else {
+                    break;
+                };
+                if let Some(thumb) = resolve_wallpaper_thumbnail(src, cache) {
+                    if let Ok(mut guard) = results.lock() {
+                        guard.insert(src.clone(), thumb);
+                    }
+                }
+            });
+        }
+    });
+
+    let out = results
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    Ok(out)
+}
+
+/// 缩略图缓存路径：按路径 + 大小 + 修改时间哈希命名。
+///
+/// 把 size/mtime 一并纳入哈希，图片被覆盖或编辑后缓存自动失效，
+/// 避免像纯路径哈希那样一直显示旧图。
+fn wallpaper_thumb_cache_path(cache_dir: &Path, src: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    src.to_ascii_lowercase().hash(&mut hasher);
+    if let Ok(meta) = std::fs::metadata(src) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                dur.as_secs().hash(&mut hasher);
+            }
+        }
+    }
+    cache_dir.join(format!("{:016x}.jpg", hasher.finish()))
+}
+
+/// 命中缓存直接返回；否则解码缩放后写入缓存。失败返回 None（前端回退图标）。
+fn resolve_wallpaper_thumbnail(src: &str, cache: &Path) -> Option<String> {
+    if cache.is_file() {
+        return Some(cache.to_string_lossy().into_owned());
+    }
+    match generate_wallpaper_thumbnail(src, cache) {
+        Ok(()) => Some(cache.to_string_lossy().into_owned()),
+        Err(e) => {
+            log::debug!("[Wallpaper] 缩略图生成失败 {src}: {e}");
+            None
+        }
+    }
+}
+
+/// 解码图片 → 等比缩放到 `WALLPAPER_THUMB_EDGE` → 存 JPEG。
+///
+/// 用 JPEG 而不是 PNG：照片类壁纸 PNG 会大 5–10 倍，磁盘缓存和
+/// asset 协议传输都会变慢，而缩略图场景 82% 质量肉眼无差别。
+fn generate_wallpaper_thumbnail(src: &str, dst: &Path) -> Result<(), String> {
+    // 按内容魔数探测格式，改名文件（.jpg 实为 PNG）也能正确解码
+    let reader = image::ImageReader::open(src)
+        .map_err(|e| format!("打开图片失败: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("识别图片格式失败: {e}"))?;
+    let img = reader.decode().map_err(|e| format!("解码图片失败: {e}"))?;
+
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return Err("图片尺寸为 0".to_string());
+    }
+    // 等比缩放：先算目标边长，再按比例定另一边，避免拉伸变形
+    let scaled = if w.max(h) <= WALLPAPER_THUMB_EDGE {
+        img
+    } else {
+        let ratio = WALLPAPER_THUMB_EDGE as f32 / w.max(h) as f32;
+        let nw = ((w as f32 * ratio).round() as u32).max(1);
+        let nh = ((h as f32 * ratio).round() as u32).max(1);
+        img.resize(nw, nh, image::imageops::FilterType::Triangle)
+    };
+
+    // 先写临时文件再 rename，避免进程被中断后留下半张损坏的缓存图
+    let tmp = dst.with_extension("jpg.tmp");
+    let file = std::fs::File::create(&tmp).map_err(|e| format!("创建缩略图失败: {e}"))?;
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 82);
+    scaled
+        .write_with_encoder(enc)
+        .map_err(|e| format!("写入缩略图失败: {e}"))?;
+    std::fs::rename(&tmp, dst).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("提交缩略图失败: {e}")
+    })?;
+    Ok(())
 }

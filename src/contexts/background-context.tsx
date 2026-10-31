@@ -181,7 +181,30 @@ export function BackgroundProvider({ children }: { children: ReactNode }) {
         }
 
         // 检测是否首次启动
-        if (!hasLaunched) {
+        //
+        // 注意：`hasLaunched` 为 false 有两种完全不同的原因：
+        //   (a) 真的是第一次运行 → 应当写入默认值；
+        //   (b) settings.json 读取/解析失败（例如被写入 UTF-8 BOM、或正被
+        //       其它进程重写），导致这个 store 在内存里是空的。
+        // 两种情况看起来一模一样，但如果对 (b) 也执行 store.save()，
+        // 就会把「空 store」整个写回磁盘 —— 用户全部配置被清空，
+        // 只剩这里刚设置的 4 个键（历史事故：7.5KB → 298B）。
+        //
+        // 判据：除了 has-launched，其它任何已知键读到非空值，就说明
+        // store 里其实是有数据的，属于 (b)，绝不能写盘。
+        const storeHasExistingData = [
+          savedMode,
+          savedImages,
+          savedActiveIndex,
+          savedDynamicVideo,
+          savedLiquidGlass,
+          savedLiquidGlassBlur,
+          savedBgBlur,
+          savedActivePreset,
+          savedCarousel,
+        ].some((v) => v !== null && v !== undefined);
+
+        if (!hasLaunched && !storeHasExistingData) {
           // 首次启动默认启用预设背景和自动轮播，并直接持久化
           const defaultMode: BackgroundMode = "preset";
           const defaultPresetIndex = 0;
@@ -194,6 +217,11 @@ export function BackgroundProvider({ children }: { children: ReactNode }) {
           await store.set("carousel-enabled", defaultCarousel);
           await store.set("has-launched", true);
           await store.save();
+        } else if (!hasLaunched) {
+          // store 里已有其它配置但缺 has-launched：只补标记，不写盘、不覆盖
+          console.warn(
+            "[Background] settings.json 缺少 has-launched 但存在其它配置，跳过首次启动初始化（避免覆盖用户配置）",
+          );
         } else {
           // 非首次启动，加载保存的设置
           if (savedMode && ["none", "preset", "image", "dynamic", "mr"].includes(savedMode)) {

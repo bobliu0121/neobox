@@ -1,4 +1,4 @@
-﻿import {
+import {
   Box,
   Flex,
   HStack,
@@ -1009,7 +1009,7 @@ function GeneralSettings() {
                 flexShrink={0}
               >
                 <img
-                  src={splashLogo || "/logo/Chinesew.webp"}
+                  src={splashLogo || "/logo/NeoBoxIcon.png"}
                   alt="Splash Logo"
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />

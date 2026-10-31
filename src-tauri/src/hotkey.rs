@@ -886,6 +886,24 @@ pub fn get_music_playpause_hotkey_enabled() -> bool {
 static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 将指定 key 写入 settings.json（保留文件中的其他 key，兼容前端 LazyStore）
+///
+/// # 为什么不能「读失败就从空对象重建」
+///
+/// 旧实现是 `read_to_string(..).ok().and_then(from_str.ok()).unwrap_or_else(|| json!({}))`，
+/// 也就是**读或解析任意一步失败都当成「文件不存在」**，然后整体重写一个只含本次 key
+/// 的新文件。而 settings.json 同时被三方读写：前端 `LazyStore`（plugin-store）、
+/// 本函数、以及其它命令。plugin-store 保存时会重写整个文件，此时本进程去读很
+/// 可能拿到**空串或半截 JSON**（典型表现为读到 0 字节）——解析失败 → 从空对象重建
+/// → 用户全部配置（壁纸、优化项、主题、字体、快捷键…）被静默清空，只剩刚写入的
+/// 那一个 key。
+///
+/// 实测证据：一次正常启动后该文件从 7,458 字节变成 298 字节，只剩 10 个键，
+/// 丢失 90% 配置，且 mtime 恰好是启动瞬间（写 `has-launched`）。
+///
+/// 正确语义：**只有在文件确实不存在时**才允许从空对象开始；文件存在但读不出来
+/// 说明正被并发写入，此时必须放弃这次写入（本次 key 丢失是可接受的，
+/// 丢用户全部配置不可接受）。写入本身也改成「临时文件 + rename」原子替换，
+/// 防止写到一半崩溃留下半截文件。
 pub(crate) fn save_settings_value(app: &tauri::AppHandle, key: &str, value: serde_json::Value) {
     #[cfg(target_os = "windows")]
     {
@@ -894,16 +912,43 @@ pub(crate) fn save_settings_value(app: &tauri::AppHandle, key: &str, value: serd
         let Ok(dir) = app.path().app_data_dir() else {
             return;
         };
+        // 委托给统一的安全写入实现（同一份 settings.json 的三处写入共用，
+        // 避免再出现第四份「读失败即重建」的复制粘贴）。见
+        // crate::vertical_overlay::update_settings_json 的详细说明。
         let path = dir.join("settings.json");
-        let mut json: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+        let mut json: serde_json::Value = if !path.exists() {
+            serde_json::json!({})
+        } else {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                log::warn!(
+                    "[Settings] 读取 settings.json 失败，跳过本次写入 key={key}，避免覆盖用户配置"
+                );
+                return;
+            };
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(v) if v.is_object() => v,
+                _ => {
+                    log::warn!(
+                        "[Settings] settings.json 暂时不可解析，跳过本次写入 key={key}，避免覆盖用户配置"
+                    );
+                    return;
+                }
+            }
+        };
         if let Some(obj) = json.as_object_mut() {
             obj.insert(key.to_string(), value);
         }
-        if let Ok(content) = serde_json::to_string_pretty(&json) {
-            let _ = std::fs::write(&path, content);
+        let Ok(content) = serde_json::to_string_pretty(&json) else {
+            return;
+        };
+        // 原子替换：先写同目录临时文件再 rename。
+        // 直接 write 原文件时，若进程在此期间被结束，会留下空/半截文件，
+        // 下次启动又会触发上面那条「读失败」路径。
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, content).is_ok() {
+            if std::fs::rename(&tmp, &path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
     }
     #[cfg(not(target_os = "windows"))]

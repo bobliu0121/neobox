@@ -16,7 +16,9 @@ export function TitleBar() {
   const minimizeHoverBg = useColorModeValue("gray.100", "gray.700");
   const closeHoverBg = useColorModeValue("red.50", "red.900");
   const bgColor = useColorModeValue("whiteAlpha.800", "blackAlpha.800");
-  const logoSrc = useColorModeValue("/logo/NeoBoxW.webp", "/logo/NeoBoxB.webp");
+  // 品牌图标：深色/浅色模式共用同一张新图标（PNG 自带透明底，
+  // 在两种背景上都成立，无需像旧版那样区分 NeoBoxW/NeoBoxB 两套换图）
+  const logoSrc = "/logo/NeoBoxIcon.png";
 
   const [showCloseDialog, setShowCloseDialog] = useState(false);
   const [searchBarVisible, setSearchBarVisible] = useState(true);
@@ -209,6 +211,19 @@ export function TitleBar() {
             transition="margin 0.4s cubic-bezier(0.4, 0, 0.2, 1)"
             onMouseDown={(e) => e.stopPropagation()}
           >
+            {/* 品牌图标：标题栏最左侧，配合全屏启动动画统一视觉标识。
+                此前 logoSrc 只是一个未被使用的变量（死代码），这里让它真正渲染。 */}
+            <Box
+              as="img"
+              src={logoSrc}
+              alt="NeoBox"
+              h="26px"
+              objectFit="contain"
+              flexShrink={0}
+              draggable={false}
+              pointerEvents="none"
+              sx={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.28))" }}
+            />
             {/* 沉浸页面全屏：搜索框淡出，左上角显示"缩小"（退出全屏）按钮 */}
             {searchBarVisible && (
               <Box

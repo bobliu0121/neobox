@@ -218,7 +218,7 @@ interface MusicState {
   mediaKeysEnabled: boolean;
 
   // Toast 通知
-  musicToast: { type: "warning" | "success"; message: string } | null;
+  musicToast: { type: "warning" | "success" | "error"; message: string } | null;
 
   // 看广告解锁 VIP 歌曲：非空时前端显示广告弹窗
   adUnlockSong: Song | null;
@@ -645,12 +645,68 @@ function onSmtcLoadedMetadata() {
 function onSmtcEnded() {
   pushSmtc(true);
 }
+
+/**
+ * 音频元素播放失败兜底。
+ *
+ * 为什么必须监听 `error`：`playSong` 里 `await audio.play()` 成功只代表
+ * 「开始加载」，真正的失败（CDN 返回 403、音频代理转发失败、格式不被支持、
+ * 链接过期）发生在之后，通过 `<audio>` 的 error 事件异步抛出。
+ * 旧实现没有监听它 —— 于是界面表现为「点了播放，没声音、没提示、也不跳下一首」，
+ * 用户只能判断为「这个软件无法播放该平台音乐」。
+ */
+function onAudioError() {
+  const audio = smtcBoundAudio;
+  const st = useMusicStore.getState();
+  // 切歌时旧 src 会先被清空（audio.src = ""），这会触发一次空 src 的 error，
+  // 属于正常过程，不能当成播放失败提示给用户。
+  if (audio && !audio.src) return;
+  if (!st.currentSong) return;
+
+  const mediaErr = audio?.error;
+  const codeText = mediaErr
+    ? (() => {
+        switch (mediaErr.code) {
+          case 1: return "加载被中止";
+          case 2: return "网络错误";
+          case 3: return "音频解码失败";
+          case 4: return "音频格式不受支持或链接已失效";
+          default: return `错误码 ${mediaErr.code}`;
+        }
+      })()
+    : "未知错误";
+
+  console.warn("[Music] audio error:", codeText, audio?.src);
+  useMusicStore.setState({ isPlaying: false });
+
+  if (unplayableSkipCount < 10) {
+    unplayableSkipCount++;
+    isAutoSkipping = true;
+    useMusicStore.setState({
+      musicToast: { type: "error", message: `播放失败（${codeText}），已自动切换下一首` },
+    });
+    setTimeout(() => {
+      if (useMusicStore.getState().playQueue.length > 1) {
+        useMusicStore.getState().nextTrack();
+      }
+    }, 800);
+  } else {
+    // 连续失败过多：停下，避免无限循环重试
+    isAutoSkipping = false;
+    unplayableSkipCount = 0;
+    useMusicStore.setState({
+      musicToast: { type: "error", message: `连续多首播放失败（${codeText}），已停止自动切换` },
+    });
+  }
+}
+
 function bindSmtcHandlers(audio: HTMLAudioElement) {
   audio.addEventListener("timeupdate", onSmtcTimeUpdate);
   audio.addEventListener("play", onSmtcPlay);
   audio.addEventListener("pause", onSmtcPause);
   audio.addEventListener("loadedmetadata", onSmtcLoadedMetadata);
   audio.addEventListener("ended", onSmtcEnded);
+  audio.addEventListener("error", onAudioError);
 }
 function unbindSmtcHandlers(audio: HTMLAudioElement | null) {
   if (!audio) return;
@@ -659,6 +715,7 @@ function unbindSmtcHandlers(audio: HTMLAudioElement | null) {
   audio.removeEventListener("pause", onSmtcPause);
   audio.removeEventListener("loadedmetadata", onSmtcLoadedMetadata);
   audio.removeEventListener("ended", onSmtcEnded);
+  audio.removeEventListener("error", onAudioError);
 }
 // 存储 Tauri 事件监听器的取消函数，防止内存泄漏
 const unlistenFns: (() => void)[] = [];
@@ -713,9 +770,21 @@ async function getProxyAudioUrl(rawUrl: string, proxyPort: number): Promise<stri
     return convertFileSrc(p);
   }
   if (!proxyPort) {
-    proxyPort = await invoke<number>("cmd_get_proxy_port");
+    // 只有拿不到已知端口时才发 IPC（启动后端口已写入 store，正常路径不会走到这里）。
+    // 这次 await 在点击播放的关键路径上，能省则省。
+    proxyPort = getProxyPortCached() || (await invoke<number>("cmd_get_proxy_port"));
+    setProxyPortCached(proxyPort);
   }
   return `http://127.0.0.1:${proxyPort}/audio?url=${encodeURIComponent(rawUrl)}`;
+}
+
+// 代理端口本地缓存：避免每次播放都走一次 IPC 往返（点击到出声的延迟有一部分来自这里）
+let cachedProxyPort = 0;
+function getProxyPortCached(): number {
+  return cachedProxyPort;
+}
+function setProxyPortCached(p: number) {
+  cachedProxyPort = p;
 }
 
 export function coverProxyUrl(url: string, proxyPort: number): string {
@@ -1289,6 +1358,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     try {
       const port = await invoke<number>("cmd_get_proxy_port");
       set({ proxyPort: port });
+      // 同步写入本地缓存：后续 getProxyAudioUrl 直接命中，不再多发一次 IPC
+      setProxyPortCached(port);
     } catch {
       console.warn("Failed to get proxy port");
     }
@@ -2090,6 +2161,11 @@ export const useMusicStore = create<MusicState>((set, get) => ({
           setTimeout(() => {
             if (get().playQueue.length > 1) {
               get().nextTrack();
+            } else {
+              // 队列只有这一首：本应停住，但用户此时再点同一首歌会命中
+              // 上面的计数上限而永远拿不到提示 —— 重置计数，让下次点击能正常报错
+              isAutoSkipping = false;
+              unplayableSkipCount = 0;
             }
           }, 800);
         } else {
@@ -2130,6 +2206,36 @@ export const useMusicStore = create<MusicState>((set, get) => ({
       if (mySeq !== playSongSeq) return;
       console.error("Play failed:", e);
       notifyQishuiDepsMissing(e);
+      // 旧实现只打 console.error 就结束：后端 invoke 抛错（平台返回 403、
+      // 汽水缺少解密依赖、网络中断、URL 失效）时界面**没有任何反馈**，
+      // 用户看到的就是「点了播放但没反应」。
+      // 这里补上可见提示 + 与「无版权」一致的单次自动跳过，避免整条队列卡死。
+      const msg = String(e ?? "");
+      set({ isPlaying: false });
+      if (unplayableSkipCount < 10) {
+        unplayableSkipCount++;
+        isAutoSkipping = true;
+        set({
+          musicToast: {
+            type: "error",
+            message: `播放失败：${msg.slice(0, 120) || "未知错误"}`,
+          },
+        });
+        setTimeout(() => {
+          if (get().playQueue.length > 1) {
+            get().nextTrack();
+          }
+        }, 800);
+      } else {
+        isAutoSkipping = false;
+        unplayableSkipCount = 0;
+        set({
+          musicToast: {
+            type: "error",
+            message: `播放失败：${msg.slice(0, 120) || "未知错误"}`,
+          },
+        });
+      }
     }
   },
 

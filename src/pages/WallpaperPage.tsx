@@ -62,6 +62,15 @@ const WALLPAPER_INTERVAL_KEY = "wallpaper_rotate_interval_minutes";
 const WALLPAPER_PLAYLIST_KEY = "wallpaper_playlist";
 const WALLPAPER_FOLDERS_KEY = "wallpaper_folders";
 
+/**
+ * 网格每批渲染的格子数。
+ *
+ * 一次性渲染上千个格子会让 React 的挂载+布局时间线性增长，首次进入页面
+ * 就出现明显停顿。分批渲染后首屏只处理 96 个，剩余部分由「显示更多」追加，
+ * 用户滚到底才付出代价。
+ */
+const PAGE_SIZE = 96;
+
 interface HistoryItem {
   path: string;
   time: number;
@@ -76,6 +85,12 @@ interface CtxMenuState {
   x: number;
   y: number;
   path: string;
+}
+
+/** 已导入的壁纸文件夹（recursive 决定是否包含子目录） */
+interface WallpaperFolder {
+  path: string;
+  recursive: boolean;
 }
 
 function dedupe(paths: string[]): string[] {
@@ -155,9 +170,57 @@ const HtmlThumb = React.memo(function HtmlThumb({ path }: { path: string }) {
   );
 });
 
-/** 壁纸缩略图：懒加载，HTML/视频不自动播放 */
-const WallpaperThumb = React.memo(function WallpaperThumb({ path }: { path: string }) {
+/** 视频壁纸缩略图：只有拿到 Shell 缩略图才渲染 <img>，否则显示图标占位 */
+const VideoThumb = React.memo(function VideoThumb({ thumb }: { thumb?: string }) {
+  // 不再挂 <video preload="metadata">：每个视频元素都会初始化一套解码器/媒体管线，
+  // 几十个同屏时内存和 CPU 开销极大，而且只是显示一张静帧。
+  // 改为后端用 Shell 缩略图（系统缩略图缓存，命中后几乎零成本）取静帧。
+  if (!thumb) {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          background: "#111",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#888",
+        }}
+      >
+        <Film size={22} />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={thumb}
+      alt=""
+      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+      loading="lazy"
+      decoding="async"
+    />
+  );
+});
+
+/**
+ * 壁纸缩略图。
+ *
+ * `thumb` 是后端生成的缩略图缓存地址（已 `convertFileSrc` 过的 asset URL）。
+ *
+ * 回退策略（缩略图拿不到时的一律兜底，否则格子会永久停在骨架）：
+ * - GIF / 视频 / HTML 后端不生成缩略图，各自走自己的预览方式；
+ * - 静态图片解码失败时退回原图，宁可慢一点也要让用户看到内容。
+ */
+const WallpaperThumb = React.memo(function WallpaperThumb({
+  path,
+  thumb,
+}: {
+  path: string;
+  thumb?: string;
+}) {
   const kind = dynamicWallpaperKind(path);
+
   if (kind === "html") {
     return (
       <LazyMount>
@@ -165,32 +228,59 @@ const WallpaperThumb = React.memo(function WallpaperThumb({ path }: { path: stri
       </LazyMount>
     );
   }
+
   if (kind === "video") {
     return (
-      <LazyMount>
-        <div style={{ width: "100%", height: "100%", background: "black", overflow: "hidden" }}>
-          <video
-            src={convertFileSrc(path)}
-            preload="metadata"
-            muted
-            playsInline
-            style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
-          />
-        </div>
-      </LazyMount>
+      <div style={{ width: "100%", height: "100%", background: "black", overflow: "hidden" }}>
+        <VideoThumb thumb={thumb} />
+      </div>
     );
   }
-  return (
-    <LazyMount>
+
+  // GIF 后端不做缩略图（要抽帧），直接让浏览器加载原文件即可；
+  // 同时它本来就带 loading="lazy"，不会一次性全解。
+  const isGif = kind === "gif";
+  const src = thumb ?? convertFileSrc(path);
+  if (!isGif && !thumb) {
+    // 静态图片缩略图还没生成：显示骨架，等下一批回填；
+    // 若最终生成失败（例如文件已损坏），这里也会被下面的 onError 切到原图。
+    return (
       <img
-        src={convertFileSrc(path)}
+        src={src}
         alt=""
         style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
         loading="lazy"
+        decoding="async"
+        onError={(e) => {
+          // 缩略图缺失/损坏时退回原图，避免永久骨架
+          const el = e.currentTarget;
+          if (el.dataset.fallback !== "1") {
+            el.dataset.fallback = "1";
+            el.src = convertFileSrc(path);
+          }
+        }}
       />
-    </LazyMount>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+      loading="lazy"
+      decoding="async"
+      onError={(e) => {
+        const el = e.currentTarget;
+        if (el.dataset.fallback !== "1" && el.src !== convertFileSrc(path)) {
+          el.dataset.fallback = "1";
+          el.src = convertFileSrc(path);
+        }
+      }}
+    />
   );
 });
+
 
 export default function WallpaperPage() {
   const navigate = useNavigate();
@@ -210,21 +300,22 @@ export default function WallpaperPage() {
   const glassMenuBg = useColorModeValue("rgba(255,255,255,0.25)", "rgba(0,0,0,0.25)");
   const glassMenuBorder = useColorModeValue("rgba(255,255,255,0.2)", "rgba(255,255,255,0.1)");
 
-  interface WallpaperFolder {
-  path: string;
-  recursive: boolean;
-}
-
-const [folders, setFolders] = useState<WallpaperFolder[]>([]);
+  const [folders, setFolders] = useState<WallpaperFolder[]>([]);
+  /** 文件夹列表是否已从磁盘恢复完毕（防止持久化 effect 抢先把空数组写回） */
+  const [foldersReady, setFoldersReady] = useState(false);
   const [wallpapers, setWallpapers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  /** 原路径 -> 缩略图 asset URL（后端生成的小图，避免网格解码原图） */
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  /** 网格当前渲染条数（分批渲染，避免一次性挂载上千格子） */
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [rotateEnabled, setRotateEnabled] = useState(false);
   const [rotateInterval, setRotateInterval] = useState(10);
   const [settingIndex, setSettingIndex] = useState<number | null>(null);
   const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
   const [playlistIndex, setPlaylistIndex] = useState(0);
-  const [tick, setTick] = useState(0);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [dynamic, setDynamic] = useState<DynamicWallpaperInfo | null>(null);
@@ -268,6 +359,70 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
     [htmlMouse, htmlKeyboard, htmlAudio],
   );
   const rotateIndexRef = useRef(0);
+  /** 扫描序号：用于丢弃过期的并发扫描结果 */
+  const scanSeqRef = useRef(0);
+
+  /**
+   * 分批取回缩略图。
+   *
+   * 为什么分批：一次性把上千个路径丢给后端，会同时启动大量解码任务，
+   * 内存与磁盘 IO 瞬时打满，页面反而更卡。每批 24 个能让第一批尽快出图，
+   * 又不会把机器压垮（虚拟机 / 机械盘上尤其明显）。
+   *
+   * 为什么 `limit` 很重要：网格分批渲染（首批 96 个），如果把整库（可能上千张）
+   * 的缩略图全部提前生成，用户还在看第一屏时后台已经在解码几百张 4K 图 ——
+   * 实测这就是首次进入页面 ~4 秒主线程尖峰的主因。只预取当前已渲染的条数即可，
+   * 「显示更多」再按增量补取。
+   */
+  const loadThumbs = useCallback(async (paths: string[], limit?: number): Promise<void> => {
+    // 注意：这里不能因为 paths 为空就清空 thumbs。
+    // 历史区和网格会各自调用本函数，清空会把另一条流程刚生成的缩略图抹掉。
+    if (paths.length === 0) return;
+    const BATCH = 24;
+    const targets = limit && limit > 0 ? paths.slice(0, limit) : paths;
+    for (let i = 0; i < targets.length; i += BATCH) {
+      const batch = targets.slice(i, i + BATCH);
+      try {
+        const map = await invoke<Record<string, string>>("get_wallpaper_thumbnails", {
+          paths: batch,
+        });
+        if (!map || Object.keys(map).length === 0) continue;
+        setThumbs((prev) => {
+          const next = { ...prev };
+          for (const [src, thumb] of Object.entries(map)) {
+            next[src] = convertFileSrc(thumb);
+          }
+          return next;
+        });
+      } catch (e) {
+        // 缩略图失败不影响列表可用性：前端会回退到图标/骨架占位
+        console.error("[Wallpaper] 缩略图生成失败:", e);
+      }
+    }
+
+    // 视频壁纸用系统 Shell 缩略图取静帧（复用 nvidia_recording 里已有的实现，
+    // 它内部走 IShellItemImageFactory + 磁盘缓存，不重复写一份 COM 代码）。
+    const videoPaths = paths.filter((p) => dynamicWallpaperKind(p) === "video");
+    if (videoPaths.length === 0) return;
+    for (let i = 0; i < videoPaths.length; i += 32) {
+      const batch = videoPaths.slice(i, i + 32);
+      try {
+        const map = await invoke<Record<string, string | null>>("get_video_thumbnails", {
+          paths: batch,
+        });
+        if (!map) continue;
+        setThumbs((prev) => {
+          const next = { ...prev };
+          for (const [src, thumb] of Object.entries(map)) {
+            if (thumb) next[src] = convertFileSrc(thumb);
+          }
+          return next;
+        });
+      } catch (e) {
+        console.error("[Wallpaper] 视频缩略图生成失败:", e);
+      }
+    }
+  }, []);
 
   // 读取持久化状态
   useEffect(() => {
@@ -278,7 +433,12 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
         store.get<number>(WALLPAPER_INTERVAL_KEY),
         store.get<PlaylistItem[]>(WALLPAPER_PLAYLIST_KEY),
       ]);
-      if (Array.isArray(hist)) setHistory(hist);
+      if (Array.isArray(hist)) {
+        setHistory(hist);
+        // 历史缩略图也要生成：原来直接加载原图，历史里一张 3 MB 的
+        // 壁纸就会在进页面时解码一次，白白拖慢首屏。
+        void loadThumbs(hist.map((h) => h.path));
+      }
       if (typeof rot === "boolean") setRotateEnabled(rot);
       if (typeof interval === "number" && interval > 0) setRotateInterval(interval);
       if (Array.isArray(pl)) setPlaylist(pl);
@@ -293,6 +453,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
         const saved = await store.get<WallpaperFolder[]>(WALLPAPER_FOLDERS_KEY);
         if (Array.isArray(saved) && saved.length > 0) {
           setFolders(saved);
+          setFoldersReady(true);
           return;
         }
       } catch {}
@@ -308,11 +469,18 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
           }
         }
       } catch {}
+      // 恢复流程结束（无论有没有读到）。之后才想允许持久化 effect 写入，
+      // 否则它会在本流程 setFolders 之前抢先把 `[]` 写回磁盘 → 用户的
+      // 已导入文件夹列表被静默清空（settings.json 里长期是空数组就是这个原因）。
+      setFoldersReady(true);
     })();
   }, []);
 
   // folders 变化时持久化 + 重新扫描壁纸
   useEffect(() => {
+    // 恢复未完成前绝不写盘：此时状态里还是初始的 `[]`，
+    // 一旦写入就等于把用户已保存的文件夹列表覆盖成空。
+    if (!foldersReady) return;
     // 先保存到 localStorage（即时生效）
     localStorage.setItem("wp_folders", JSON.stringify(folders));
     // 再保存到 store（持久化到 settings.json）
@@ -324,25 +492,38 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
     })();
     if (folders.length === 0) {
       setWallpapers([]);
+      setThumbs({});
       return;
     }
+    // 扫描序号：切换/移除文件夹会有多次扫描并发，只有最后一次的结果允许落地，
+    // 否则先返回的旧结果会把新的列表覆盖掉（表现为刷新后图片顺序错乱/缺项）。
+    const seq = ++scanSeqRef.current;
     (async () => {
       setLoading(true);
       try {
         let merged: string[] = [];
         for (const f of folders) {
           const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f.path, recursive: f.recursive });
+          if (seq !== scanSeqRef.current) return;
           merged = [...merged, ...files];
         }
-        setWallpapers(dedupe(merged));
+        const deduped = dedupe(merged);
+        setWallpapers(deduped);
+        // 换文件夹/重新扫描后回到首批，避免上次的「显示更多」把这次也一次铺满
+        setVisibleCount(PAGE_SIZE);
+        // 清空上一批缩略图映射：路径可能已被移出列表，留着只会白占内存
+        setThumbs({});
+        // 只预取首批渲染（PAGE_SIZE 个）的缩略图；
+        // 整库预热会在用户看第一屏时后台解码几百张 4K 图，造成明显卡顿。
+        void loadThumbs(deduped, PAGE_SIZE);
       } catch {
         // 扫描失败不阻塞
       } finally {
-        setLoading(false);
+        if (seq === scanSeqRef.current) setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folders]);
+  }, [folders, foldersReady]);
 
   // 进入页面时读取系统当前壁纸（可反映其他应用/Windows 设置中的修改），补入历史
   useEffect(() => {
@@ -502,27 +683,17 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
   );
 
   // 导入壁纸文件夹（可多次导入，合并结果）
+  //
+  // 只负责「把文件夹加进状态」，扫描交给上面的 folders effect 统一做。
+  // 原来的实现自己也扫一遍，而 setFolders 又触发 effect 再扫一遍，
+  // 导入一个文件夹会全量扫描两次（大图库时这就是卡顿来源之一）。
   const importFolderPath = useCallback(async (selected: string, recursive: boolean) => {
     if (folders.some((f) => f.path === selected)) {
       toast({ title: t("wallpaper.folderExists"), status: "info", duration: 2000 });
       return;
     }
-    setLoading(true);
-    try {
-      const files = await invoke<string[]>("scan_wallpaper_folder", { dir: selected, recursive });
-      setFolders((prev) => [...prev, { path: selected, recursive }]);
-      setWallpapers((prev) => dedupe([...prev, ...files]));
-      rotateIndexRef.current = 0;
-      if (files.length === 0) {
-        toast({ title: t("wallpaper.noImages"), status: "warning", duration: 2500 });
-      } else {
-        toast({ title: t("wallpaper.loadedCount", { count: files.length }), status: "success", duration: 2500 });
-      }
-    } catch (e) {
-      toast({ title: String(e), status: "error", duration: 3000 });
-    } finally {
-      setLoading(false);
-    }
+    rotateIndexRef.current = 0;
+    setFolders((prev) => [...prev, { path: selected, recursive }]);
   }, [t, toast, folders]);
 
   const handleImportFolder = useCallback(async (recursive: boolean) => {
@@ -540,27 +711,13 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
     }
   }, [t, toast, importFolderPath]);
 
-  // 移除已导入文件夹并重扫剩余文件夹
+  // 移除已导入文件夹：重扫由 folders effect 统一负责（同上，避免扫两次）
   const handleRemoveFolder = useCallback(
-    async (folder: WallpaperFolder) => {
-      const rest = folders.filter((f) => f.path !== folder.path);
-      setFolders(rest);
-      setLoading(true);
-      try {
-        let merged: string[] = [];
-        for (const f of rest) {
-          const files = await invoke<string[]>("scan_wallpaper_folder", { dir: f.path, recursive: f.recursive });
-          merged = dedupe([...merged, ...files]);
-        }
-        setWallpapers(merged);
-        rotateIndexRef.current = 0;
-      } catch (e) {
-        toast({ title: String(e), status: "error", duration: 3000 });
-      } finally {
-        setLoading(false);
-      }
+    (folder: WallpaperFolder) => {
+      rotateIndexRef.current = 0;
+      setFolders((prev) => prev.filter((f) => f.path !== folder.path));
     },
-    [folders, toast],
+    [],
   );
 
   // 右键：添加到循环播放列表
@@ -878,13 +1035,16 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
               </Text>
             </HStack>
             <SimpleGrid columns={{ base: 3, md: 4, lg: 6 }} spacing={3}>
-              {wallpapers.map((path, index) => (
+              {wallpapers.slice(0, visibleCount).map((path, index) => (
                 <Box
                   key={path}
                   position="relative"
                   borderRadius="lg"
                   overflow="hidden"
                   border="2px solid"
+                  // content-visibility：让 Chromium 跳过视口外格子的布局与绘制。
+                  // 渲染一大批缩略图时这是最省的一招，且不影响滚动位置。
+                  css={{ contentVisibility: "auto", containIntrinsicSize: "160px" }}
                   borderColor={settingIndex === index ? themeColorHex : "transparent"}
                   cursor="pointer"
                   onClick={() => applyWallpaper(path, index)}
@@ -895,7 +1055,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
                   }}
                   _hover={{ borderColor: themeColorHex }}
                 >
-                  <WallpaperThumb path={path} />
+                  <WallpaperThumb path={path} thumb={thumbs[path]} />
                   {dynamicWallpaperKind(path) === "gif" && (
                     <Box position="absolute" top={1} right={1}>
                       <BetaTag />
@@ -916,14 +1076,33 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
                 </Box>
               ))}
             </SimpleGrid>
+            {wallpapers.length > visibleCount && (
+              <Button
+                mt={4}
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  // 追加一批：滚动位置保持不变，用户继续往下看即可
+                  const next = visibleCount + PAGE_SIZE;
+                  setVisibleCount(next);
+                  // 新露出的项也要有缩略图，按批补取
+                  void loadThumbs(wallpapers.slice(visibleCount, next));
+                }}
+              >
+                显示更多（还有 {wallpapers.length - visibleCount} 张）
+              </Button>
+            )}
             <Button
               mt={4}
+              ml={wallpapers.length > visibleCount ? 2 : 0}
               size="sm"
               leftIcon={<RefreshCw />}
               variant="outline"
               onClick={() => {
                 rotateIndexRef.current = 0;
-                setWallpapers([...wallpapers]);
+                // 真正重新扫描：原来只是 setWallpapers([...wallpapers])，
+                // 引用变了但内容一样，磁盘上新加的图根本不会出现。
+                setFolders((prev) => [...prev]);
               }}
             >
               {t("wallpaper.refresh")}
@@ -941,7 +1120,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
               </Text>
             </HStack>
             <SimpleGrid columns={{ base: 4, md: 6, lg: 8 }} spacing={3}>
-              {history.map((h) => (
+              {history.map((h, idx) => (
                 <Box
                   key={h.path + h.time}
                   position="relative"
@@ -950,7 +1129,9 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
                   border="2px solid"
                   borderColor="transparent"
                   cursor="pointer"
-                  onClick={() => applyWallpaper(h.path, history.indexOf(h))}
+                  // 原来用 history.indexOf(h)：每项都要线性查找，O(n²)；
+                  // map 已经给了下标，直接用。
+                  onClick={() => applyWallpaper(h.path, idx)}
                   onContextMenu={(e) => {
                     e.stopPropagation();
                     e.preventDefault();
@@ -958,7 +1139,7 @@ const [folders, setFolders] = useState<WallpaperFolder[]>([]);
                   }}
                   _hover={{ borderColor: themeColorHex }}
                 >
-                  <WallpaperThumb path={h.path} />
+                  <WallpaperThumb path={h.path} thumb={thumbs[h.path]} />
                 </Box>
               ))}
             </SimpleGrid>

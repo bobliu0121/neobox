@@ -1930,9 +1930,37 @@ pub async fn song_url(
 
     let mut last_restriction: Option<PlayResult> = None;
 
-    for (candidate_hash, level, _label) in &candidates {
+    // ── 全部候选一次性并发 ─────────────────────────────────────────────
+    //
+    // 旧实现是「每档 hash 依次试 4 种取址方式」的双层串行循环：
+    // 5 档音质 × 4 种方式 = 最坏 **20 次网络请求排队相加**，
+    // 这正是「酷狗点播放要等很久」的直接原因。
+    //
+    // 各档位、各取址方式彼此完全独立（同一个歌的不同 hash / 不同 API，
+    // 服务端判定确定），并发发出后按原始优先级扫描就能得到与串行完全一致的
+    // 选择结果（优先级：档位由高到低；同档位内 H5 → Mobile → Web → Gateway），
+    // 而总耗时从「全部相加」降到「最慢的那一次」。
+    let tasks: Vec<_> = candidates
+        .iter()
+        .map(|(candidate_hash, level, _label)| {
+            let ch = candidate_hash.clone();
+            let lv = level.clone();
+            async move {
+                let (h5, mobile, web, gw) = futures_util::join!(
+                    play_via_h5(&ch, album_id, album_audio_id, cookie, &lv),
+                    play_via_mobile(&ch, album_id, cookie),
+                    play_via_web(&ch, album_id, album_audio_id, cookie),
+                    play_via_gateway(&ch, album_id, album_audio_id, cookie, &lv)
+                );
+                (lv, h5, mobile, web, gw)
+            }
+        })
+        .collect();
+    let all = futures_util::future::join_all(tasks).await;
+
+    for (level, h5_res, mobile_res, web_res, gw_res) in all {
         // 1. H5
-        if let Ok(Some(h5)) = play_via_h5(candidate_hash, album_id, album_audio_id, cookie, level).await {
+        if let Ok(Some(h5)) = h5_res {
             if !h5.url.is_empty() {
                 return Ok(SongUrlResult {
                     url: Some(h5.url),
@@ -1950,7 +1978,7 @@ pub async fn song_url(
         }
 
         // 2. Mobile
-        if let Ok(Some(mobile)) = play_via_mobile(candidate_hash, album_id, cookie).await {
+        if let Ok(Some(mobile)) = mobile_res {
             if !mobile.url.is_empty() {
                 return Ok(SongUrlResult {
                     url: Some(mobile.url),
@@ -1968,7 +1996,7 @@ pub async fn song_url(
         }
 
         // 3. Web
-        if let Ok(Some(web)) = play_via_web(candidate_hash, album_id, album_audio_id, cookie).await {
+        if let Ok(Some(web)) = web_res {
             if !web.url.is_empty() {
                 return Ok(SongUrlResult {
                     url: Some(web.url),
@@ -1986,7 +2014,7 @@ pub async fn song_url(
         }
 
         // 4. Gateway
-        if let Ok(Some(gateway)) = play_via_gateway(candidate_hash, album_id, album_audio_id, cookie, level).await {
+        if let Ok(Some(gateway)) = gw_res {
             if !gateway.url.is_empty() {
                 return Ok(SongUrlResult {
                     url: Some(gateway.url),

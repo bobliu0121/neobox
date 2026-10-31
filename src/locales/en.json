@@ -67,7 +67,8 @@
     "wallpaper": "Wallpapers",
     "videoConverter": "Video Converter",
     "mkaMuxer": "MKA Muxer",
-    "bilibiliDownload": "Bilibili Download"
+    "bilibiliDownload": "Bilibili Download",
+    "corruptFile": "File Corruption"
   },
   "customPage": {
     "title": "Custom Dashboard",
@@ -942,7 +943,8 @@
     "selectResolution": "Select resolution",
     "videoConverterDesc": "Convert video to GIF, a still frame, or extract audio",
     "mkaMuxerDesc": "Combine audio, subtitles and cover art into an MKA file",
-    "bilibiliDownloadDesc": "Download Bilibili video or audio (no login, up to 480P)"
+    "bilibiliDownloadDesc": "Download Bilibili video or audio (no login, up to 480P)",
+    "corruptFileDesc": "Apply controllable random corruption to files, for testing recovery tools"
   },
   "contextMenu": {
     "title": "Context Menu & This PC",
@@ -2854,5 +2856,46 @@
     "coverIncluded": "Cover included",
     "clear": "Clear",
     "hint": "Audio is transcoded to AAC; subtitles support SRT / VTT / ASS / SSA; cover art is stored as an attachment. The resulting MKA can be opened directly in the Music module."
+  },
+  "corruptFile": {
+    "title": "File Random Corruption",
+    "safetyNote": "This tool only reads the source file. Results are always written to a new file (name suffixed with _corrupted). The original is never modified or overwritten.",
+    "selectInput": "Select source file",
+    "inputHint": "Drag any file onto this page (no type restriction)",
+    "dropHint": "Drop to import file",
+    "clear": "Clear",
+    "scaleTitle": "Corruption amount",
+    "byRatio": "By ratio",
+    "byBytes": "By bytes",
+    "bytesUnit": "bytes",
+    "rangeTitle": "Corruption range (leave blank for whole file)",
+    "startPlaceholder": "Start offset",
+    "endPlaceholder": "End offset",
+    "rangeHint": "Restricting the range lets you damage only a local region, simulating real faults like bad disk sectors",
+    "modeTitle": "Corruption mode",
+    "modeRandom": "Random bytes (closest to real corruption)",
+    "modeZero": "Zero out (0x00)",
+    "modeOnes": "All ones (0xFF)",
+    "seedTitle": "Random seed",
+    "seedHint": "A fixed number makes every run identical; leave blank to randomize",
+    "seedPlaceholder": "Blank = random each time",
+    "seedInvalid": "Seed must be a non-negative integer",
+    "keepSize": "Keep file size unchanged (content only, no insert/delete)",
+    "run": "Start corruption",
+    "running": "Processing...",
+    "irreversibleHint": "Note: the generated file's content is destroyed and cannot be restored",
+    "reportTitle": "Corruption report",
+    "done": "Generated",
+    "outputPath": "Output file",
+    "fileSize": "File size",
+    "corruptedBytes": "Bytes corrupted",
+    "damagedBlocks": "Scattered blocks",
+    "usedRange": "Range used",
+    "usedSeed": "Seed used",
+    "reveal": "Show in folder",
+    "success": "Corrupted file generated",
+    "failed": "Corruption failed",
+    "noInput": "Please select a source file first",
+    "estimateSummary": "About {bytes} bytes to corrupt ({percent}% of range), range {start} ~ {end}, total file size {fileSize}"
   }
 }

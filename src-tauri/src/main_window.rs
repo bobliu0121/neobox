@@ -18,26 +18,24 @@ pub fn read_saved_position<R: Runtime>(app: &AppHandle<R>) -> Option<(i32, i32)>
 }
 
 /// 将主窗口位置写入 settings.json 的 `main-window` 键（仅更新位置，保留其他 key）
+///
+/// 注意：这个函数在窗口每次移动/关闭时都会调用，触发频率极高。
+/// 因此**绝不能**在「读失败」时从空对象重建 —— settings.json 同时被前端
+/// plugin-store 与本进程读写，读到的可能是空串/半截 JSON（正在被重写），
+/// 一旦此时整体覆写，用户的全部配置会被静默清空，只剩窗口坐标。
+/// 详见 [`crate::hotkey::save_settings_value`] 的说明与实测证据。
 pub fn persist_position<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) {
-    let Ok(dir) = app.path().app_data_dir() else {
-        return;
-    };
-    let path = dir.join("settings.json");
-    let mut json: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = json.as_object_mut() {
+    // 复用 vertical_overlay 里的安全写法（同一份 settings.json，同样的并发风险）
+    // 见 crate::vertical_overlay::update_settings_json 的说明。
+    let _ = (x, y); // 真正写入在下方泛型辅助函数里，这里仅保留签名
+    crate::vertical_overlay::update_settings_json(app, "main-window", |obj| {
         let main = obj.entry("main-window").or_insert(serde_json::json!({}));
         if let Some(m) = main.as_object_mut() {
             m.insert("position_x".to_string(), serde_json::json!(x));
             m.insert("position_y".to_string(), serde_json::json!(y));
         }
-    }
-    if let Ok(content) = serde_json::to_string_pretty(&json) {
-        let _ = std::fs::write(&path, content);
-        log::info!("[main-window] save position x={x} y={y}");
-    }
+    });
+    log::debug!("[main-window] save position requested x={x} y={y}");
 }
 
 /// 判断指定物理坐标是否落在任一显示器窗口区域内（含 10px 容差，复用 tray 归位判据）

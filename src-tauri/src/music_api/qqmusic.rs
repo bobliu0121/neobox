@@ -1194,34 +1194,17 @@ pub async fn song_url(mid: &str, media_mid: &str, quality: &str, cookie: &str) -
         }
     }
 
-    // 探测全部失败，返回第一个候选 URL（让前端处理失败）
-    // 相比 Mineradio 直接返回不可用，提供一个 URL 让前端有机会重试
-    if let Some(first_info) = purl_infos.first() {
-        if let Some(purl) = first_info.get("purl").and_then(|v| v.as_str()) {
-            if !purl.is_empty() {
-                let sip = sips.first().map(|s| s.as_str()).unwrap_or("https://ws.stream.qqmusic.qq.com/");
-                let fallback_url = format!("{}{}", sip, purl);
-                let filename = first_info.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-                let file_meta = file_candidates.iter().find(|(f, _, _)| f == filename);
-                let level = file_meta.map(|(_, l, _)| l.clone()).unwrap_or_default();
-                let label = file_meta.map(|(_, _, lb)| lb.clone()).unwrap_or_default();
-
-                return Ok(SongUrlResult {
-                    url: Some(fallback_url),
-                    playable: true,
-                    trial: false,
-                    level,
-                    quality: label,
-                    br: 0,
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
+    // 探测全部失败 → 如实返回不可播。
+    //
+    // 旧实现在这里仍然把「第一个候选 URL」当成功返回（playable: true），
+    // 理由写的是「让前端有机会重试」。但这个 URL 已经被探测证明取不到音频：
+    // 前端拿到后 <audio> 必然报「格式不受支持 / 链接已失效」，
+    // 提示指向的是假原因（真实原因通常是版权/会员限制），
+    // 而且白白多走一次注定失败的加载 + 一次自动跳过。
+    // 现在如实返回不可播，让前端走统一的「无版权 → 提示 + 自动跳下一首」路径。
     // 无可用 URL
     let restriction_msg = if auth.logged_in && auth.playback_ready {
-        "QQ 音乐没有返回播放地址，可能受版权、会员或官方客户端限制"
+        "QQ 音乐没有返回可用播放地址，可能受版权、会员或官方客户端限制"
     } else if auth.logged_in {
         "QQ 音乐当前只拿到了网页登录状态，还缺少播放授权，请重新登录"
     } else {
@@ -1235,7 +1218,7 @@ pub async fn song_url(mid: &str, media_mid: &str, quality: &str, cookie: &str) -
         level: requested_quality,
         quality: String::new(),
         br: 0,
-        reason: Some("QQ_URL_UNAVAILABLE".into()),
+        reason: Some(if auth.logged_in { "QQ_URL_UNAVAILABLE".into() } else { "QQ_LOGIN_REQUIRED".to_string() }),
         message: Some(restriction_msg.into()),
         fee: None,
         ..Default::default()

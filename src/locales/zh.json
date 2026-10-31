@@ -67,7 +67,8 @@
     "wallpaper": "壁纸管理",
     "videoConverter": "视频转换",
     "mkaMuxer": "MKA 合成",
-    "bilibiliDownload": "B 站下载"
+    "bilibiliDownload": "B 站下载",
+    "corruptFile": "文件损坏"
   },
   "customPage": {
     "title": "自定义页面",
@@ -744,7 +745,8 @@
     "audioConverterDesc": "音频格式（WAV/MP3/M4A）相互转换",
     "videoConverterDesc": "视频转 GIF 动图、首帧图片，或提取音频",
     "mkaMuxerDesc": "音频 + 字幕 + 封面合成为 MKA 文件",
-    "bilibiliDownloadDesc": "下载 B 站视频或音频（免登录，最高 480P）"
+    "bilibiliDownloadDesc": "下载 B 站视频或音频（免登录，最高 480P）",
+    "corruptFileDesc": "对文件进行可控随机损坏，用于测试修复工具的容错能力"
   },
   "contextMenu": {
     "title": "右键菜单 & 此电脑",
@@ -2664,5 +2666,46 @@
     "coverIncluded": "含封面",
     "clear": "清除",
     "hint": "音频会转码为 AAC 写入 MKA；字幕支持 SRT / VTT / ASS / SSA；封面作为附件保存。合成后的 MKA 可以在音乐模块直接打开。"
+  },
+  "corruptFile": {
+    "title": "文件随机损坏",
+    "safetyNote": "本工具只读取原文件，结果一律写入新文件（原文件名加 _corrupted 后缀），绝不会修改或覆盖原始文件。",
+    "selectInput": "选择源文件",
+    "inputHint": "可直接把任意文件拖到此页面（不做类型限制）",
+    "dropHint": "松开即可导入文件",
+    "clear": "清除",
+    "scaleTitle": "损坏规模",
+    "byRatio": "按比例",
+    "byBytes": "按字节数",
+    "bytesUnit": "字节",
+    "rangeTitle": "损坏范围（留空表示整个文件）",
+    "startPlaceholder": "起始偏移",
+    "endPlaceholder": "结束偏移",
+    "rangeHint": "限定范围可以只破坏文件局部，模拟磁道坏块这类真实故障",
+    "modeTitle": "损坏方式",
+    "modeRandom": "随机字节（最接近真实损坏）",
+    "modeZero": "置零（0x00）",
+    "modeOnes": "置全 1（0xFF）",
+    "seedTitle": "随机种子",
+    "seedHint": "填入固定数字可让每次结果完全一致；留空则每次随机",
+    "seedPlaceholder": "留空 = 每次随机",
+    "seedInvalid": "种子必须是非负整数",
+    "keepSize": "保持文件大小不变（只改内容，不插入/删除字节）",
+    "run": "开始损坏",
+    "running": "处理中...",
+    "irreversibleHint": "注意：生成的文件内容已被破坏，无法还原",
+    "reportTitle": "损坏报告",
+    "done": "已生成",
+    "outputPath": "输出文件",
+    "fileSize": "文件大小",
+    "corruptedBytes": "实际损坏字节",
+    "damagedBlocks": "离散损坏块",
+    "usedRange": "损坏区间",
+    "usedSeed": "使用种子",
+    "reveal": "在文件夹中显示",
+    "success": "损坏文件已生成",
+    "failed": "损坏失败",
+    "noInput": "请先选择源文件",
+    "estimateSummary": "预计损坏 {bytes} 字节（占区间 {percent}%），区间 {start} ~ {end}，文件总大小 {fileSize}"
   }
 }

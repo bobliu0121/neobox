@@ -210,26 +210,66 @@ pub async fn save_vertical_overlay_position(
     })
 }
 
-/// 将竖排悬浮框位置写入 settings.json 的 overlay-settings 键（仅更新 vertical_position，保留其他 key，兼容前端 LazyStore）
-fn persist_vertical_overlay_position(app_handle: &tauri::AppHandle, x: i32, y: i32) {
+/// 安全地读-改-写 settings.json 里的某个键。
+///
+/// 抽成公共实现的原因：这段逻辑原来在 `main_window` / `vertical_overlay` /
+/// `hotkey` 三处各复制了一份，且**每一份都有同样的致命缺陷** ——
+/// 读或解析失败时用 `unwrap_or_else(|| json!({}))` 当成空文件重建，
+/// 从而把用户的全部配置覆盖掉，只留下本次写入的键。
+/// settings.json 同时被前端 plugin-store 与本进程读写，读到空串/半截 JSON 是常态，
+/// 所以这个缺陷在拖动窗口、悬浮框移动等高频操作下几乎必然触发。
+///
+/// 现在的语义：只有文件真的不存在才从空对象开始；存在但读不出/不可解析时
+/// **直接放弃本次写入**（丢一个键可以接受，丢全部配置不可接受）。
+/// 写入用「临时文件 + rename」原子替换，避免中断留下半截文件。
+pub(crate) fn update_settings_json<R: tauri::Runtime, F>(app_handle: &tauri::AppHandle<R>, tag: &str, f: F)
+where
+    F: FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+{
+    use tauri::Manager;
     let Ok(dir) = app_handle.path().app_data_dir() else {
         return;
     };
     let path = dir.join("settings.json");
-    let mut json: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    let mut json: serde_json::Value = if !path.exists() {
+        serde_json::json!({})
+    } else {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            log::warn!("[{tag}] 读取 settings.json 失败，跳过本次保存");
+            return;
+        };
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(v) if v.is_object() => v,
+            _ => {
+                log::warn!("[{tag}] settings.json 暂不可解析，跳过本次保存");
+                return;
+            }
+        }
+    };
     if let Some(obj) = json.as_object_mut() {
+        f(obj);
+    }
+    let Ok(content) = serde_json::to_string_pretty(&json) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, content).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+        // 写入成功
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+        log::warn!("[{tag}] 写入 settings.json 失败");
+    }
+}
+
+/// 将竖排悬浮框位置写入 settings.json 的 overlay-settings 键（仅更新 vertical_position，保留其他 key，兼容前端 LazyStore）
+fn persist_vertical_overlay_position(app_handle: &tauri::AppHandle, x: i32, y: i32) {
+    update_settings_json(app_handle, "vertical-overlay", |obj| {
         let overlay = obj.entry("overlay-settings").or_insert(serde_json::json!({}));
         if let Some(o) = overlay.as_object_mut() {
             o.insert("vertical_position_x".to_string(), serde_json::json!(x));
             o.insert("vertical_position_y".to_string(), serde_json::json!(y));
         }
-    }
-    if let Ok(content) = serde_json::to_string_pretty(&json) {
-        let _ = std::fs::write(&path, content);
-    }
+    });
 }
 
 /// 从持久化 settings.json 读取竖排悬浮框保存的位置（物理坐标），作为恢复位置的权威来源
@@ -246,23 +286,12 @@ fn read_persisted_vertical_overlay_position(app_handle: &tauri::AppHandle) -> Op
 
 /// 从持久化 settings.json 清除竖排悬浮框保存的位置
 fn clear_persisted_vertical_overlay_position(app_handle: &tauri::AppHandle) {
-    let Ok(dir) = app_handle.path().app_data_dir() else {
-        return;
-    };
-    let path = dir.join("settings.json");
-    let mut json: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = json.as_object_mut() {
+    update_settings_json(app_handle, "vertical-overlay", |obj| {
         if let Some(overlay) = obj.get_mut("overlay-settings").and_then(|o| o.as_object_mut()) {
             overlay.remove("vertical_position_x");
             overlay.remove("vertical_position_y");
         }
-    }
-    if let Ok(content) = serde_json::to_string_pretty(&json) {
-        let _ = std::fs::write(&path, content);
-    }
+    });
 }
 
 /// 设置鼠标穿透

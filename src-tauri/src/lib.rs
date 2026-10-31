@@ -14,6 +14,7 @@ mod dattorro;
 mod disk_optimize;
 mod external_player;
 pub mod file_convert;
+pub mod file_corrupt;
 mod spectrum;
 mod display_cache;
 mod downloader;
@@ -102,6 +103,72 @@ fn queue_open_mka<R: tauri::Runtime>(app: &tauri::AppHandle<R>, path: &str) {
 #[tauri::command]
 fn take_pending_open_mka() -> Option<String> {
     PENDING_OPEN_MKA.lock().ok().and_then(|mut pending| pending.take())
+}
+
+/// 启动时对 `settings.json` 做一次容错自检（详见 `setup` 里的调用处注释）。
+///
+/// 只处理两种「修好就能继续用」的情况，绝不做任何会丢数据的操作：
+/// - 去掉 UTF-8 BOM：Windows PowerShell 的 `Set-Content -Encoding UTF8`、
+///   部分编辑器会写 BOM，而前端 `plugin-store` 用严格 JSON 解析，
+///   遇到 BOM 直接整份失败 —— 这就是「配置被重置为首次启动」的触发源。
+/// - JSON 语法损坏：把原文件另存为 `.corrupt-<时间戳>` 再退出处理，
+///   宁可这次不修复也**不能**让后续流程把它当空文件覆盖掉。
+fn sanitize_settings_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let path = dir.join("settings.json");
+    if !path.is_file() {
+        return Ok(());
+    }
+
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取失败: {e}"))?;
+    if bytes.is_empty() {
+        // 0 字节文件：多半是上次写入被中断，删掉让程序按首次启动重建（无数据可丢）
+        let _ = std::fs::remove_file(&path);
+        log::warn!("[Settings] settings.json 为 0 字节，已移除，将按首次启动初始化");
+        return Ok(());
+    }
+
+    // 1) 去掉 UTF-8 BOM（EF BB BF）
+    let (content, had_bom) = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        (String::from_utf8_lossy(&bytes[3..]).into_owned(), true)
+    } else {
+        (String::from_utf8_lossy(&bytes).into_owned(), false)
+    };
+
+    // 2) 校验能否解析成 JSON 对象
+    let parses = serde_json::from_str::<serde_json::Value>(&content)
+        .map(|v| v.is_object())
+        .unwrap_or(false);
+
+    if parses {
+        if had_bom {
+            // BOM 只是前缀，去掉后内容有效：原地修复
+            if let Err(e) = std::fs::write(&path, &content) {
+                return Err(format!("去 BOM 后写回失败: {e}"));
+            }
+            log::warn!("[Settings] 检测到 UTF-8 BOM，已自动移除（否则前端会误判首次启动并重置配置）");
+        }
+        return Ok(());
+    }
+
+    // 3) 真正损坏：备份原文件，避免被后续流程当成空文件覆盖
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = dir.join(format!("settings.json.corrupt-{stamp}"));
+    match std::fs::copy(&path, &backup) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&path);
+            log::error!(
+                "[Settings] settings.json 已损坏，已备份到 {} 并按首次启动重建（原内容未被覆盖）",
+                backup.display()
+            );
+            Ok(())
+        }
+        Err(e) => Err(format!("损坏文件备份失败: {e}")),
+    }
 }
 
 /// 主窗口可见性状态（用于最小化/托盘时暂停动态背景视频）
@@ -323,6 +390,23 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // ── settings.json 自检（必须在任何 store 读写之前）─────────────────
+            //
+            // 事故复盘：这个文件被外部工具写入过 UTF-8 BOM，前端 plugin-store
+            // 解析失败 → 内存里是空 store → background-context 判定「首次启动」
+            // → 把默认值整体写回，用户全部配置（壁纸/优化项/主题/字体/快捷键）
+            // 被静默覆盖，文件从 7.5KB 缩到 298B。
+            //
+            // 这里在启动最早期做三件事：
+            //   1. 若首字节是 UTF-8 BOM，去掉它 —— BOM 是唯一「修好即可用」的
+            //      损坏形式，本身不改变 JSON 语义；
+            //   2. 若 JSON 语法错误，把原文件备份为 settings.json.corrupt-<时间戳>，
+            //      保证用户至少能手工找回，而不是被程序直接覆盖；
+            //   3. 两种情况都记日志，便于事后定位是谁写坏的。
+            if let Err(e) = sanitize_settings_file(app.handle()) {
+                log::warn!("[Settings] 启动自检失败: {e}");
+            }
+
             // 直接拖到 exe 启动：命令行参数里带 .mka 时先暂存，前端就绪后取走并播放
             let startup_args: Vec<String> = std::env::args().collect();
             if let Some(path) = mka_path_from_args(&startup_args) {
@@ -980,12 +1064,15 @@ pub fn run() {
         file_convert::path_is_directory,
         file_convert::read_image_as_data_url,
         file_convert::read_text_file,
+        file_corrupt::corrupt_file_random,
+        file_corrupt::corrupt_estimate,
         take_pending_open_mka,
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,
         wallpaper::get_current_wallpaper,
         wallpaper::scan_wallpaper_folder,
+        wallpaper::get_wallpaper_thumbnails,
         wallpaper::save_wallpaper_edit,
         wallpaper::set_dynamic_wallpaper,
         wallpaper::stop_dynamic_wallpaper,

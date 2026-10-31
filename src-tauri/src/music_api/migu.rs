@@ -872,7 +872,7 @@ pub async fn song_url(
     let target = tone_flag_for(quality);
     let order = tone_flag_degrade_order();
 
-    // 目标档位优先，失败后按顺序换档
+    // 目标档位优先，其后按降级顺序补齐
     let mut try_flags: Vec<&str> = vec![target];
     for flag in order {
         if flag != target {
@@ -880,9 +880,21 @@ pub async fn song_url(
         }
     }
 
+    // 并发请求所有档位（旧实现串行逐个试，最坏 4 次往返全排队，
+    // 点击播放后要等好几秒；这些请求彼此独立，并发后按优先级取第一个成功结果语义不变）。
+    let futs = try_flags.iter().map(|flag| {
+        let flag = *flag;
+        let cookie = cookie.to_string();
+        let uid = uid.to_string();
+        let content_id = content_id.to_string();
+        let copyright_id = copyright_id.to_string();
+        async move { listen_url(&cookie, &uid, &content_id, &copyright_id, flag).await }
+    });
+    let results = futures_util::future::join_all(futs).await;
+
     let mut last_err = String::new();
-    for flag in try_flags {
-        match listen_url(cookie, uid, content_id, copyright_id, flag).await {
+    for (flag, res) in try_flags.iter().zip(results.into_iter()) {
+        match res {
             Ok(data) => {
                 return Ok(SongUrlResult {
                     url: Some(data.url),
@@ -902,13 +914,17 @@ pub async fn song_url(
                 });
             }
             Err(e) => {
-                last_err = e;
-                // 仅在版权受限时换档重试，其他错误直接返回
-                if !last_err.contains("MiguUrlBlocked") {
-                    return Err(last_err);
+                // 非版权受限错误（例如需要登录、参数错误）直接返回，
+                // 降档重试也解决不了，没必要继续等其它档位。
+                if !e.contains("MiguUrlBlocked") {
+                    return Err(e);
+                }
+                if last_err.is_empty() {
+                    last_err = e;
                 }
             }
         }
+        let _ = flag;
     }
 
     Ok(SongUrlResult {

@@ -1343,10 +1343,22 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
                 h={{ base: "180px", md: "220px", lg: "250px" }}
                 zIndex={5}
                 sx={{
-                  transformOrigin: "top right",
-                  transform: isPlaying
-                    ? "rotate(30deg)"
-                    : "rotate(-10deg)",
+                  // 旋转轴必须落在 SVG 内的支点圆（cx=42, cy=8），否则唱臂不是「摆动」而是平移。
+                  // SVG 用 preserveAspectRatio="xMidYMid meet"，盒子比 viewBox 更宽，
+                  // 内容按高度缩放后在水平方向居中，因此支点在盒子中的位置是
+                  //   x = (W - 48*scale)/2 + 42*scale ≈ 81~83% W（三个断点都落在此区间）
+                  //   y = 8*scale = 8/220 = 3.64% H
+                  // 取 82% / 3.64% 对 base/md/lg 的误差均 ≤1.5% W（约 1px）。
+                  // 旧代码写 "top right"（盒模型右上角），支点偏了约 10px，
+                  // 整条臂绕错误圆心转动，针尖轨迹完全跑偏。
+                  transformOrigin: "82% 3.64%",
+                  // 角度语义（顺时针为正）：支点在唱片右上方，顺时针 = 针尖向左下扫入盘面。
+                  // 以下角度由针尖实际坐标推算（base 断点，盘半径 R=120px，盘心(120,120)）：
+                  //   rotate(-18deg) → 针尖距盘心约 1.26R，位于盘外 → 抬起（暂停态）
+                  //   rotate(+8deg)  → 针尖距盘心约 0.67R，落在纹槽区 → 落针（播放态）
+                  // 旧代码是 +30deg / -10deg，算下来播放时 0.17R（扎在中心标签孔里）、
+                  // 暂停时 1.09R（压在盘缘）——两档正好反了，这就是「针头位置不对」。
+                  transform: isPlaying ? "rotate(8deg)" : "rotate(-18deg)",
                   transition: "transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)",
                 }}
               >

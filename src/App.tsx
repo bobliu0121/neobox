@@ -51,6 +51,7 @@ import {
   AudioSpeedPage,
   VideoConverterPage,
   MkaMuxerPage,
+  CorruptFilePage,
   BilibiliDownloadPage,
   MusicPage,
   preloadMusicPage,
@@ -192,6 +193,9 @@ function MainWindowEffects() {
 function App() {
   const { isStartupComplete } = useAppStartup();
   const location = useLocation();
+  // 启动动画是否已经完全淡出：与「启动任务完成」分开，
+  // 以便在启动很快时仍然播放完整段视频动画（见 SplashScreen 的说明）
+  const [splashFinished, setSplashFinished] = useState(false);
 
   // 独立窗口页同样懒加载：主窗口的启动流程不解析它们，每个窗口只付自己那份 chunk 的代价。
   // fallback 按窗口底色区分——透明窗口不能画 Spinner（见 route-fallback.tsx 的说明）。
@@ -246,7 +250,12 @@ function App() {
     <MusicProvider>
       <>
         <MainWindowEffects />
-        {!isStartupComplete && <SplashScreen />}
+        {/* 启动动画自己决定何时消失：必须「启动完成 && 视频播完」两者都满足。
+            因此这里不在 isStartupComplete 时直接卸载，而是等它淡出结束回调 onFinish。
+            否则启动很快时（<6s）视频会被瞬间切断，看不到完整动画。 */}
+        {!splashFinished && (
+          <SplashScreen startupReady={isStartupComplete} onFinish={() => setSplashFinished(true)} />
+        )}
         {isStartupComplete && <StartupAdHost />}
         <MainLayout>
           {/* 主页常驻挂载：路由切换只隐藏、不卸载，避免每次回到主页重新加载硬件信息与快捷启动 */}
@@ -519,6 +528,12 @@ function App() {
                     path="/mka-muxer"
                     element={
                       <MkaMuxerPage />
+                    }
+                  />
+                  <Route
+                    path="/corrupt-file"
+                    element={
+                      <CorruptFilePage />
                     }
                   />
                   <Route

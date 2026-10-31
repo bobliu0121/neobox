@@ -67,7 +67,8 @@
     "wallpaper": "桌布管理",
     "videoConverter": "影片轉換",
     "mkaMuxer": "MKA 合成",
-    "bilibiliDownload": "B 站下載"
+    "bilibiliDownload": "B 站下載",
+    "corruptFile": "檔案損毀"
   },
   "customPage": {
     "title": "自訂頁面",
@@ -882,7 +883,8 @@
     "screenTestDesc": "檢測顯示器壞點、響應時間、重新整理率與畫面均勻性",
     "videoConverterDesc": "影片轉 GIF 動圖、首幀圖片，或擷取音訊",
     "mkaMuxerDesc": "音訊 + 字幕 + 封面合成為 MKA 檔案",
-    "bilibiliDownloadDesc": "下載 B 站影片或音訊（免登入，最高 480P）"
+    "bilibiliDownloadDesc": "下載 B 站影片或音訊（免登入，最高 480P）",
+    "corruptFileDesc": "對檔案進行可控隨機損毀，用於測試修復工具的容錯能力"
   },
   "timeSync": {
     "title": "時間校正",
@@ -2794,5 +2796,46 @@
     "coverIncluded": "含封面",
     "clear": "清除",
     "hint": "音訊會轉碼為 AAC 寫入 MKA；字幕支援 SRT / VTT / ASS / SSA；封面作為附件儲存。合成後的 MKA 可以在音樂模組直接開啟。"
+  },
+  "corruptFile": {
+    "title": "檔案隨機損毀",
+    "safetyNote": "本工具只讀取原始檔案，結果一律寫入新檔案（原檔名加上 _corrupted 後綴），絕不會修改或覆蓋原始檔案。",
+    "selectInput": "選擇來源檔案",
+    "inputHint": "可直接把任意檔案拖到此頁面（不做類型限制）",
+    "dropHint": "放開即可匯入檔案",
+    "clear": "清除",
+    "scaleTitle": "損毀規模",
+    "byRatio": "按比例",
+    "byBytes": "按位元組數",
+    "bytesUnit": "位元組",
+    "rangeTitle": "損毀範圍（留空表示整個檔案）",
+    "startPlaceholder": "起始偏移",
+    "endPlaceholder": "結束偏移",
+    "rangeHint": "限定範圍可以只破壞檔案局部，模擬磁軌壞塊這類真實故障",
+    "modeTitle": "損毀方式",
+    "modeRandom": "隨機位元組（最接近真實損毀）",
+    "modeZero": "歸零（0x00）",
+    "modeOnes": "置全 1（0xFF）",
+    "seedTitle": "隨機種子",
+    "seedHint": "填入固定數字可讓每次結果完全一致；留空則每次隨機",
+    "seedPlaceholder": "留空 = 每次隨機",
+    "seedInvalid": "種子必須是非負整數",
+    "keepSize": "保持檔案大小不變（只改內容，不插入/刪除位元組）",
+    "run": "開始損毀",
+    "running": "處理中...",
+    "irreversibleHint": "注意：產生的檔案內容已被破壞，無法還原",
+    "reportTitle": "損毀報告",
+    "done": "已產生",
+    "outputPath": "輸出檔案",
+    "fileSize": "檔案大小",
+    "corruptedBytes": "實際損毀位元組",
+    "damagedBlocks": "離散損毀塊",
+    "usedRange": "損毀區間",
+    "usedSeed": "使用種子",
+    "reveal": "在資料夾中顯示",
+    "success": "損毀檔案已產生",
+    "failed": "損毀失敗",
+    "noInput": "請先選擇來源檔案",
+    "estimateSummary": "預計損毀 {bytes} 位元組（佔區間 {percent}%），區間 {start} ~ {end}，檔案總大小 {fileSize}"
   }
 }

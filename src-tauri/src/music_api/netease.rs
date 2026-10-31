@@ -356,64 +356,99 @@ pub async fn song_detail(
 }
 
 /// 获取播放地址 (带音质降级)
+///
+/// # 为什么要并发降档
+///
+/// 旧实现对音质候选**逐个串行请求**：默认音质 hires 时依次尝试
+/// hires → lossless → exhigh → standard，全失败再补一次旧接口，
+/// 最坏情况 5 次网络往返全部排队，用户点播放后要干等好几秒 ——
+/// 这就是「某些平台点击播放有明显延迟」的直接原因。
+///
+/// 实际上这些请求彼此完全独立，而且服务端对同一首歌的音质判定是确定的，
+/// 并发发出后按**优先级顺序**取第一个可用结果即可，语义与串行完全一致，
+/// 但耗时从「各档位相加」降到「最慢的那一档」。
 pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result<SongUrlResult, String> {
-    let client = build_client();
     let candidates = quality_candidates_from(preferred_quality);
+    if candidates.is_empty() {
+        return Ok(SongUrlResult {
+            playable: false,
+            reason: Some("url_unavailable".into()),
+            message: Some("无法获取播放地址，可能需要登录或 VIP".into()),
+            ..Default::default()
+        });
+    }
+
+    // 所有音质档位并发请求。futures_util::future::join_all 保持结果**输出顺序**
+    // 与入参顺序一致，因此下面按 candidates 顺序扫描就等于「从高到低」择优。
+    let futs = candidates.iter().map(|q| {
+        let level = q.level.clone();
+        let id = id.to_string();
+        let cookie = cookie.to_string();
+        async move {
+            let client = build_client();
+            let mut payload = serde_json::Map::new();
+            payload.insert("ids".into(), json!([id]));
+            payload.insert("level".into(), json!(level));
+            payload.insert("encodeType".into(), json!("flac"));
+            payload.insert("csrf_token".into(), json!(""));
+
+            let result = post_weapi(client, "/api/song/enhance/player/url/v1", payload, &cookie).await;
+            (level, result)
+        }
+    });
+    let responses = futures_util::future::join_all(futs).await;
+
     let mut trial_fallback: Option<SongUrlResult> = None;
+    let mut last_reason = String::new();
 
-    for q in &candidates {
-        let level = q.level.as_str();
-        // v1 接口需要 weapi 加密 POST
-        let mut payload = serde_json::Map::new();
-        payload.insert("ids".into(), json!([id]));
-        payload.insert("level".into(), json!(level));
-        payload.insert("encodeType".into(), json!("flac"));
-        payload.insert("csrf_token".into(), json!(""));
+    for (level, result) in responses {
+        let label = candidates
+            .iter()
+            .find(|c| c.level == level)
+            .map(|c| c.label.clone())
+            .unwrap_or_default();
 
-        match post_weapi(&client, "/api/song/enhance/player/url/v1", payload, cookie).await {
-            Ok(result) => {
-                let data = result
-                    .get("data")
-                    .and_then(|d| d.as_array())
-                    .and_then(|arr| arr.first())
-                    .cloned()
-                    .unwrap_or(Value::Null);
+        let Ok(result) = result else {
+            last_reason = "request_failed".into();
+            continue;
+        };
+        let data = result
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .unwrap_or(Value::Null);
 
-                let url = data.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                let free_trial = data.get("freeTrialInfo").is_some();
-                let br = data.get("br").and_then(|b| b.as_u64()).unwrap_or(0);
-                let fee = data.get("fee").and_then(|f| f.as_i64()).map(|n| n as i32);
+        let url = data.get("url").and_then(|u| u.as_str()).unwrap_or("");
+        let free_trial = data.get("freeTrialInfo").is_some();
+        let br = data.get("br").and_then(|b| b.as_u64()).unwrap_or(0);
+        let fee = data.get("fee").and_then(|f| f.as_i64()).map(|n| n as i32);
 
-                if !url.is_empty() && !free_trial {
-                    return Ok(SongUrlResult {
-                        url: Some(url.to_string()),
-                        playable: true,
-                        trial: false,
-                        level: q.level.clone(),
-                        quality: q.label.clone(),
-                        br,
-                        fee,
-                        ..Default::default()
-                    });
-                }
+        if !url.is_empty() && !free_trial {
+            return Ok(SongUrlResult {
+                url: Some(url.to_string()),
+                playable: true,
+                trial: false,
+                level: level.clone(),
+                quality: label,
+                br,
+                fee,
+                ..Default::default()
+            });
+        }
 
-                if !url.is_empty() && free_trial && trial_fallback.is_none() {
-                    trial_fallback = Some(SongUrlResult {
-                        url: Some(url.to_string()),
-                        playable: true,
-                        trial: true,
-                        level: q.level.clone(),
-                        quality: q.label.clone(),
-                        br,
-                        fee,
-                        message: Some("仅试听片段".into()),
-                        ..Default::default()
-                    });
-                }
-            }
-            Err(_e) => {
-                // 继续尝试下一个音质
-            }
+        if !url.is_empty() && free_trial && trial_fallback.is_none() {
+            trial_fallback = Some(SongUrlResult {
+                url: Some(url.to_string()),
+                playable: true,
+                trial: true,
+                level: level.clone(),
+                quality: label,
+                br,
+                fee,
+                message: Some("仅试听片段".into()),
+                ..Default::default()
+            });
         }
     }
 
@@ -423,11 +458,12 @@ pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result
 
     // VIP 歌曲无法获取完整 URL：尝试旧版接口（/api/song/enhance/player/url），
     // 旧版接口对未登录用户有时返回标准音质完整 URL（128k）。
+    let client = build_client();
     let mut payload = serde_json::Map::new();
     payload.insert("ids".into(), json!([id]));
     payload.insert("br".into(), json!(128000));
     payload.insert("csrf_token".into(), json!(""));
-    if let Ok(result) = post_weapi(&client, "/api/song/enhance/player/url", payload, cookie).await {
+    if let Ok(result) = post_weapi(client, "/api/song/enhance/player/url", payload, cookie).await {
         let data = result
             .get("data")
             .and_then(|d| d.as_array())
@@ -451,7 +487,7 @@ pub async fn song_url(id: &str, preferred_quality: &str, cookie: &str) -> Result
 
     Ok(SongUrlResult {
         playable: false,
-        reason: Some("url_unavailable".into()),
+        reason: Some(if last_reason.is_empty() { "url_unavailable".into() } else { last_reason }),
         message: Some("无法获取播放地址，可能需要登录或 VIP".into()),
         ..Default::default()
     })
