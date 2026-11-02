@@ -1,7 +1,30 @@
 # NeoBox
 
-> Windows 桌面工具箱 · 硬件监控 / 系统优化 / 桌面工具<br>
-> 当前版本：**v1.3.1** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
+<p align="center">
+  <img src="docs/images/logo.png" alt="NeoBox" width="128" height="128">
+</p>
+
+<p align="center">
+  <b>Windows 桌面工具箱 · 硬件监控 / 系统优化 / 桌面工具</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/bobliu0121/neobox/releases"><img src="https://img.shields.io/github/v/release/bobliu0121/neobox?style=flat-square&label=release&color=4B8BD6" alt="Release"></a>
+  <a href="https://github.com/bobliu0121/neobox/stargazers"><img src="https://img.shields.io/github/stars/bobliu0121/neobox?style=flat-square&color=4B8BD6" alt="Stars"></a>
+  <a href="https://github.com/bobliu0121/neobox/issues"><img src="https://img.shields.io/github/issues/bobliu0121/neobox?style=flat-square" alt="Issues"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/bobliu0121/neobox?style=flat-square&color=4B8BD6" alt="License"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React 19">
+  <img src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/i18n-zh%20%2F%20zh--TW%20%2F%20en-4B8BD6?style=flat-square" alt="i18n">
+</p>
+
+> 当前版本：**v1.3.2** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
 
 NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所有功能均在本地运行，把常用的系统监控、维护和桌面增强能力整合到一个轻量界面里，不依赖云端账号。
 
@@ -9,6 +32,31 @@ NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所�
 - 仓库：[bobliu0121/neobox](https://github.com/bobliu0121/neobox)
 - 问题反馈：[GitHub Issues](https://github.com/bobliu0121/neobox/issues)
 - 作者 QQ：3954720009
+
+## 软件展示
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/wallpaper.webp" alt="壁纸功能" width="100%"><br>
+      <sub><b>壁纸管理</b> · 文件夹持久化 / 缩略图预览 / GIF 与 HTML 动态壁纸</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/search.webp" alt="文件搜索" width="100%"><br>
+      <sub><b>文件搜索</b> · MFT 索引 / 整盘秒搜 / 格式筛选 / 四种排序</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/music.webp" alt="音乐中心" width="100%"><br>
+      <sub><b>音乐中心</b> · 多平台搜索播放 / 歌词点击跳转 / 高潮点标记</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/tools.webp" alt="内置工具" width="100%"><br>
+      <sub><b>内置工具</b> · 运行库修复 / 驱动安装 / 格式转换 / 文件损坏测试</sub>
+    </td>
+  </tr>
+</table>
 
 ## 功能
 

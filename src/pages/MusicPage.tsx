@@ -102,6 +102,7 @@ import { MusicLoginSection } from "@/components/MusicLoginSection";
 import { useBackground } from "@/contexts/background-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { buildKaraokeLines } from "@/lib/karaoke-lyrics";
+import { detectHighlights, getCachedHighlights } from "@/lib/music-highlights";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { KaraokeLyricsView } from "@/components/KaraokeLyricsView";
@@ -379,17 +380,58 @@ const ProgressSection = memo(function ProgressSection({
   sliderTrackBg,
   audioRef,
   currentSongId,
+  currentSong,
 }: {
   activeColor: string;
   subTextColor: string;
   sliderTrackBg: string;
   audioRef: HTMLAudioElement | null;
   currentSongId?: string | number;
+  /** 完整曲目对象；用于高潮点分析（缺省时进度条不渲染标记点） */
+  currentSong?: Song | null;
 }) {
   const [localCurrentTime, setLocalCurrentTime] = useState(0);
   const [localDuration, setLocalDuration] = useState(0);
   const isUserSeekingRef = useRef(false);
   const pendingSeekRef = useRef(0);
+  // 高潮点（0~1 归一化位置）
+  const [highlights, setHighlights] = useState<number[]>([]);
+
+  /** 高潮点分析（与 PlayerProgress 内逻辑一致，独立于播放链路） */
+  useEffect(() => {
+    const song = currentSong;
+    if (!song || !audioRef) {
+      setHighlights([]);
+      return;
+    }
+    const key = `${song.provider}:${song.id}`;
+    const cachedHit = getCachedHighlights(key);
+    if (cachedHit) {
+      setHighlights(cachedHit);
+      return;
+    }
+
+    let cancelled = false;
+    const run = () => {
+      const url = audioRef.src;
+      if (!url || url === window.location.href) return;
+      void detectHighlights(key, url).then((result) => {
+        if (!cancelled) setHighlights(result);
+      });
+    };
+    if (audioRef.src && audioRef.readyState >= 1) {
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }
+    setHighlights([]);
+    audioRef.addEventListener("loadedmetadata", run, { once: true });
+    return () => {
+      cancelled = true;
+      audioRef.removeEventListener("loadedmetadata", run);
+    };
+  }, [currentSong, audioRef]);
 
   // 切歌时重置
   useEffect(() => {
@@ -444,30 +486,60 @@ const ProgressSection = memo(function ProgressSection({
       <Text color={subTextColor} fontSize="xs" w="45px" textAlign="center">
         {formatTime(localCurrentTime)}
       </Text>
-      <Box
-        as="input"
-        type="range"
-        min={0}
-        max={localDuration || 100}
-        step={0.1}
-        value={localCurrentTime}
-        onMouseDown={() => { isUserSeekingRef.current = true; }}
-        onTouchStart={() => { isUserSeekingRef.current = true; }}
-        onChange={(e) => handleSeekDrag(parseFloat((e.target as HTMLInputElement).value))}
-        onMouseUp={handleSeekCommit}
-        onTouchEnd={handleSeekCommit}
-        tabIndex={-1}
-        aria-hidden="true"
-        flex={1}
-        style={sliderBgStyle(activeColor, localDuration ? (localCurrentTime / localDuration) * 100 : 0, sliderTrackBg)}
-        sx={{
-          ...rangeSliderSx,
-          "&::-webkit-slider-thumb": { ...rangeSliderSx["&::-webkit-slider-thumb"], background: activeColor },
-          "&::-moz-range-thumb": { ...rangeSliderSx["&::-moz-range-thumb"], background: activeColor },
-          "&::-webkit-slider-runnable-track": { ...rangeSliderSx["&::-webkit-slider-runnable-track"], background: "transparent" },
-          "&::-moz-range-track": { ...rangeSliderSx["&::-moz-range-track"], background: "transparent" },
-        }}
-      />
+      <Box position="relative" flex={1} display="flex" alignItems="center">
+        {/* 高潮点标记：半透明小圆点叠在进度条上，pointerEvents none 保证不影响拖动 */}
+        {highlights.length > 0 && (
+          <Box
+            position="absolute"
+            left={0}
+            right={0}
+            top="50%"
+            h="0"
+            pointerEvents="none"
+            zIndex={2}
+          >
+            {highlights.map((ratio, i) => (
+              <Box
+                key={i}
+                position="absolute"
+                left={`${ratio * 100}%`}
+                top={0}
+                w="6px"
+                h="6px"
+                borderRadius="full"
+                bg={activeColor}
+                opacity={0.55}
+                transform="translate(-50%, -50%)"
+              />
+            ))}
+          </Box>
+        )}
+        <Box
+          as="input"
+          type="range"
+          min={0}
+          max={localDuration || 100}
+          step={0.1}
+          value={localCurrentTime}
+          onMouseDown={() => { isUserSeekingRef.current = true; }}
+          onTouchStart={() => { isUserSeekingRef.current = true; }}
+          onChange={(e) => handleSeekDrag(parseFloat((e.target as HTMLInputElement).value))}
+          onMouseUp={handleSeekCommit}
+          onTouchEnd={handleSeekCommit}
+          tabIndex={-1}
+          aria-hidden="true"
+          flex={1}
+          w="100%"
+          style={sliderBgStyle(activeColor, localDuration ? (localCurrentTime / localDuration) * 100 : 0, sliderTrackBg)}
+          sx={{
+            ...rangeSliderSx,
+            "&::-webkit-slider-thumb": { ...rangeSliderSx["&::-webkit-slider-thumb"], background: activeColor },
+            "&::-moz-range-thumb": { ...rangeSliderSx["&::-moz-range-thumb"], background: activeColor },
+            "&::-webkit-slider-runnable-track": { ...rangeSliderSx["&::-webkit-slider-runnable-track"], background: "transparent" },
+            "&::-moz-range-track": { ...rangeSliderSx["&::-moz-range-track"], background: "transparent" },
+          }}
+        />
+      </Box>
       <Text color={subTextColor} fontSize="xs" w="45px" textAlign="center">
         {formatTime(localDuration)}
       </Text>
@@ -1017,6 +1089,19 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
   const karaokeLines = useMemo(() => {
     return buildKaraokeLines(currentLyrics);
   }, [currentLyrics]);
+
+  /**
+   * 点击歌词行跳转到该行时间点（对齐网易云客户端交互）。
+   *
+   * 直接复用 store 的 seekTo，与进度条拖动走同一路径，避免出现
+   * 「歌词跳转」和「进度条跳转」两套不一致的逻辑。
+   * 沉浸视图不传此回调（保持纯展示），黑胶/封面/标准面板均可点击。
+   */
+  const handleLyricSeek = useCallback((time: number) => {
+    if (!Number.isFinite(time) || time < 0) return;
+    useMusicStore.getState().seekTo(time);
+    console.info(`[Lyrics] 点击歌词跳转到 ${time.toFixed(2)}s`);
+  }, []);
   // 本地歌曲是否有歌词：仅当歌词已为该歌曲加载完成（currentLyricsSongId 匹配）且
   // 解析出带时间轴的内容时才显示歌词面板；否则维持旧的居中封面布局
   const hasLocalLyrics =
@@ -1256,6 +1341,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
             maxHeight="100%"
             align="left"
             lineScale={false}
+            onSeekToLine={handleLyricSeek}
           />
         </Box>
       ) : isCover ? (
@@ -1303,6 +1389,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
             maxHeight="100%"
             align="left"
             lineScale={false}
+            onSeekToLine={handleLyricSeek}
           />
         </Box>
       ) : (
@@ -1612,6 +1699,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
               scrollbarSx={memoScrollbarSx}
               audioRef={audioRef}
               isPlaying={isPlaying}
+              onSeekToLine={handleLyricSeek}
             />
           ) : (
             <CommentPanel
@@ -2079,6 +2167,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
           sliderTrackBg={sliderTrackBg}
           audioRef={audioRef}
           currentSongId={currentSong.id}
+          currentSong={currentSong}
         />
       </VStack>
     </Box>
@@ -2126,6 +2215,57 @@ const PlayerProgress = memo(function PlayerProgress({
   const [localDuration, setLocalDuration] = useState(0);
   const isUserSeekingRef = useRef(false);
   const pendingSeekRef = useRef(0);
+  // 高潮点（0~1 归一化位置，用于在进度条上渲染标记点）
+  const [highlights, setHighlights] = useState<number[]>([]);
+
+  /**
+   * 切歌后异步分析本曲高潮点。
+   *
+   * 只在有曲目且 audio 已挂上可访问地址时触发一次；分析走独立的
+   * fetch + OfflineAudioContext（不接管播放链路，详见 lib/music-highlights.ts）。
+   * 任何失败都返回空数组，进度条退回普通样式。
+   *
+   * 音频地址直接取 audioRef.src：那是播放中的真实代理地址（127.0.0.1:{port}/audio），
+   * 同源无 CORS 问题，且本地歌曲（blob:/convertFileSrc）同样可直接 fetch。
+   */
+  useEffect(() => {
+    const song = currentSong;
+    if (!song || !audioRef) {
+      setHighlights([]);
+      return;
+    }
+    const key = `${song.provider}:${song.id}`;
+    // 已缓存则直接用（切回同一首歌不重复分析）
+    const cachedHit = getCachedHighlights(key);
+    if (cachedHit) {
+      setHighlights(cachedHit);
+      return;
+    }
+
+    let cancelled = false;
+    const run = () => {
+      const url = audioRef.src;
+      // src 尚未挂上（还在取址）时不分析，交给下一次事件
+      if (!url || url === window.location.href) return;
+      void detectHighlights(key, url).then((result) => {
+        if (!cancelled) setHighlights(result);
+      });
+    };
+
+    // audio 可能尚未设置 src，等 loadedmetadata 再分析
+    if (audioRef.src && audioRef.readyState >= 1) {
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }
+    setHighlights([]);
+    audioRef.addEventListener("loadedmetadata", run, { once: true });
+    return () => {
+      cancelled = true;
+      audioRef.removeEventListener("loadedmetadata", run);
+    };
+  }, [currentSong, audioRef]);
 
   useEffect(() => {
     setLocalDuration(storeDuration);
@@ -2180,30 +2320,60 @@ const PlayerProgress = memo(function PlayerProgress({
       <Text color={subTextColor} fontSize="xs" w="40px" textAlign="center">
         {formatTime(localCurrentTime)}
       </Text>
-      <Box
-        as="input"
-        type="range"
-        min={0}
-        max={localDuration || 100}
-        step={0.1}
-        value={localCurrentTime}
-        onMouseDown={() => { isUserSeekingRef.current = true; }}
-        onTouchStart={() => { isUserSeekingRef.current = true; }}
-        onChange={(e) => handleSeekDrag(parseFloat((e.target as HTMLInputElement).value))}
-        onMouseUp={handleSeekCommit}
-        onTouchEnd={handleSeekCommit}
-        tabIndex={-1}
-        aria-hidden="true"
-        flex={1}
-        style={sliderBgStyle(activeColor, localDuration ? (localCurrentTime / localDuration) * 100 : 0, sliderTrackBg)}
-        sx={{
-          ...rangeSliderSx,
-          "&::-webkit-slider-thumb": { ...rangeSliderSx["&::-webkit-slider-thumb"], background: activeColor },
-          "&::-moz-range-thumb": { ...rangeSliderSx["&::-moz-range-thumb"], background: activeColor },
-          "&::-webkit-slider-runnable-track": { ...rangeSliderSx["&::-webkit-slider-runnable-track"], background: "transparent" },
-          "&::-moz-range-track": { ...rangeSliderSx["&::-moz-range-track"], background: "transparent" },
-        }}
-      />
+      <Box position="relative" flex={1} display="flex" alignItems="center">
+        {/* 高潮点标记：半透明小圆点叠在进度条上，pointerEvents none 保证不影响拖动 */}
+        {highlights.length > 0 && (
+          <Box
+            position="absolute"
+            left={0}
+            right={0}
+            top="50%"
+            h="0"
+            pointerEvents="none"
+            zIndex={2}
+          >
+            {highlights.map((ratio, i) => (
+              <Box
+                key={i}
+                position="absolute"
+                left={`${ratio * 100}%`}
+                top={0}
+                w="6px"
+                h="6px"
+                borderRadius="full"
+                bg={activeColor}
+                opacity={0.55}
+                transform="translate(-50%, -50%)"
+              />
+            ))}
+          </Box>
+        )}
+        <Box
+          as="input"
+          type="range"
+          min={0}
+          max={localDuration || 100}
+          step={0.1}
+          value={localCurrentTime}
+          onMouseDown={() => { isUserSeekingRef.current = true; }}
+          onTouchStart={() => { isUserSeekingRef.current = true; }}
+          onChange={(e) => handleSeekDrag(parseFloat((e.target as HTMLInputElement).value))}
+          onMouseUp={handleSeekCommit}
+          onTouchEnd={handleSeekCommit}
+          tabIndex={-1}
+          aria-hidden="true"
+          flex={1}
+          w="100%"
+          style={sliderBgStyle(activeColor, localDuration ? (localCurrentTime / localDuration) * 100 : 0, sliderTrackBg)}
+          sx={{
+            ...rangeSliderSx,
+            "&::-webkit-slider-thumb": { ...rangeSliderSx["&::-webkit-slider-thumb"], background: activeColor },
+            "&::-moz-range-thumb": { ...rangeSliderSx["&::-moz-range-thumb"], background: activeColor },
+            "&::-webkit-slider-runnable-track": { ...rangeSliderSx["&::-webkit-slider-runnable-track"], background: "transparent" },
+            "&::-moz-range-track": { ...rangeSliderSx["&::-moz-range-track"], background: "transparent" },
+          }}
+        />
+      </Box>
       <Text color={subTextColor} fontSize="xs" w="40px" textAlign="center">
         {formatTime(localDuration)}
       </Text>

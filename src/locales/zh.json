@@ -1152,6 +1152,8 @@
       "splashLogoLabel": "启动动画 Logo",
       "splashLogoDesc": "自定义启动动画中显示的 Logo 图片",
       "splashLogoReset": "恢复默认",
+      "splashSoundLabel": "启动动画声音",
+      "splashSoundDesc": "启动时播放动画自带的声音（默认关闭）",
       "features": "功能",
       "advanced": "高级",
       "discoveryPage": "发现页",

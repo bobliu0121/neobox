@@ -46,6 +46,11 @@ interface KaraokeLyricsViewProps {
   align?: "center" | "left";
   /** 当前行是否放大强调（scale 1.02），默认开启；透明彩胶等只要卡拉OK效果的场景传 false */
   lineScale?: boolean;
+  /**
+   * 点击歌词行回调（传入该行起始时间，秒）。
+   * 传 undefined 时歌词为只读（沉浸视图等不需要跳转的场景）。
+   */
+  onSeekToLine?: (time: number) => void;
 }
 
 /**
@@ -75,6 +80,7 @@ function KaraokeLyricsViewInner({
   maxHeight = "65vh",
   align = "center",
   lineScale = true,
+  onSeekToLine,
 }: KaraokeLyricsViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -210,12 +216,19 @@ function KaraokeLyricsViewInner({
         <VStack spacing={3} align="stretch">
           {lines.map((line, idx) => {
             const isActive = idx === activeIndex;
+            const clickable = Boolean(onSeekToLine);
             return (
               <Box
                 key={idx}
                 data-lyric-idx={idx}
                 py={1}
                 flexShrink={0}
+                // 点击跳转：点某行歌词即跳到该行时间点（与网易云客户端一致）
+                onClick={clickable ? () => onSeekToLine?.(line.time) : undefined}
+                cursor={clickable ? "pointer" : undefined}
+                role={clickable ? "button" : undefined}
+                title={clickable ? "跳转到此处" : undefined}
+                _hover={clickable ? { opacity: isActive ? 1 : 0.78 } : undefined}
                 sx={{
                   transition: "opacity 0.3s ease",
                   opacity: isActive ? 1 : 0.55,

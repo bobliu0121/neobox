@@ -1326,6 +1326,8 @@
       "splashLogoLabel": "Splash Logo",
       "splashLogoDesc": "Customize the logo image shown during startup",
       "splashLogoReset": "Reset to Default",
+      "splashSoundLabel": "Splash Sound",
+      "splashSoundDesc": "Play the startup animation's built-in audio (off by default)",
       "features": "Features",
       "advanced": "Advanced",
       "discoveryPage": "Discovery Page",

@@ -9,6 +9,18 @@ const STARTUP_VIDEO = "/splash/startup.mp4";
 /** 无自定义 LOGO 时的回退静态图 */
 const DEFAULT_LOGO = "/logo/NeoBoxIcon.png";
 
+/** 启动动画是否播放声音的存储键（默认 false = 静音，符合"默认不播放"的要求） */
+export const SPLASH_SOUND_KEY = "neobox_splash_sound_enabled";
+
+/** 读取启动动画声音开关（默认关闭） */
+export function getSplashSoundEnabled(): boolean {
+  try {
+    return localStorage.getItem(SPLASH_SOUND_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 启动画面：全屏视频动画 + 叠加渲染进度条。
  *
@@ -122,22 +134,54 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
     })();
   }, []);
 
+  // 启动动画是否播放声音（默认关闭）。挂在 ref 上供播放 effect 读取，
+  // 避免把 state 依赖带进 play effect 导致重复播放。
+  const soundEnabledRef = useRef<boolean>(getSplashSoundEnabled());
+
   // 启动播放：显式 play() 并把错误吞掉（回退由 videoReady/videoEnded 控制）
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+
+    const soundEnabled = soundEnabledRef.current;
+    // 静音策略必须在 play() 之前设置：带声音的自动播放在 WebView2 中
+    // 可能被拦截，而静音自动播放始终允许。
+    v.muted = !soundEnabled;
+    console.info(`[Splash] 声音设置 soundEnabled=${soundEnabled} -> video.muted=${v.muted}`);
+
     // 从视频开头播放，保证每次启动都完整呈现
     try {
       v.currentTime = 0;
     } catch {
       /* ignore */
     }
-    void v.play().catch((e) => {
-      // 自动播放被拦截：标记失败并回退到静态 LOGO 分支，
-      // 避免「等视频播完」永远等不到而卡住启动画面
-      console.warn("[Splash] video play failed:", e);
-      setVideoFailed(true);
-    });
+
+    const tryPlay = async () => {
+      try {
+        await v.play();
+        return;
+      } catch (e) {
+        // 带声音被拦截 → 降级为静音再播，仍完整播放动画，
+        // 而不是直接判定失败退到静态 LOGO（那样会丢失动画）。
+        if (soundEnabled) {
+          console.warn("[Splash] 带声音自动播放被拦截，降级为静音:", e);
+          v.muted = true;
+          try {
+            await v.play();
+            return;
+          } catch (e2) {
+            console.warn("[Splash] 降级静音后仍失败:", e2);
+          }
+        } else {
+          console.warn("[Splash] video play failed:", e);
+        }
+        // 彻底无法播放：标记失败并回退到静态 LOGO 分支，
+        // 避免「等视频播完」永远等不到而卡住启动画面
+        setVideoFailed(true);
+      }
+    };
+
+    void tryPlay();
   }, []);
 
   return (
@@ -163,7 +207,9 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
       <video
         ref={videoRef}
         src={STARTUP_VIDEO}
-        // 静音开关交由系统策略：conf 已放开 autoplay 限制，这里不强制 muted
+        // 声音由设置项「启动动画声音」控制（默认静音）；
+        // 实际 muted 在 play effect 中按设置值设置，若带声音被拦截会自动降级静音
+        muted
         autoPlay
         playsInline
         preload="auto"

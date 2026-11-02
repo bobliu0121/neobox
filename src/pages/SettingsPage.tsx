@@ -78,6 +78,7 @@ import { useSearchParams } from "react-router-dom";
 import { useUpdate } from "@/contexts/update-context";
 import { HotkeyRecorder } from "@/components/hotkey-recorder";
 import { MouseHotkeyRecorder } from "@/components/mouse-hotkey-recorder";
+import { SPLASH_SOUND_KEY } from "@/components/SplashScreen";
 import { useAppStartup } from "@/contexts/app-startup-context";
 import {
   DndContext,
@@ -206,6 +207,14 @@ function GeneralSettings() {
   const [randomImageEnabled, setRandomImageEnabled] = useState(true);
   const [homeUsername, setHomeUsername] = useState("");
   const [splashLogo, setSplashLogo] = useState<string | null>(null);
+  // 启动动画是否播放声音（默认关闭，符合"默认不播放"要求）
+  const [splashSoundEnabled, setSplashSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SPLASH_SOUND_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [closeBehavior, setCloseBehavior] = useState<string>(() => {
     return localStorage.getItem("neobox_close_behavior") || "ask";
   });
@@ -550,6 +559,25 @@ function GeneralSettings() {
     setSplashLogo(null);
     localStorage.removeItem("neobox_splash_logo");
     store.delete("neobox_splash_logo").then(() => store.save());
+  };
+
+  /**
+   * 启动动画声音开关。
+   *
+   * 默认关闭（localStorage 无该键或非 "true" 时都视为静音）。
+   * 启动画面在**下一次启动**时读取该值并作用于 <video>，
+   * 因此这里不需要广播事件去影响当前正在播放的动画。
+   */
+  const handleSplashSoundToggle = () => {
+    const newValue = !splashSoundEnabled;
+    setSplashSoundEnabled(newValue);
+    try {
+      localStorage.setItem(SPLASH_SOUND_KEY, String(newValue));
+    } catch {
+      /* ignore */
+    }
+    store.set(SPLASH_SOUND_KEY, newValue).then(() => store.save());
+    console.info(`[SplashSound] toggled -> ${newValue} (生效于下次启动)`);
   };
 
   const handleCloseBehaviorChange = (value: string) => {
@@ -1014,6 +1042,23 @@ function GeneralSettings() {
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
               </Box>
+            </HStack>
+            {/* 启动动画声音开关：紧接 LOGO 设置下方，默认关闭 */}
+            <Divider />
+            <HStack justify="space-between" align="center" py={2} minH="50px">
+              <Box flex={1}>
+                <Text fontSize="sm" color={labelColor} fontWeight="medium">
+                  {t("settings.generalSettings.splashSoundLabel")}
+                </Text>
+                <Text fontSize="xs" color={subLabelColor} mt={0.5}>
+                  {t("settings.generalSettings.splashSoundDesc")}
+                </Text>
+              </Box>
+              <ThemeSwitch
+                size="md"
+                isChecked={splashSoundEnabled}
+                onChange={handleSplashSoundToggle}
+              />
             </HStack>
             <Divider />
           </VStack>
@@ -2606,7 +2651,7 @@ function AboutSettings() {
       } catch (e) {
         // 拿不到就回退到包版本，至少不会显示空白
         console.error("读取应用版本失败:", e);
-        if (!cancelled) setCurrentVersion("1.3.1");
+        if (!cancelled) setCurrentVersion("1.3.2");
       }
     })();
     return () => {

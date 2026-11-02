@@ -1054,6 +1054,8 @@
       "splashLogoLabel": "啟動動畫 Logo",
       "splashLogoDesc": "自訂啟動動畫中顯示的 Logo 圖片",
       "splashLogoReset": "恢復預設",
+      "splashSoundLabel": "啟動動畫聲音",
+      "splashSoundDesc": "啟動時播放動畫自帶的聲音（預設關閉）",
       "features": "功能",
       "advanced": "進階",
       "discoveryPage": "探索頁",
