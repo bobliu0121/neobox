@@ -265,7 +265,7 @@ async fn preview_handler() -> axum::response::Response {
     }
 
     // 需要重建：杀掉旧进程，用保存的参数起一路新的
-    let stdout: std::process::ChildStdout = if need_rebuild {
+    let mut stdout: std::process::ChildStdout = if need_rebuild {
         // 先释放旧进程（它的 stdout 已被前一个客户端读完）
         {
             if let Ok(mut g) = PREVIEW_CHILD.lock() {
@@ -313,18 +313,37 @@ async fn preview_handler() -> axum::response::Response {
         }
     };
 
-    // 用阻塞读 + 异步包装简单直接：ffmpeg 输出是持续的字节流
-    let body = Body::from_stream(futures_util::stream::unfold(stdout, |mut out| async move {
+    // ── 用 spawn_blocking 读管道，避免阻塞 tokio worker ──
+    //
+    // `ChildStdout::read` 是**阻塞**调用。若直接在 async 流里 read，
+    // 每路预览都会长期占住一个 tokio worker 线程（预览是持续不断的流，
+    // 意味着该线程永远回不到池里），多开几路就会把运行时饿死，
+    // 表现为整个应用的其它 IPC 命令都卡顿。
+    // 这里改成：阻塞读放在 spawn_blocking 里，通过 channel 把数据交给
+    // 异步流。通道有界（容量 8），慢客户端不会让内存无限增长。
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(8);
+
+    tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8192];
         loop {
-            match out.read(&mut buf) {
-                Ok(0) => return None,
-                Ok(n) => return Some((Ok::<_, std::io::Error>(Vec::from(&buf[..n])), out)),
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    // blocking_send：等异步侧取走，天然形成背压
+                    if tx.blocking_send(Ok(Vec::from(&buf[..n]))).is_err() {
+                        break; // 客户端已断开
+                    }
+                }
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Some((Err(e), out)),
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
             }
         }
-    }));
+    });
+
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
 
     let mut resp = axum::response::Response::new(body);
     let headers = resp.headers_mut();
