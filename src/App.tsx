@@ -40,6 +40,7 @@ import {
   SpeedTestPage,
   CustomPage,
   NvidiaRecordingPage,
+  RecordingPage,
   TimeSyncPage,
   ScreenTestPage,
   WallpaperPage,
@@ -474,6 +475,12 @@ function App() {
                     path="/nvidia-recording"
                     element={
                       <NvidiaRecordingPage />
+                    }
+                  />
+                  <Route
+                    path="/recording"
+                    element={
+                      <RecordingPage />
                     }
                   />
                   <Route

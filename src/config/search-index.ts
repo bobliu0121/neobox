@@ -146,6 +146,14 @@ export const searchIndex: SearchItem[] = [
     keywords: ["EQ", "调音", "均衡器", "音频", "声卡", "equalizer", "audio", "fxsound", "音效"],
   },
   {
+    id: "recording",
+    nameKey: "sidebar.recording",
+    path: "/recording",
+    icon: Video,
+    category: "builtin-tool",
+    keywords: ["录制", "录屏", "采集", "屏幕录制", "摄像头", "麦克风", "obs", "recording", "capture", "screen", "webcam", "microphone"],
+  },
+  {
     id: "nvidia-recording",
     nameKey: "sidebar.nvidiaRecording",
     path: "/nvidia-recording",

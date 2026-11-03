@@ -1,5 +1,5 @@
 import { Box as ChakraBox, Flex, IconButton, Text, useColorModeValue, Badge, Image, useColorMode } from "@chakra-ui/react";
-import { Home, Search, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Images } from "lucide-react";
+import { Home, Search, Settings, Settings2, Cpu, TrendingUp, Package, Music, LayoutGrid, Images, Video } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useBackground } from "@/contexts/background-context";
@@ -383,6 +383,7 @@ export function Sidebar() {
     { path: "/builtin-tools", icon: Package, ariaLabel: t("sidebar.builtinTools") },
     { path: "/wallpaper", icon: Images, ariaLabel: t("sidebar.wallpaper") },
     { path: "/music", icon: Music, ariaLabel: t("sidebar.music") },
+    { path: "/recording", icon: Video, ariaLabel: t("sidebar.recording") },
     { path: "/search", icon: Search, ariaLabel: t("sidebar.search") },
     { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
     { path: "/optimization", icon: TrendingUp, ariaLabel: t("sidebar.optimization") },

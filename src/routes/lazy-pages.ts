@@ -47,6 +47,7 @@ export const CpuSchedulerPage = lazy(() => import("@/pages/CpuSchedulerPage"));
 export const SpeedTestPage = lazy(() => import("@/pages/SpeedTestPage"));
 export const CustomPage = lazy(() => import("@/pages/CustomPage"));
 export const NvidiaRecordingPage = lazy(() => import("@/pages/NvidiaRecordingPage"));
+export const RecordingPage = lazy(() => import("@/pages/RecordingPage"));
 export const TimeSyncPage = lazy(() => import("@/pages/TimeSyncPage"));
 export const ScreenTestPage = lazy(() => import("@/pages/ScreenTestPage"));
 export const WallpaperPage = lazy(() => import("@/pages/WallpaperPage"));
@@ -115,6 +116,7 @@ const ROUTE_PRELOADERS: Record<string, () => Promise<unknown>> = {
   "/context-menu": () => import("@/pages/ContextMenuManagerPage"),
   "/download-accelerator": () => import("@/pages/DownloadAcceleratorPage"),
   "/nvidia-recording": () => import("@/pages/NvidiaRecordingPage"),
+  "/recording": () => import("@/pages/RecordingPage"),
   "/time-sync": () => import("@/pages/TimeSyncPage"),
   "/screen-test": () => import("@/pages/ScreenTestPage"),
   "/bsod-log": () => import("@/pages/BsodLogPage"),

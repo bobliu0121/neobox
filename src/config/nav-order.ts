@@ -9,6 +9,7 @@ export const DEFAULT_NAV_ORDER = [
   "/builtin-tools",
   "/wallpaper",
   "/music",
+  "/recording",
   "/search",
   "/hardware",
   "/optimization",

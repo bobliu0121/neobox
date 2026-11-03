@@ -37,6 +37,7 @@ mod network_optimize;
 mod netease_lyrics;
 mod nvapi;
 mod nvidia_recording;
+mod recorder;
 mod runtime_repair;
 mod optimization;
 mod overlay_panel;
@@ -958,6 +959,19 @@ pub fn run() {
         nvidia_recording::get_video_thumbnails,
         nvidia_recording::open_video_with_system_player,
         nvidia_recording::reveal_video_in_explorer,
+        // === 录制 / 采集（类 OBS）===
+        recorder::recorder_probe,
+        recorder::recorder_list_devices,
+        recorder::recorder_get_config,
+        recorder::recorder_save_config,
+        recorder::recorder_start,
+        recorder::recorder_stop,
+        recorder::recorder_status,
+        recorder::recorder_list_files,
+        recorder::recorder_delete_file,
+        recorder::recorder_open_file,
+        recorder::recorder_reveal_file,
+        recorder::recorder_probe_duration,
         // === 运行库补全/修复 ===
         runtime_repair::get_runtime_statuses,
         runtime_repair::repair_runtime,
@@ -1139,6 +1153,9 @@ pub fn run() {
                 hotkey::cleanup(app_handle);
                 nvapi::cleanup();
                 hardware_report::stop_recording();
+                // 退出时若仍在录制，优雅收尾让 mp4 的 moov 正常写入，
+                // 否则残留的 ffmpeg 进程会留下不可播放的残缺文件
+                recorder::cleanup_on_exit();
                 // 兜底：ExitRequested 被其他逻辑跳过时（如进程被优雅终止），
                 // 这里再保证一次壁纸窗口已销毁、系统壁纸已恢复。
                 // 该函数幂等，已清理过不会重复触发重绘。
