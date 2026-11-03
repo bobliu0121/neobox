@@ -4513,6 +4513,10 @@ export default function MusicPage() {
       let recoveredSongId = "";
       audio.addEventListener("error", async () => {
         if (recovering) return;
+        // 清源副作用过滤：clearAudioSource 会 removeAttribute("src") 后 load()，
+        // 正常不派发 error；这里再用 currentSrc 兜一层，避免把「无真实资源」
+        // 的 error 当成坏地址而触发 playSong 重入（坏地址会形成重取址死循环）。
+        if (!audio.currentSrc) return;
         const state = useMusicStore.getState();
         if (!state.currentSong || !state.isPlaying) return;
         const songKey = `${state.currentSong.provider}-${state.currentSong.id}`;

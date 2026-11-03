@@ -647,6 +647,35 @@ function onSmtcEnded() {
 }
 
 /**
+ * 清空 <audio> 的音频源（切歌前调用）。
+ *
+ * # 为什么不能用 `audio.src = ""`
+ *
+ * 实测（Chromium / WebView2）：把 `src` 赋为空字符串后
+ *   - `audio.src` getter 并不返回空串，而是返回**解析后的文档 URL**
+ *     （例如 `file:///.../index.html`、`http://127.0.0.1:3000/`），
+ *     所以任何 `if (!audio.src)` 之类的判断都会失效；
+ *   - 赋值本身会**立即派发一次 `error` 事件**，`error.code === 4`
+ *     （MEDIA_ELEMENT_ERROR: Empty src attribute）。
+ *
+ * 这两点叠加会制造「假播放失败」：切歌时的正常清源被 error 监听器当成真实失败，
+ * 于是提示「音频格式不受支持或链接已失效」并触发 `nextTrack()`，
+ * 而 `nextTrack()` 又会清源 → 再次假 error …… 形成连环误跳。
+ * 队列只有一首时不会 `nextTrack`，所以表现为「单曲正常、播放列表全部失败」。
+ *
+ * `removeAttribute("src")` + `load()` 不产生 error 事件（已实测验证），
+ * 是规范推荐的卸载资源方式。
+ */
+function clearAudioSource(audio: HTMLAudioElement | null) {
+  if (!audio) return;
+  audio.pause();
+  audio.removeAttribute("src");
+  // load() 会把 networkState 复位为 NETWORK_EMPTY 并中止进行中的加载，
+  // 不带 src 调用是安全的（不会产生 error）。
+  audio.load();
+}
+
+/**
  * 音频元素播放失败兜底。
  *
  * 为什么必须监听 `error`：`playSong` 里 `await audio.play()` 成功只代表
@@ -658,9 +687,17 @@ function onSmtcEnded() {
 function onAudioError() {
   const audio = smtcBoundAudio;
   const st = useMusicStore.getState();
-  // 切歌时旧 src 会先被清空（audio.src = ""），这会触发一次空 src 的 error，
-  // 属于正常过程，不能当成播放失败提示给用户。
-  if (audio && !audio.src) return;
+  if (!audio) return;
+
+  // ── 过滤「清源副作用」产生的 error ──────────────────────────
+  //
+  // 判定依据不能用 `audio.src`：清源后它返回的是**文档 URL**（恒非空），
+  // 所以 `if (!audio.src) return` 这类守卫永远失效。
+  // 可靠信号是 `currentSrc` —— 只有元素确实绑定了媒体资源时它才非空。
+  // 不用时间窗做二次过滤：真实坏地址的解码失败也可能紧贴设置 src 发生，
+  // 加窗口会连同真实失败一起吞掉（已实测验证）。
+  if (!audio.currentSrc) return;
+
   if (!st.currentSong) return;
 
   const mediaErr = audio?.error;
@@ -2011,8 +2048,9 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     const mySeq = ++playSongSeq;
     // 取消进行中的音量渐变，防止旧定时器在切歌后拉低新歌音量甚至误暂停
     cancelVolumeFade();
-    audio.pause();
-    audio.src = "";
+    // 清源必须走 clearAudioSource（内部已 pause）：直接赋空串会立刻派发一次
+    // error(code=4)，被 onAudioError 误判成「格式不支持/链接失效」并触发连跳
+    clearAudioSource(audio);
 
     // 设置播放队列
     if (queue) {
@@ -2429,8 +2467,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     // 取消进行中的音量渐变，防止残留定时器在清空后拉低音量
     cancelVolumeFade();
     if (state.audioRef) {
-      state.audioRef.pause();
-      state.audioRef.src = "";
+      // 同 playSong：清源用 clearAudioSource，避免空串赋值派发 error(code=4)
+      clearAudioSource(state.audioRef);
       state.audioRef.currentTime = 0;
       // 清空后恢复音量，避免下次播放时音量被渐变置 0
       state.audioRef.volume = state.volume;
