@@ -29,7 +29,8 @@
 NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所有功能均在本地运行，把常用的系统监控、维护和桌面增强能力整合到一个轻量界面里，不依赖云端账号。
 
 - 作者：[Bobliu](https://github.com/bobliu0121)
-- 仓库：[bobliu0121/neobox](https://github.com/bobliu0121/neobox)
+- 仓库（GitHub）：[bobliu0121/neobox](https://github.com/bobliu0121/neobox)
+- 仓库（Gitee，国内镜像）：[bobliu0121/neobox](https://gitee.com/bobliu0121/neobox)
 - 问题反馈：[GitHub Issues](https://github.com/bobliu0121/neobox/issues)
 - 作者 QQ：3954720009
 
@@ -75,7 +76,7 @@ NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所�
 
 ## 下载
 
-前往 [Releases](https://github.com/bobliu0121/neobox/releases) 下载最新便携版压缩包：
+前往 [GitHub Releases](https://github.com/bobliu0121/neobox/releases) 或 [Gitee Releases](https://gitee.com/bobliu0121/neobox/releases) 下载最新便携版压缩包：
 
 1. 解压到任意目录（路径建议使用纯英文，避免部分工具读取中文路径失败）。
 2. 双击 `neobox.exe` 启动，按提示授予管理员权限。
@@ -136,7 +137,7 @@ npm run build:portable
 
 ## 更新
 
-应用启动后会检查 [GitHub Releases](https://github.com/bobliu0121/neobox/releases) 中的最新版本。当前正式版以便携压缩包发布，检测到新版本时会提示并打开 Release 页面；后续若提供安装包资产，应用内更新会直接下载并引导安装。
+应用启动后会检查 [GitHub Releases](https://github.com/bobliu0121/neobox/releases) 中的最新版本（Gitee 镜像见 [Gitee Releases](https://gitee.com/bobliu0121/neobox/releases)）。当前正式版以便携压缩包发布，检测到新版本时会提示并打开 Release 页面；后续若提供安装包资产，应用内更新会直接下载并引导安装。
 
 ## 文档
 
