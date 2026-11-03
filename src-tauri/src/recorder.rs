@@ -291,6 +291,21 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
     None
 }
 
+/// 构造一个 ffmpeg 子进程，并统一加上 `CREATE_NO_WINDOW`。
+///
+/// # 为什么必须统一在这里加
+///
+/// 打开录制页面时会连续跑多次 ffmpeg（版本探测、-formats、-encoders、
+/// 每个硬件编码器各一次试探、设备枚举），如果漏加这个标志，
+/// 用户会看到一串控制台黑窗疯狂闪 —— 观感极差且会被误认为程序异常。
+/// 所有 ffmpeg 调用都必须经由此函数创建，不要在别处直接 `Command::new(ffmpeg)`。
+fn ffmpeg_cmd(ffmpeg_path: &Path) -> Command {
+    let mut cmd = Command::new(ffmpeg_path);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd
+}
+
 /// 探测 ffmpeg 能力（版本、采集设备支持、硬件编码器）
 fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
     let mut probe = FfmpegProbe {
@@ -303,7 +318,7 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
     };
 
     // 版本
-    if let Ok(out) = Command::new(ffmpeg_path).arg("-version").output() {
+    if let Ok(out) = ffmpeg_cmd(ffmpeg_path).arg("-version").output() {
         probe.available = out.status.success();
         let text = String::from_utf8_lossy(&out.stdout);
         // 取第一行，形如 "ffmpeg version 2026-10-25-git-... Copyright ..."
@@ -321,8 +336,9 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
         return probe;
     }
 
-    // 输入格式（gdigrab / dshow）
-    if let Ok(out) = Command::new(ffmpeg_path).arg("-hide_banner").arg("-formats").output() {
+    // 输入格式与硬件编码器一次拿齐：`-formats` 和 `-encoders` 各一次进程，
+    // 已经是 2 次；不再额外为每个编码器单独起进程（那会再增加 3 次黑窗）。
+    if let Ok(out) = ffmpeg_cmd(ffmpeg_path).arg("-hide_banner").arg("-formats").output() {
         let text = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
         probe.has_gdigrab = text.contains("gdigrab");
@@ -330,7 +346,7 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
     }
 
     // 硬件编码器：只看常见四种，软编 libx264 作为兜底始终可用
-    if let Ok(out) = Command::new(ffmpeg_path).arg("-hide_banner").arg("-encoders").output() {
+    if let Ok(out) = ffmpeg_cmd(ffmpeg_path).arg("-hide_banner").arg("-encoders").output() {
         let text = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
         for name in ["h264_nvenc", "h264_qsv", "h264_amf"] {
@@ -349,7 +365,7 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
 /// 而虚拟机 / 无对应硬件的机器上初始化会失败。用一个 1 帧空编码实测最可靠。
 fn encoder_works(ffmpeg_path: &Path, encoder: &str) -> bool {
     let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
-    let result = Command::new(ffmpeg_path)
+    let result = ffmpeg_cmd(ffmpeg_path)
         .args([
             "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "color=c=black:s=256x144:r=1:d=1",
@@ -392,51 +408,85 @@ fn resolve_encoder(ffmpeg_path: &Path, requested: &str) -> String {
 ///
 /// ffmpeg 把设备列表打印到 **stderr**，且退出码是 1（因为 dummy 输入打不开），
 /// 所以不能靠退出码判断成功，只能解析输出。
+///
+/// # 解析规则（实测输出样例）
+///
+/// ```text
+/// [in#0 @ 0000...] "USB Camera" (video)
+/// [in#0 @ 0000...]   Alternative name "@device_pnp_\\?\usb#vid_..."
+/// [in#0 @ 0000...] "Microphone (Realtek)" (audio)
+/// [in#0 @ 0000...]   Alternative name "@device_cm_{...}\\wave_{...}"
+/// ```
+///
+/// 关键点：**设备行与 Alternative name 行都以 `[` 开头且都含引号**。
+/// 早先的实现先匹配「以 `[` 开头且含引号」，于是把 Alternative name 行
+/// 也当成设备行；该行不含 `(video)` / `(audio)` 会被跳过，但此时
+/// `pending`（上一台真正设备）已存在，紧接着若来了下一台设备行就会
+/// 把 `pending` 覆盖 —— 表现为「摄像头/麦克风识别不到或只剩最后一个」。
+///
+/// 现在按「行内是否带 `(video)` / `(audio)` 标记」来判定设备行，
+/// Alternative name 只作为前一台设备的补充字段。
 pub fn enumerate_devices(ffmpeg_path: &Path) -> Vec<CaptureDevice> {
-    let output = Command::new(ffmpeg_path)
+    let output = ffmpeg_cmd(ffmpeg_path)
         .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
         .output();
 
     let Ok(out) = output else { return Vec::new() };
-    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    // 设备表在 stderr；部分版本会把部分信息写 stdout，两边都取更稳
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 
-    let mut devices = Vec::new();
-    let mut pending: Option<(String, String)> = None;
+    let mut devices: Vec<CaptureDevice> = Vec::new();
 
     for line in text.lines() {
         let trimmed = line.trim();
-        // 设备行：`[in#0 @ 0000...] "名称" (video)` / `(audio)`
-        if trimmed.starts_with('[') && trimmed.contains('"') {
-            let Some(first_quote) = trimmed.find('"') else { continue };
-            let Some(last_quote) = trimmed.rfind('"') else { continue };
-            if last_quote <= first_quote {
-                continue;
+
+        // 只在方括号前缀之后的内容里做判断，避免 `[in#0 @ ...]` 里的字符干扰
+        let Some(after_bracket) = trimmed.find(']').map(|i| trimmed[i + 1..].trim()) else {
+            continue;
+        };
+
+        // Alternative name 行：补充到「最后一台」设备上（它紧跟在设备行之后）
+        if after_bracket.starts_with("Alternative name") {
+            if let Some(last) = devices.last_mut() {
+                // 取引号内内容作为 alt_name
+                if let (Some(fq), Some(lq)) = (after_bracket.find('"'), after_bracket.rfind('"')) {
+                    if lq > fq {
+                        last.alt_name = after_bracket[fq + 1..lq].to_string();
+                    }
+                }
             }
-            let name = trimmed[first_quote + 1..last_quote].to_string();
-            let kind = if trimmed.contains("(video)") {
-                "video"
-            } else if trimmed.contains("(audio)") {
-                "audio"
-            } else {
-                continue;
-            };
-            pending = Some((name, kind.to_string()));
             continue;
         }
-        // alternative name 行：紧跟设备行
-        if let Some((name, kind)) = pending.clone() {
-            if let Some(pos) = trimmed.find('@') {
-                let alt = trimmed[pos + 1..].trim().to_string();
-                devices.push(CaptureDevice { name, kind, alt_name: alt });
-            } else {
-                devices.push(CaptureDevice { name, kind, alt_name: String::new() });
-            }
-            pending = None;
+
+        // 设备行判定：必须带 (video) 或 (audio) 标记，且带引号名称
+        let kind = if after_bracket.contains("(video)") {
+            Some("video")
+        } else if after_bracket.contains("(audio)") {
+            Some("audio")
+        } else {
+            None
+        };
+        let Some(kind) = kind else { continue };
+
+        let (Some(fq), Some(lq)) = (after_bracket.find('"'), after_bracket.rfind('"')) else {
+            continue;
+        };
+        if lq <= fq {
+            continue;
         }
-    }
-    // 处理最后一台没有 alternative 行的设备
-    if let Some((name, kind)) = pending {
-        devices.push(CaptureDevice { name, kind, alt_name: String::new() });
+        let name = after_bracket[fq + 1..lq].to_string();
+        if name.is_empty() {
+            continue;
+        }
+        devices.push(CaptureDevice {
+            name,
+            kind: kind.to_string(),
+            alt_name: String::new(),
+        });
     }
 
     devices
@@ -813,12 +863,11 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
 
     // stderr 用管道接管：必须持续读走，否则缓冲区写满会让 ffmpeg 阻塞
     // （表现为「录到一半卡住」）。这里用后台线程持续消费并保留末尾若干行。
-    let mut child = Command::new(&ffmpeg)
+    let mut child = ffmpeg_cmd(&ffmpeg)
         .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW：不弹黑框
         .spawn()
         .map_err(|e| format!("启动 ffmpeg 失败: {e}"))?;
 
@@ -1062,7 +1111,7 @@ pub async fn recorder_probe_duration(path: String) -> Result<u64, String> {
     // 用 ffprobe（与 ffmpeg 同目录）读时长
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
     let tool = if ffprobe.is_file() { ffprobe } else { ffmpeg.clone() };
-    let out = Command::new(tool)
+    let out = ffmpeg_cmd(&tool)
         .args([
             "-hide_banner", "-loglevel", "error",
             "-show_entries", "format=duration",
