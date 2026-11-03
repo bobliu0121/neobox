@@ -38,6 +38,7 @@ mod netease_lyrics;
 mod nvapi;
 mod nvidia_recording;
 mod recorder;
+mod recorder_preview;
 mod runtime_repair;
 mod optimization;
 mod overlay_panel;
@@ -972,6 +973,10 @@ pub fn run() {
         recorder::recorder_open_file,
         recorder::recorder_reveal_file,
         recorder::recorder_probe_duration,
+        recorder::recorder_screen_info,
+        recorder::recorder_preview_start,
+        recorder::recorder_preview_stop,
+        recorder::recorder_preview_status,
         // === 运行库补全/修复 ===
         runtime_repair::get_runtime_statuses,
         runtime_repair::repair_runtime,
@@ -1156,6 +1161,8 @@ pub fn run() {
                 // 退出时若仍在录制，优雅收尾让 mp4 的 moov 正常写入，
                 // 否则残留的 ffmpeg 进程会留下不可播放的残缺文件
                 recorder::cleanup_on_exit();
+                // 预览进程同样要收掉，否则退不干净
+                recorder_preview::stop_preview();
                 // 兜底：ExitRequested 被其他逻辑跳过时（如进程被优雅终止），
                 // 这里再保证一次壁纸窗口已销毁、系统壁纸已恢复。
                 // 该函数幂等，已清理过不会重复触发重绘。

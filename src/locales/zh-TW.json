@@ -2855,13 +2855,6 @@
     "fps": "影格率",
     "camera": "攝影機",
     "noCamera": "不啟用攝影機",
-    "pipScale": "子母畫面大小",
-    "pipPosition": "子母畫面位置",
-    "pipMargin": "邊距",
-    "posBottomRight": "右下角",
-    "posBottomLeft": "左下角",
-    "posTopRight": "右上角",
-    "posTopLeft": "左上角",
     "microphone": "麥克風",
     "noMic": "不擷取麥克風",
     "volume": "音量",
@@ -2882,6 +2875,16 @@
     "delete": "刪除",
     "ffmpegReady": "ffmpeg 已就緒",
     "ffmpegMissing": "找不到 ffmpeg。錄製功能需要外部 ffmpeg：請將它安裝到 PATH，或把 ffmpeg.exe 放到 NeoBox 程式目錄旁。",
-    "noCaptureSupport": "目前的 ffmpeg 不支援 gdigrab/dshow 擷取，請使用完整版 ffmpeg。"
+    "noCaptureSupport": "目前的 ffmpeg 不支援 gdigrab/dshow 擷取，請使用完整版 ffmpeg。",
+    "canvas": "畫布預覽",
+    "preview": "即時預覽",
+    "layerVisible": "顯示該圖層",
+    "layoutHint": "在畫布上拖曳調整位置，右下角藍色方塊縮放，左下角黃色圓點裁剪內容區域；也可用下方數值精確設定。",
+    "cropX": "裁剪起點 X",
+    "cropY": "裁剪起點 Y",
+    "cropW": "裁剪寬度",
+    "cropH": "裁剪高度",
+    "layerPosition": "位置 / 尺寸 / 裁剪（畫布像素）",
+    "previewHint": "預覽會額外佔用一個 ffmpeg 擷取程序，關閉可節省資源；錄製不受影響。"
   }
 }

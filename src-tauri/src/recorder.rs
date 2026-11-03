@@ -54,6 +54,43 @@ pub struct CaptureDevice {
     pub alt_name: String,
 }
 
+/// 单个采集图层的布局（画布式：每个源都是一个可自由摆放的图层）
+///
+/// 坐标全部使用 **画布像素**，由前端画布直接给出：
+/// - 前端预览区显示的是按比例缩小的画布，拖拽后按比例换算成真实画布像素再传给后端，
+///   所以这里不需要「百分比」语义，避免屏幕分辨率变化时布局漂移。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LayerLayout {
+    /// 图层左上角在画布中的 x（像素）
+    #[serde(default)]
+    pub x: i32,
+    /// 图层左上角在画布中的 y（像素）
+    #[serde(default)]
+    pub y: i32,
+    /// 图层显示宽度（像素，0 = 保持源原始尺寸）
+    #[serde(default)]
+    pub w: u32,
+    /// 图层显示高度（像素，0 = 按比例自动）
+    #[serde(default)]
+    pub h: u32,
+    // ── 内容裁剪（相对源原始画面）──
+    /// 裁剪起点 x（源像素）
+    #[serde(default)]
+    pub crop_x: u32,
+    /// 裁剪起点 y（源像素）
+    #[serde(default)]
+    pub crop_y: u32,
+    /// 裁剪宽度（源像素，0 = 不裁剪，取整幅）
+    #[serde(default)]
+    pub crop_w: u32,
+    /// 裁剪高度（源像素，0 = 不裁剪，取整幅）
+    #[serde(default)]
+    pub crop_h: u32,
+    /// 图层是否显示（关掉可临时隐藏该源，不必删配置）
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
 /// 录制源配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecorderConfig {
@@ -72,15 +109,25 @@ pub struct RecorderConfig {
     /// 摄像头采集的分辨率高（0 = 设备默认）
     #[serde(default)]
     pub camera_height: u32,
-    /// 画中画宽度（相对屏幕宽度的百分比，1-100）
-    #[serde(default = "default_pip_scale")]
-    pub pip_scale: u32,
-    /// 画中画边距（像素）
-    #[serde(default = "default_pip_margin")]
-    pub pip_margin: u32,
-    /// 画中画位置：top-left / top-right / bottom-left / bottom-right
-    #[serde(default = "default_pip_position")]
-    pub pip_position: String,
+    /// 画布宽度（像素，0 = 用屏幕原始宽度）
+    #[serde(default)]
+    pub canvas_w: u32,
+    /// 画布高度（像素，0 = 用屏幕原始高度）
+    #[serde(default)]
+    pub canvas_h: u32,
+    /// 屏幕图层的布局
+    #[serde(default)]
+    pub screen_layout: LayerLayout,
+    /// 摄像头图层的布局
+    #[serde(default)]
+    pub camera_layout: LayerLayout,
+    // 兼容旧配置：仍接受 pip_* 字段，读入后由 normalize 迁移到 camera_layout
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pip_scale: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pip_margin: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pip_position: Option<String>,
     /// 麦克风设备名（空 = 不采集麦克风）
     #[serde(default)]
     pub mic_device: String,
@@ -105,13 +152,13 @@ pub struct RecorderConfig {
     /// 输出目录（空 = 默认目录）
     #[serde(default)]
     pub output_dir: String,
+    /// 是否在采集时开启实时预览（关掉可省资源）
+    #[serde(default = "default_true")]
+    pub preview_enabled: bool,
 }
 
 fn default_true() -> bool { true }
 fn default_fps() -> u32 { 30 }
-fn default_pip_scale() -> u32 { 25 }
-fn default_pip_margin() -> u32 { 24 }
-fn default_pip_position() -> String { "bottom-right".to_string() }
 fn default_volume() -> u32 { 100 }
 fn default_bitrate() -> u32 { 6000 }
 fn default_audio_bitrate() -> u32 { 160 }
@@ -125,9 +172,13 @@ impl Default for RecorderConfig {
             camera_device: String::new(),
             camera_width: 0,
             camera_height: 0,
-            pip_scale: default_pip_scale(),
-            pip_margin: default_pip_margin(),
-            pip_position: default_pip_position(),
+            canvas_w: 0,
+            canvas_h: 0,
+            screen_layout: LayerLayout::default(),
+            camera_layout: LayerLayout::default(),
+            pip_scale: None,
+            pip_margin: None,
+            pip_position: None,
             mic_device: String::new(),
             system_audio_device: String::new(),
             mic_volume: default_volume(),
@@ -136,7 +187,62 @@ impl Default for RecorderConfig {
             audio_bitrate_kbps: default_audio_bitrate(),
             encoder: default_encoder(),
             output_dir: String::new(),
+            preview_enabled: true,
         }
+    }
+}
+
+impl RecorderConfig {
+    /// 把旧版的 pip_* 配置迁移到画布布局，并补齐画布尺寸。
+    ///
+    /// 旧配置只有「摄像头固定在四角之一 + 缩放百分比」这一种形态，
+    /// 直接丢弃会让老用户的位置设置失效，所以在这里换算成等价的像素布局。
+    pub fn normalize(&mut self, screen_w: u32, screen_h: u32) {
+        // 画布尺寸：没设就用屏幕原始尺寸
+        if self.canvas_w == 0 { self.canvas_w = screen_w.max(2); }
+        if self.canvas_h == 0 { self.canvas_h = screen_h.max(2); }
+        // 画布尺寸必须为偶数（H.264 的 yuv420p 要求宽高是 2 的倍数）
+        self.canvas_w -= self.canvas_w % 2;
+        self.canvas_h -= self.canvas_h % 2;
+
+        // 旧 pip_* → camera_layout
+        let legacy_scale = self.pip_scale.unwrap_or(25).clamp(1, 100);
+        let legacy_margin = self.pip_margin.unwrap_or(24);
+        let legacy_pos = self.pip_position.clone().unwrap_or_else(|| "bottom-right".into());
+        // 仅当 camera_layout 还没被设置过（全 0）时才迁移，避免覆盖用户新布局
+        let camera_is_unset = self.camera_layout.w == 0
+            && self.camera_layout.h == 0
+            && self.camera_layout.x == 0
+            && self.camera_layout.y == 0;
+        if camera_is_unset && self.pip_scale.is_some() {
+            let cam_w = ((self.canvas_w as u64 * legacy_scale as u64) / 100) as u32;
+            let cam_h = ((cam_w as u64 * 3) / 4) as u32; // 按 4:3 估个初值
+            let m = legacy_margin as i32;
+            let (x, y) = match legacy_pos.as_str() {
+                "top-left" => (m, m),
+                "top-right" => (self.canvas_w as i32 - cam_w as i32 - m, m),
+                "bottom-left" => (m, self.canvas_h as i32 - cam_h as i32 - m),
+                _ => (self.canvas_w as i32 - cam_w as i32 - m, self.canvas_h as i32 - cam_h as i32 - m),
+            };
+            self.camera_layout = LayerLayout {
+                x: x.max(0),
+                y: y.max(0),
+                w: cam_w,
+                h: cam_h,
+                ..Default::default()
+            };
+        }
+
+        // 屏幕图层若未设尺寸，默认铺满画布
+        if self.screen_layout.w == 0 { self.screen_layout.w = self.canvas_w; }
+        if self.screen_layout.h == 0 { self.screen_layout.h = self.canvas_h; }
+        if self.screen_layout.visible == false && self.screen_enabled {
+            // 旧配置没有 visible 字段时 serde 会填 default_true，这里不会误关
+        }
+        // 迁移完成后清掉旧字段，避免之后再被重复迁移
+        self.pip_scale = None;
+        self.pip_margin = None;
+        self.pip_position = None;
     }
 }
 
@@ -497,6 +603,8 @@ pub fn enumerate_devices(ffmpeg_path: &Path) -> Vec<CaptureDevice> {
 // ────────────────────────────────────────────────────────────
 
 /// 画中画位置转 overlay 坐标表达式
+/// 旧版画中画定位（已由画布式 LayerLayout 取代，保留供旧配置迁移参考）
+#[allow(dead_code)]
 fn pip_xy(position: &str, margin: u32) -> (String, String) {
     let m = margin.max(0);
     match position {
@@ -593,47 +701,104 @@ pub fn build_args(
         return Err("至少需要启用屏幕采集或选择一个摄像头".to_string());
     }
 
-    // ── 滤镜链：画面叠加 ──
+    // ── 滤镜链：画面（画布式布局）──
+    //
+    // 设计：先建一张固定尺寸的空白画布，再把每个「可见图层」依次 overlay 上去。
+    // 每个图层的处理顺序是 crop（内容裁剪）→ scale（缩放到目标显示尺寸）→ overlay（定位）。
+    // 之所以要一张显式画布而不是拿屏幕当底图：
+    // 屏幕图层本身也可能被缩放/移动/裁剪，不能假定它铺满整个输出。
     let mut filters: Vec<String> = Vec::new();
-    let video_out_label;
 
-    match (has_screen, camera_index) {
-        // 只有屏幕
-        (true, None) => {
-            filters.push("[0:v]setpts=PTS-STARTPTS[vout]".to_string());
-            video_out_label = "[vout]".to_string();
-        }
-        // 既无屏幕也无摄像头：前面已用 video_inputs.is_empty() 拦下，
-        // 这里仅为让 match 完备，实际走不到
-        (false, None) => {
-            return Err("至少需要启用屏幕采集或选择一个摄像头".to_string());
-        }
-        // 只有摄像头（无屏幕）：摄像头的输出直接作为主画面
-        (false, Some(cam)) => {
-            filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS[vout]"));
-            video_out_label = "[vout]".to_string();
-        }
-        // 屏幕 + 摄像头 → 画中画：先把摄像头缩放到屏幕宽度的百分比，再叠加
-        (true, Some(cam)) => {
-            let scale = config.pip_scale.clamp(1, 100) as f64 / 100.0;
-            // 画中画：先对齐时间轴，再用 scale2ref 以主画面为参考按比例缩放。
-            //
-            // 这里必须用实测通过的表达式形式 `w=iw*<比例>:h=ow/mdar`：
-            // - `iw` 指画中画自身宽度，缩到屏幕宽度的指定百分比；
-            // - `ow/mdar` 按画中画自身宽高比推出高度，避免拉伸；
-            // - 输出 `[pip][ref]` 两个标签，第二个是原样的参考流，
-            //   必须用它来 overlay（用原主画面会导致尺寸/时间基不匹配）。
-            // 曾尝试 `w=trunc(<pct>*(w)/100/2)*2` 与 `main_w`，
-            // 均会报 "Error initializing filters: Invalid argument"。
-            filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS[pip0]"));
-            filters.push(format!(
-                "[0:v][pip0]scale2ref=w=iw*{scale:.4}:h=ow/mdar[pip][ref]"
+    let canvas_w = config.canvas_w.max(2);
+    let canvas_h = config.canvas_h.max(2);
+    // yuv420p 要求宽高为偶数
+    let canvas_w = canvas_w - canvas_w % 2;
+    let canvas_h = canvas_h - canvas_h % 2;
+
+    // 画布底色：lavfi color 源
+    filters.push(format!(
+        "color=c=black:s={canvas_w}x{canvas_h}:r={}[canvas0]",
+        config.screen_fps.clamp(1, 120)
+    ));
+
+    let mut composed = String::from("[canvas0]");
+
+    // 逐个图层叠加
+    let mut layer_no = 0usize;
+
+    // 屏幕图层（输入 0）
+    if has_screen && config.screen_layout.visible {
+        let lay = &config.screen_layout;
+        let mut chain = String::new();
+        // crop：仅当设置了裁剪尺寸才裁
+        if lay.crop_w > 0 && lay.crop_h > 0 {
+            chain.push_str(&format!(
+                "crop={}:{}:{}:{},",
+                lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
             ));
-            let (x, y) = pip_xy(&config.pip_position, config.pip_margin);
-            filters.push(format!("[ref][pip]overlay=x={x}:y={y}:shortest=0[vout]"));
-            video_out_label = "[vout]".to_string();
+        }
+        // scale：缩放到图层显示尺寸（保证偶数）
+        let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
+        let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h / 2 };
+        chain.push_str(&format!("scale={dw}:{dh}"));
+        let label = format!("[scr{layer_no}]");
+        filters.push(format!("[0:v]setpts=PTS-STARTPTS,{chain}{label}"));
+        filters.push(format!(
+            "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
+            lay.x.max(0),
+            lay.y.max(0),
+            layer_no + 1
+        ));
+        composed = format!("[canvas{}]", layer_no + 1);
+        layer_no += 1;
+    }
+
+    // 摄像头图层
+    if let Some(cam) = camera_index {
+        let lay = &config.camera_layout;
+        if lay.visible {
+            let mut chain = String::new();
+            if lay.crop_w > 0 && lay.crop_h > 0 {
+                chain.push_str(&format!(
+                    "crop={}:{}:{}:{},",
+                    lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
+                ));
+            }
+            // 摄像头未设显示尺寸时给个合理默认（画布的 1/4 宽）
+            let dw = if lay.w > 0 {
+                lay.w - lay.w % 2
+            } else {
+                (canvas_w / 4) - (canvas_w / 4) % 2
+            };
+            let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { 0 };
+            if dh > 0 {
+                chain.push_str(&format!("scale={dw}:{dh}"));
+            } else {
+                // 高度留空则按宽高比自动（-2 保证偶数）
+                chain.push_str(&format!("scale={dw}:-2"));
+            }
+            let label = format!("[cam{layer_no}]");
+            filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS,{chain}{label}"));
+            filters.push(format!(
+                "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
+                lay.x.max(0),
+                lay.y.max(0),
+                layer_no + 1
+            ));
+            composed = format!("[canvas{}]", layer_no + 1);
+            // 摄像头是当前最后一个图层，后续不再有新图层，这里递增只为语义完整
+            let _ = layer_no + 1;
         }
     }
+
+    // 所有图层都不可见时，至少要保证画布本身被输出（避免 map 找不到流）
+    let video_out_label = composed.clone();
+
+    // 统一格式化到输出帧率与像素格式，避免后续编码器挑参数失败
+    filters.push(format!(
+        "{video_out_label}format=yuv420p[vout]"
+    ));
+    let video_out_label = "[vout]".to_string();
 
     // ── 滤镜链：音频混合 ──
     let mut audio_out_label: Option<String> = None;
@@ -780,6 +945,20 @@ pub fn write_config(app: &AppHandle, config: &RecorderConfig) {
 //  Tauri 命令
 // ────────────────────────────────────────────────────────────
 
+/// 获取主屏幕分辨率（画布默认尺寸来源）
+pub fn screen_size() -> (u32, u32) {
+    #[cfg(windows)]
+    unsafe {
+        use winapi::um::winuser::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let w = GetSystemMetrics(SM_CXSCREEN);
+        let h = GetSystemMetrics(SM_CYSCREEN);
+        if w > 0 && h > 0 {
+            return (w as u32, h as u32);
+        }
+    }
+    (1920, 1080)
+}
+
 /// 探测 ffmpeg 与设备能力
 #[tauri::command]
 pub async fn recorder_probe() -> Result<FfmpegProbe, String> {
@@ -796,6 +975,13 @@ pub async fn recorder_probe() -> Result<FfmpegProbe, String> {
     Ok(probe_ffmpeg(&ffmpeg))
 }
 
+/// 获取屏幕分辨率与默认画布尺寸（前端据此初始化画布与图层坐标）
+#[tauri::command]
+pub async fn recorder_screen_info() -> Result<serde_json::Value, String> {
+    let (w, h) = screen_size();
+    Ok(serde_json::json!({ "width": w, "height": h }))
+}
+
 /// 枚举摄像头与麦克风设备
 #[tauri::command]
 pub async fn recorder_list_devices() -> Result<Vec<CaptureDevice>, String> {
@@ -808,7 +994,49 @@ pub async fn recorder_list_devices() -> Result<Vec<CaptureDevice>, String> {
 /// 读取录制设置
 #[tauri::command]
 pub async fn recorder_get_config(app: AppHandle) -> Result<RecorderConfig, String> {
-    Ok(read_config(&app))
+    let mut cfg = read_config(&app);
+    // 归一化后再返回，保证前端拿到的是完整画布布局（含旧配置迁移结果）
+    let (sw, sh) = screen_size();
+    cfg.normalize(sw, sh);
+    Ok(cfg)
+}
+
+/// 启动实时预览（MJPEG 流），返回预览端口
+#[tauri::command]
+pub async fn recorder_preview_start(config: RecorderConfig) -> Result<u16, String> {
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err("未找到 ffmpeg，无法启动预览".to_string());
+    };
+    let (sw, sh) = screen_size();
+    let mut cfg = config;
+    cfg.normalize(sw, sh);
+
+    let params = crate::recorder_preview::PreviewParams {
+        screen_enabled: cfg.screen_enabled,
+        screen_fps: cfg.screen_fps,
+        camera_device: cfg.camera_device.clone(),
+        canvas_w: cfg.canvas_w,
+        canvas_h: cfg.canvas_h,
+        camera_visible: cfg.camera_layout.visible,
+    };
+
+    crate::recorder_preview::start_preview_server(ffmpeg, params).await
+}
+
+/// 停止实时预览（释放预览占用的采集设备与 CPU）
+#[tauri::command]
+pub async fn recorder_preview_stop() -> Result<(), String> {
+    crate::recorder_preview::stop_preview();
+    Ok(())
+}
+
+/// 查询预览状态（端口 / 是否运行）
+#[tauri::command]
+pub async fn recorder_preview_status() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "running": crate::recorder_preview::preview_running(),
+        "port": crate::recorder_preview::get_preview_port(),
+    }))
 }
 
 /// 保存录制设置
@@ -839,11 +1067,17 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
         return Err("请至少启用屏幕采集或选择一个摄像头".to_string());
     }
 
+    // 归一化布局：补齐画布尺寸、迁移旧 pip_* 配置、强制偶数尺寸
+    let (sw, sh) = screen_size();
+
     // 保存设置，下次打开沿用
     write_config(&app, &config);
 
     let dir = resolve_output_dir(&config);
     let output_path = make_output_path(&dir);
+
+    let mut config = config;
+    config.normalize(sw, sh);
 
     // 选编码器（auto 时实测硬件可用性）
     let encoder = resolve_encoder(&ffmpeg, &config.encoder);
@@ -1204,13 +1438,14 @@ mod tests {
         assert!(filter.contains("[aout]"), "filter: {filter}");
     }
 
-    /// 屏幕 + 摄像头：应产生 overlay 画中画链
+    /// 屏幕 + 摄像头：应产生画布 + 双图层 overlay 链
     #[test]
     fn build_args_screen_with_camera_overlay() {
         let mut config = RecorderConfig::default();
-        config.pip_scale = 25;
-        config.pip_position = "bottom-right".to_string();
-        config.pip_margin = 24;
+        config.normalize(1920, 1080);
+        config.camera_layout = LayerLayout {
+            x: 1400, y: 800, w: 480, h: 270, ..Default::default()
+        };
         let out = PathBuf::from("out.mp4");
         let (args, _) = build_args(&config, "libx264", &out, "摄像头", "", "").expect("ok");
         let filter = args
@@ -1218,9 +1453,11 @@ mod tests {
             .position(|a| a == "-filter_complex")
             .map(|i| &args[i + 1])
             .expect("filter_complex");
-        assert!(filter.contains("overlay="), "filter: {filter}");
-        assert!(filter.contains("scale2ref"), "filter: {filter}");
-        assert!(filter.contains("W-w-24"), "filter: {filter}");
+        // 画布底色 + 两个 overlay + 定位坐标
+        assert!(filter.contains("color=c=black"), "filter: {filter}");
+        assert!(filter.contains("overlay=x=1400:y=800"), "camera at given pos: {filter}");
+        assert_eq!(filter.matches("overlay=").count(), 2, "two layers: {filter}");
+        assert!(filter.contains("format=yuv420p"), "filter: {filter}");
     }
 
     /// 只有摄像头（不录屏幕）：摄像头输出直接作主画面
@@ -1281,13 +1518,87 @@ mod tests {
         let parsed: RecorderConfig = serde_json::from_value(minimal).unwrap();
         assert!(parsed.screen_enabled, "default screen_enabled = true");
         assert_eq!(parsed.screen_fps, 30);
-        assert_eq!(parsed.pip_scale, 25);
-        assert_eq!(parsed.pip_position, "bottom-right");
         assert_eq!(parsed.video_bitrate_kbps, 6000);
         assert_eq!(parsed.encoder, "auto");
+        assert!(parsed.preview_enabled, "预览默认开启");
         // 完整往返不丢字段
         let back: RecorderConfig = serde_json::from_value(v).unwrap();
         assert_eq!(back.screen_fps, cfg.screen_fps);
+    }
+
+    /// 旧版 pip_* 配置应被迁移成画布布局，且不丢失原位置语义
+    #[test]
+    fn legacy_pip_migrates_to_layout() {
+        let legacy = serde_json::json!({
+            "screen_enabled": true,
+            "screen_fps": 30,
+            "pip_scale": 25,
+            "pip_margin": 24,
+            "pip_position": "bottom-right"
+        });
+        let mut cfg: RecorderConfig = serde_json::from_value(legacy).unwrap();
+        cfg.normalize(1920, 1080);
+        // 画布铺满屏幕
+        assert_eq!(cfg.canvas_w, 1920);
+        assert_eq!(cfg.canvas_h, 1080);
+        // 摄像头宽 = 1920*25%
+        assert_eq!(cfg.camera_layout.w, 480);
+        // 右下角：x = 1920 - 480 - 24
+        assert_eq!(cfg.camera_layout.x, 1416);
+        // 迁移后旧字段被清空，不会重复迁移
+        assert!(cfg.pip_scale.is_none());
+        // 屏幕图层铺满
+        assert_eq!(cfg.screen_layout.w, 1920);
+        assert_eq!(cfg.screen_layout.h, 1080);
+    }
+
+    /// 画布尺寸强制为偶数（yuv420p 要求）
+    #[test]
+    fn canvas_forced_even() {
+        let mut cfg = RecorderConfig::default();
+        cfg.normalize(1921, 1081);
+        assert_eq!(cfg.canvas_w % 2, 0, "canvas_w must be even");
+        assert_eq!(cfg.canvas_h % 2, 0, "canvas_h must be even");
+    }
+
+    /// 图层裁剪应产出 crop 滤镜
+    #[test]
+    fn layer_crop_emits_crop_filter() {
+        let mut config = RecorderConfig::default();
+        config.normalize(1920, 1080);
+        config.camera_device = "cam".into();
+        config.camera_layout = LayerLayout {
+            x: 100, y: 100, w: 640, h: 480,
+            crop_x: 10, crop_y: 20, crop_w: 800, crop_h: 600,
+            visible: true,
+        };
+        let out = PathBuf::from("out.mp4");
+        let (args, _) = build_args(&config, "libx264", &out, "摄像头", "", "").expect("ok");
+        let filter = args
+            .iter()
+            .position(|a| a == "-filter_complex")
+            .map(|i| &args[i + 1])
+            .expect("filter_complex");
+        assert!(filter.contains("crop=800:600:10:20"), "crop applied: {filter}");
+        assert!(filter.contains("scale=640:480"), "scale applied: {filter}");
+        assert!(filter.contains("overlay=x=100:y=100"), "position applied: {filter}");
+    }
+
+    /// 图层隐藏时不应出现在滤镜链里
+    #[test]
+    fn hidden_layer_skipped() {
+        let mut config = RecorderConfig::default();
+        config.normalize(1920, 1080);
+        config.camera_layout = LayerLayout { visible: false, ..Default::default() };
+        let out = PathBuf::from("out.mp4");
+        let (args, _) = build_args(&config, "libx264", &out, "摄像头", "", "").expect("ok");
+        let filter = args
+            .iter()
+            .position(|a| a == "-filter_complex")
+            .map(|i| &args[i + 1])
+            .expect("filter_complex");
+        // 只剩屏幕一个 overlay
+        assert_eq!(filter.matches("overlay=").count(), 1, "hidden camera skipped: {filter}");
     }
 
     /// 设备枚举输出解析：ffmpeg 把设备表打到 stderr，形态需能正确解析

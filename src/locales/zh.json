@@ -2725,13 +2725,6 @@
     "fps": "帧率",
     "camera": "摄像头",
     "noCamera": "不启用摄像头",
-    "pipScale": "画中画大小",
-    "pipPosition": "画中画位置",
-    "pipMargin": "边距",
-    "posBottomRight": "右下角",
-    "posBottomLeft": "左下角",
-    "posTopRight": "右上角",
-    "posTopLeft": "左上角",
     "microphone": "麦克风",
     "noMic": "不采集麦克风",
     "volume": "音量",
@@ -2752,6 +2745,16 @@
     "delete": "删除",
     "ffmpegReady": "ffmpeg 已就绪",
     "ffmpegMissing": "未找到 ffmpeg。录制功能需要外部 ffmpeg：请把它安装到 PATH，或把 ffmpeg.exe 放到 NeoBox 程序目录旁。",
-    "noCaptureSupport": "当前 ffmpeg 不支持 gdigrab/dshow 采集，请使用完整版 ffmpeg。"
+    "noCaptureSupport": "当前 ffmpeg 不支持 gdigrab/dshow 采集，请使用完整版 ffmpeg。",
+    "canvas": "画布预览",
+    "preview": "实时预览",
+    "layerVisible": "显示该图层",
+    "layoutHint": "在画布上拖拽调整位置，右下角蓝色方块缩放，左下角黄色圆点裁剪内容区域；也可用下方数值精确设置。",
+    "cropX": "裁剪起点 X",
+    "cropY": "裁剪起点 Y",
+    "cropW": "裁剪宽度",
+    "cropH": "裁剪高度",
+    "layerPosition": "位置 / 尺寸 / 裁剪（画布像素）",
+    "previewHint": "预览会额外占用一个 ffmpeg 采集进程，关闭可省资源；录制不受影响。"
   }
 }

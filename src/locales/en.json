@@ -2915,13 +2915,6 @@
     "fps": "Frame rate",
     "camera": "Camera",
     "noCamera": "No camera",
-    "pipScale": "PiP size",
-    "pipPosition": "PiP position",
-    "pipMargin": "Margin",
-    "posBottomRight": "Bottom right",
-    "posBottomLeft": "Bottom left",
-    "posTopRight": "Top right",
-    "posTopLeft": "Top left",
     "microphone": "Microphone",
     "noMic": "No microphone",
     "volume": "Volume",
@@ -2942,6 +2935,16 @@
     "delete": "Delete",
     "ffmpegReady": "ffmpeg is ready",
     "ffmpegMissing": "ffmpeg not found. Recording requires an external ffmpeg: install it in PATH, or place ffmpeg.exe next to the NeoBox executable.",
-    "noCaptureSupport": "This ffmpeg build lacks gdigrab/dshow capture support. Please use a full build."
+    "noCaptureSupport": "This ffmpeg build lacks gdigrab/dshow capture support. Please use a full build.",
+    "canvas": "Canvas preview",
+    "preview": "Live preview",
+    "layerVisible": "Show this layer",
+    "layoutHint": "Drag on the canvas to move, blue square at bottom-right to resize, yellow dot at bottom-left to crop the content. Numeric fields below allow precise values.",
+    "cropX": "Crop X",
+    "cropY": "Crop Y",
+    "cropW": "Crop width",
+    "cropH": "Crop height",
+    "layerPosition": "Position / size / crop (canvas px)",
+    "previewHint": "Preview runs an extra ffmpeg capture process; turn it off to save resources. Recording is unaffected."
   }
 }

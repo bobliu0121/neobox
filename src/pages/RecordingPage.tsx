@@ -45,7 +45,12 @@ import {
   Settings2,
   AlertTriangle,
   CheckCircle2,
+  Move,
+  Eye,
+  EyeOff,
+  Crop,
 } from "lucide-react";
+import CanvasPreview, { type LayerLayout } from "@/components/recorder/CanvasPreview";
 
 // ── 与后端一致的类型定义 ──
 
@@ -55,15 +60,23 @@ interface CaptureDevice {
   alt_name: string;
 }
 
+/** 图层默认布局（LayerLayout 类型由 CanvasPreview 组件导出） */
+const DEFAULT_LAYER: LayerLayout = {
+  x: 0, y: 0, w: 0, h: 0,
+  crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
+  visible: true,
+};
+
 interface RecorderConfig {
   screen_enabled: boolean;
   screen_fps: number;
   camera_device: string;
   camera_width: number;
   camera_height: number;
-  pip_scale: number;
-  pip_margin: number;
-  pip_position: string;
+  canvas_w: number;
+  canvas_h: number;
+  screen_layout: LayerLayout;
+  camera_layout: LayerLayout;
   mic_device: string;
   system_audio_device: string;
   mic_volume: number;
@@ -72,6 +85,7 @@ interface RecorderConfig {
   audio_bitrate_kbps: number;
   encoder: string;
   output_dir: string;
+  preview_enabled: boolean;
 }
 
 interface RecorderStatus {
@@ -106,9 +120,10 @@ const DEFAULT_CONFIG: RecorderConfig = {
   camera_device: "",
   camera_width: 0,
   camera_height: 0,
-  pip_scale: 25,
-  pip_margin: 24,
-  pip_position: "bottom-right",
+  canvas_w: 0,
+  canvas_h: 0,
+  screen_layout: { ...DEFAULT_LAYER },
+  camera_layout: { ...DEFAULT_LAYER },
   mic_device: "",
   system_audio_device: "",
   mic_volume: 100,
@@ -117,6 +132,7 @@ const DEFAULT_CONFIG: RecorderConfig = {
   audio_bitrate_kbps: 160,
   encoder: "auto",
   output_dir: "",
+  preview_enabled: true,
 };
 
 /** 字节数格式化 */
@@ -183,6 +199,22 @@ export default function RecordingPage() {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const pollRef = useRef<number | null>(null);
+  // 画布预览相关状态
+  const [screenInfo, setScreenInfo] = useState({ width: 1920, height: 1080 });
+  const [previewRunning, setPreviewRunning] = useState(false);
+  const [previewPort, setPreviewPort] = useState(0);
+  // 预览流加时间戳，强制 <img> 重新连接（MJPEG 流被读干后无法续读）
+  const [previewStamp, setPreviewStamp] = useState(() => Date.now());
+  const [activeLayer, setActiveLayer] = useState<"screen" | "camera" | null>(null);
+  // 最新 config / status 的 ref：供按关键字段触发的 effect 读取，避免闭包陈旧
+  const configRef = useRef(config);
+  const statusRef = useRef(status);
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const cameras = useMemo(() => devices.filter((d) => d.kind === "video"), [devices]);
   const mics = useMemo(() => devices.filter((d) => d.kind === "audio"), [devices]);
@@ -266,7 +298,20 @@ export default function RecordingPage() {
     void loadDevices();
     void loadConfig();
     void loadStatus();
+    // 屏幕分辨率：作为画布默认尺寸
+    void invoke<{ width: number; height: number }>("recorder_screen_info")
+      .then((info) => {
+        if (info && info.width > 0) setScreenInfo(info);
+      })
+      .catch((e) => console.error("recorder_screen_info failed:", e));
   }, [loadProbe, loadDevices, loadConfig, loadStatus]);
+
+  // 离开页面时停止预览，避免残留采集进程占用设备与 CPU
+  useEffect(() => {
+    return () => {
+      void invoke("recorder_preview_stop").catch(() => {});
+    };
+  }, []);
 
   // 配置加载完成后拉文件列表
   useEffect(() => {
@@ -311,6 +356,91 @@ export default function RecordingPage() {
     },
     [persistConfig]
   );
+
+  /** 更新某个图层布局（拖拽/缩放/裁剪后由画布组件回调） */
+  const updateLayer = useCallback(
+    (key: "screen_layout" | "camera_layout", layout: LayerLayout) => {
+      setConfig((prev) => {
+        const next = { ...prev, [key]: layout };
+        void persistConfig(next);
+        return next;
+      });
+    },
+    [persistConfig]
+  );
+
+  /** 启动实时预览 */
+  const startPreview = useCallback(async () => {
+    try {
+      const port = await invoke<number>("recorder_preview_start", { config });
+      setPreviewPort(port);
+      setPreviewRunning(true);
+      // 新流需要新的时间戳参数，否则浏览器可能复用已断的旧连接
+      setPreviewStamp(Date.now());
+    } catch (e) {
+      console.error("recorder_preview_start failed:", e);
+      setPreviewRunning(false);
+      toast({ title: `预览启动失败：${String(e).slice(0, 120)}`, status: "warning", duration: 4000 });
+    }
+  }, [config, toast]);
+
+  /** 停止实时预览 */
+  const stopPreview = useCallback(async () => {
+    try {
+      await invoke("recorder_preview_stop");
+    } catch (e) {
+      console.error("recorder_preview_stop failed:", e);
+    }
+    setPreviewRunning(false);
+  }, []);
+
+  /** 切换预览开关（关掉就释放采集设备与 CPU） */
+  const handleTogglePreview = useCallback(
+    (enabled: boolean) => {
+      updateConfig("preview_enabled", enabled);
+      if (enabled) {
+        void startPreview();
+      } else {
+        void stopPreview();
+      }
+    },
+    [updateConfig, startPreview, stopPreview]
+  );
+
+  /**
+   * 源配置变化时自动重启预览。
+   *
+   * 预览是独立 ffmpeg 进程，它按启动那一刻的参数采集；
+   * 用户切换摄像头 / 开关屏幕源 / 改帧率后，若重启不了，
+   * 预览画面就会和实际录制内容不一致 —— 那是比"没有预览"更糟的误导。
+   * 这里监听影响采集的关键字段，变化时自动重启。
+   *
+   * 用 ref 读取最新 config：effect 只按关键字段触发，
+   * 若直接闭包捕获 config 会拿到触发那一刻的旧值，导致重启用的是旧参数。
+   */
+  useEffect(() => {
+    const latest = configRef.current;
+    if (!latest.preview_enabled) return;
+    if (!previewRunning) return;
+    // 录制中不动预览，避免抢占设备影响录制
+    if (statusRef.current.recording) return;
+    void invoke<number>("recorder_preview_start", { config: latest })
+      .then((port) => {
+        setPreviewPort(port);
+        setPreviewRunning(true);
+        setPreviewStamp(Date.now());
+      })
+      .catch((e) => {
+        console.error("preview auto-restart failed:", e);
+        setPreviewRunning(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    config.screen_enabled,
+    config.screen_fps,
+    config.camera_device,
+    config.camera_layout.visible,
+  ]);
 
   /** 开始录制 */
   const handleStart = useCallback(async () => {
@@ -561,6 +691,33 @@ export default function RecordingPage() {
                 </Slider>
               </OptionRow>
             )}
+            {config.screen_enabled && (
+              <>
+                <OptionRow label={t("recording.layerVisible")} textColor={textColor}>
+                  <Switch
+                    size="sm"
+                    isChecked={config.screen_layout.visible}
+                    onChange={(e) =>
+                      updateLayer("screen_layout", { ...config.screen_layout, visible: e.target.checked })
+                    }
+                    colorScheme="blue"
+                    isDisabled={status.recording}
+                  />
+                </OptionRow>
+                {activeLayer === "screen" && (
+                  <LayerNumericEditor
+                    layer={config.screen_layout}
+                    onChange={(l) => updateLayer("screen_layout", l)}
+                    textColor={textColor}
+                    subTextColor={subTextColor}
+                    borderColor={borderColor}
+                    activeColor={activeColor}
+                    disabled={status.recording}
+                    label={t("recording.layerPosition")}
+                  />
+                )}
+              </>
+            )}
           </SectionCard>
 
           {/* 摄像头 */}
@@ -599,53 +756,32 @@ export default function RecordingPage() {
 
             {config.camera_device && (
               <>
-                <OptionRow label={`${t("recording.pipScale")} · ${config.pip_scale}%`} textColor={textColor}>
-                  <Slider
-                    flex={1}
-                    min={10}
-                    max={60}
-                    step={1}
-                    value={config.pip_scale}
-                    onChange={(v) => updateConfig("pip_scale", v)}
+                <OptionRow label={t("recording.layerVisible")} textColor={textColor}>
+                  <Switch
+                    size="sm"
+                    isChecked={config.camera_layout.visible}
+                    onChange={(e) =>
+                      updateLayer("camera_layout", { ...config.camera_layout, visible: e.target.checked })
+                    }
+                    colorScheme="blue"
                     isDisabled={status.recording}
-                  >
-                    <SliderTrack sx={sliderStyle(((config.pip_scale - 10) / 50) * 100)}>
-                      <SliderFilledTrack bg="transparent" />
-                    </SliderTrack>
-                    <SliderThumb boxSize={3} bg={activeColor} />
-                  </Slider>
+                  />
                 </OptionRow>
-                <OptionRow label={t("recording.pipPosition")} textColor={textColor}>
-                  <Select
-                    size="xs"
-                    w="130px"
-                    value={config.pip_position}
-                    onChange={(e) => updateConfig("pip_position", e.target.value)}
-                    isDisabled={status.recording}
+                <Text fontSize="2xs" color={subTextColor} mt={2} lineHeight="tall">
+                  {t("recording.layoutHint")}
+                </Text>
+                {activeLayer === "camera" && (
+                  <LayerNumericEditor
+                    layer={config.camera_layout}
+                    onChange={(l) => updateLayer("camera_layout", l)}
+                    textColor={textColor}
+                    subTextColor={subTextColor}
                     borderColor={borderColor}
-                  >
-                    <option value="bottom-right">{t("recording.posBottomRight")}</option>
-                    <option value="bottom-left">{t("recording.posBottomLeft")}</option>
-                    <option value="top-right">{t("recording.posTopRight")}</option>
-                    <option value="top-left">{t("recording.posTopLeft")}</option>
-                  </Select>
-                </OptionRow>
-                <OptionRow label={`${t("recording.pipMargin")} · ${config.pip_margin}px`} textColor={textColor}>
-                  <Slider
-                    flex={1}
-                    min={0}
-                    max={120}
-                    step={4}
-                    value={config.pip_margin}
-                    onChange={(v) => updateConfig("pip_margin", v)}
-                    isDisabled={status.recording}
-                  >
-                    <SliderTrack sx={sliderStyle((config.pip_margin / 120) * 100)}>
-                      <SliderFilledTrack bg="transparent" />
-                    </SliderTrack>
-                    <SliderThumb boxSize={3} bg={activeColor} />
-                  </Slider>
-                </OptionRow>
+                    activeColor={activeColor}
+                    disabled={status.recording}
+                    label={t("recording.layerPosition")}
+                  />
+                )}
               </>
             )}
           </SectionCard>
@@ -846,8 +982,55 @@ export default function RecordingPage() {
           )}
         </Box>
 
-        {/* ── 右：录制文件 ── */}
+        {/* ── 右：画布预览 + 录制文件 ── */}
         <Box flex={1} minH="0" display="flex" flexDirection="column">
+          {/* 实时预览 */}
+          <Box mb={4} flexShrink={0}>
+            <HStack justify="space-between" mb={2}>
+              <HStack spacing={2}>
+                <Move size={16} color={activeColor} />
+                <Text fontWeight="bold" fontSize="sm" color={textColor}>
+                  {t("recording.canvas")}
+                </Text>
+                {previewRunning && (
+                  <Badge fontSize="2xs" colorScheme="green">
+                    LIVE
+                  </Badge>
+                )}
+              </HStack>
+              <HStack spacing={2}>
+                <HStack spacing={1.5} fontSize="xs" color={subTextColor}>
+                  <Text>{t("recording.preview")}</Text>
+                  <Switch
+                    size="sm"
+                    isChecked={config.preview_enabled}
+                    onChange={(e) => handleTogglePreview(e.target.checked)}
+                    colorScheme="blue"
+                  />
+                </HStack>
+              </HStack>
+            </HStack>
+            <CanvasPreview
+              canvasW={config.canvas_w || screenInfo.width}
+              canvasH={config.canvas_h || screenInfo.height}
+              screenLayout={config.screen_layout}
+              cameraLayout={config.camera_layout}
+              screenEnabled={config.screen_enabled}
+              cameraDevice={config.camera_device}
+              previewUrl={
+                previewRunning && previewPort > 0
+                  ? `http://127.0.0.1:${previewPort}/preview?t=${previewStamp}`
+                  : ""
+              }
+              activeLayer={activeLayer}
+              onActiveLayerChange={setActiveLayer}
+              onScreenLayoutChange={(l) => updateLayer("screen_layout", l)}
+              onCameraLayoutChange={(l) => updateLayer("camera_layout", l)}
+              disabled={status.recording}
+              showLive={config.preview_enabled && previewRunning && previewPort > 0}
+            />
+          </Box>
+
           <HStack justify="space-between" mb={3} flexShrink={0}>
             <HStack spacing={2}>
               <Film size={18} color={activeColor} />
@@ -1013,6 +1196,85 @@ interface FallbackBtnProps {
   disabled?: boolean;
   activeColor: string;
   textColor: string;
+}
+
+interface LayerNumericEditorProps {
+  layer: LayerLayout;
+  onChange: (layer: LayerLayout) => void;
+  textColor: string;
+  subTextColor: string;
+  borderColor: string;
+  activeColor: string;
+  disabled?: boolean;
+  /** 面板标题（由调用方传入已翻译文本） */
+  label: string;
+}
+
+/**
+ * 图层精确数值编辑（拖拽之外的精确控制方式）。
+ *
+ * 拖拽适合粗调，但用手柄很难对齐到整像素，所以这里提供位置/尺寸/裁剪的直接输入。
+ * 输入框失焦或回车才提交，避免边输入边刷新导致光标跳动。
+ */
+function LayerNumericEditor({
+  layer,
+  onChange,
+  textColor,
+  subTextColor,
+  borderColor,
+  disabled,
+  label,
+}: LayerNumericEditorProps) {
+  const fields: { key: keyof LayerLayout; label: string; min: number; max: number }[] = [
+    { key: "x", label: "X", min: -10000, max: 10000 },
+    { key: "y", label: "Y", min: -10000, max: 10000 },
+    { key: "w", label: "W", min: 2, max: 10000 },
+    { key: "h", label: "H", min: 2, max: 10000 },
+    { key: "crop_x", label: "CX", min: 0, max: 10000 },
+    { key: "crop_y", label: "CY", min: 0, max: 10000 },
+    { key: "crop_w", label: "CW", min: 0, max: 10000 },
+    { key: "crop_h", label: "CH", min: 0, max: 10000 },
+  ];
+
+  const commit = (key: keyof LayerLayout, raw: string) => {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return;
+    const meta = fields.find((f) => f.key === key);
+    if (!meta) return;
+    const val = Math.max(meta.min, Math.min(meta.max, Math.round(num)));
+    onChange({ ...layer, [key]: val } as LayerLayout);
+  };
+
+  return (
+    <Box mt={3} p={2} border="1px solid" borderColor={borderColor} borderRadius="md">
+      <Text fontSize="2xs" color={subTextColor} mb={2}>
+        {label}
+      </Text>
+      <Box display="grid" gridTemplateColumns="repeat(4, 1fr)" gap={1.5}>
+        {fields.map((f) => (
+          <VStack key={f.key} align="stretch" spacing={0.5}>
+            <Text fontSize="2xs" color={subTextColor} textAlign="center">
+              {f.label}
+            </Text>
+            <Input
+              size="xs"
+              px={1}
+              textAlign="center"
+              fontSize="2xs"
+              defaultValue={String(layer[f.key] ?? 0)}
+              onBlur={(e) => commit(f.key, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit(f.key, (e.target as HTMLInputElement).value);
+              }}
+              isDisabled={disabled}
+              borderColor={borderColor}
+              color={textColor}
+            />
+          </VStack>
+        ))}
+      </Box>
+    </Box>
+  );
 }
 
 /** 轻量玻璃按钮（避免额外依赖） */
