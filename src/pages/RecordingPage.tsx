@@ -203,6 +203,10 @@ export default function RecordingPage() {
   const [screenInfo, setScreenInfo] = useState({ width: 1920, height: 1080 });
   const [previewRunning, setPreviewRunning] = useState(false);
   const [previewPort, setPreviewPort] = useState(0);
+  /** 预览的明确状态：idle 未启动 / starting 启动中 / running 运行中 / error 失败 */
+  const [previewState, setPreviewState] = useState<"idle" | "starting" | "running" | "error">("idle");
+  /** 预览失败原因（供画布区展示，避免"一片黑却不知道为什么"） */
+  const [previewError, setPreviewError] = useState("");
   // 预览流加时间戳，强制 <img> 重新连接（MJPEG 流被读干后无法续读）
   const [previewStamp, setPreviewStamp] = useState(() => Date.now());
   const [activeLayer, setActiveLayer] = useState<"screen" | "camera" | null>(null);
@@ -336,13 +340,34 @@ export default function RecordingPage() {
     };
   }, [status.recording, loadStatus]);
 
-  /** 保存设置（静默，不打扰用户） */
+  /**
+   * 保存设置（静默，不打扰用户）。
+   *
+   * 带 300ms 防抖：拖拽/缩放图层时每个 mousemove 都会产生一次配置变化，
+   * 若每次都 invoke 落盘，一次拖拽会打出几十次 IPC 与 settings.json 写入，
+   * 拖拽会明显卡顿、且磁盘被反复刷。防抖后只在停手 300ms 落盘一次。
+   */
+  const persistTimerRef = useRef<number | null>(null);
   const persistConfig = useCallback(async (next: RecorderConfig) => {
-    try {
-      await invoke("recorder_save_config", { config: next });
-    } catch (e) {
-      console.error("recorder_save_config failed:", e);
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current);
     }
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      void invoke("recorder_save_config", { config: next }).catch((e) => {
+        console.error("recorder_save_config failed:", e);
+      });
+    }, 300);
+  }, []);
+  // 离开页面时把待写入的配置立刻落盘，避免防抖窗口内的改动丢失
+  useEffect(() => {
+    return () => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+        void invoke("recorder_save_config", { config: configRef.current }).catch(() => {});
+      }
+    };
   }, []);
 
   /** 修改配置并持久化 */
@@ -371,16 +396,28 @@ export default function RecordingPage() {
 
   /** 启动实时预览 */
   const startPreview = useCallback(async () => {
+    setPreviewState("starting");
     try {
       const port = await invoke<number>("recorder_preview_start", { config });
       setPreviewPort(port);
       setPreviewRunning(true);
+      setPreviewState("running");
+      setPreviewError("");
       // 新流需要新的时间戳参数，否则浏览器可能复用已断的旧连接
       setPreviewStamp(Date.now());
     } catch (e) {
-      console.error("recorder_preview_start failed:", e);
+      const msg = String(e ?? "");
+      console.error("recorder_preview_start failed:", msg);
       setPreviewRunning(false);
-      toast({ title: `预览启动失败：${String(e).slice(0, 120)}`, status: "warning", duration: 4000 });
+      // 空源属于配置问题，静默置为 idle；其它错误才提示
+      if (msg.includes("没有可见的图层") || msg.includes("没有可预览的采集源")) {
+        setPreviewState("idle");
+        setPreviewError("");
+      } else {
+        setPreviewState("error");
+        setPreviewError(msg.slice(0, 160));
+        toast({ title: `预览启动失败：${msg.slice(0, 120)}`, status: "warning", duration: 4000 });
+      }
     }
   }, [config, toast]);
 
@@ -392,6 +429,8 @@ export default function RecordingPage() {
       console.error("recorder_preview_stop failed:", e);
     }
     setPreviewRunning(false);
+    setPreviewState("idle");
+    setPreviewError("");
   }, []);
 
   /** 切换预览开关（关掉就释放采集设备与 CPU） */
@@ -408,37 +447,84 @@ export default function RecordingPage() {
   );
 
   /**
-   * 源配置变化时自动重启预览。
+   * 图层布局 / 采集源变化时自动重启预览。
    *
-   * 预览是独立 ffmpeg 进程，它按启动那一刻的参数采集；
-   * 用户切换摄像头 / 开关屏幕源 / 改帧率后，若重启不了，
-   * 预览画面就会和实际录制内容不一致 —— 那是比"没有预览"更糟的误导。
-   * 这里监听影响采集的关键字段，变化时自动重启。
+   * # 为什么必须重启
    *
-   * 用 ref 读取最新 config：effect 只按关键字段触发，
-   * 若直接闭包捕获 config 会拿到触发那一刻的旧值，导致重启用的是旧参数。
+   * 预览是独立 ffmpeg 进程，按启动那一刻的参数采集。用户拖拽或裁剪图层后，
+   * 录制会按新布局产出，但旧预览进程仍在按旧布局出图 —— 两者不一致，
+   * 用户会误以为布局"没生效"。所以布局一变就要用新参数重启预览。
+   *
+   * # 两个容易踩的坑（都已修正）
+   *
+   * 1) 判定条件不能用 `previewRunning`：
+   *    预览一旦启动失败过（如设备被占用），previewRunning 就是 false，
+   *    而开关绑的是 preview_enabled（仍为 true）→ effect 永远提前 return，
+   *    表现为"开着预览却一直显示预览关闭"。这里改用 preview_enabled 判定。
+   * 2) 必须防抖：拖拽时会连续产生几十次布局变化，每次都重启 ffmpeg
+   *    会让画面疯狂闪烁且 CPU 飙高。这里延迟 350ms，只在停手后重启一次。
    */
   useEffect(() => {
-    const latest = configRef.current;
-    if (!latest.preview_enabled) return;
-    if (!previewRunning) return;
-    // 录制中不动预览，避免抢占设备影响录制
+    if (!config.preview_enabled) return;
+    // 录制中不动预览，避免抢占采集设备影响录制质量
     if (statusRef.current.recording) return;
-    void invoke<number>("recorder_preview_start", { config: latest })
-      .then((port) => {
-        setPreviewPort(port);
-        setPreviewRunning(true);
-        setPreviewStamp(Date.now());
-      })
-      .catch((e) => {
-        console.error("preview auto-restart failed:", e);
-        setPreviewRunning(false);
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    const timer = window.setTimeout(() => {
+      const latest = configRef.current;
+      if (!latest.preview_enabled) return;
+      if (statusRef.current.recording) return;
+      setPreviewState("starting");
+      void invoke<number>("recorder_preview_start", { config: latest })
+        .then((port) => {
+          setPreviewPort(port);
+          setPreviewRunning(true);
+          setPreviewState("running");
+          // 新请求必须带新的时间戳，否则 <img> 会复用已断开的旧连接
+          setPreviewStamp(Date.now());
+        })
+        .catch((e) => {
+          const msg = String(e ?? "");
+          console.error("preview auto-restart failed:", msg);
+          setPreviewRunning(false);
+          // 空源是用户配置问题，不当作错误，避免误报红字
+          if (msg.includes("没有可见的图层") || msg.includes("没有可预览的采集源")) {
+            setPreviewState("idle");
+            setPreviewError("");
+          } else {
+            setPreviewState("error");
+            setPreviewError(msg.slice(0, 160));
+          }
+        });
+    }, 350);
+
+    return () => window.clearTimeout(timer);
   }, [
+    // 采集源
+    config.preview_enabled,
     config.screen_enabled,
     config.screen_fps,
     config.camera_device,
+    // 画布尺寸（改了画布，图层坐标含义随之变化，必须重启）
+    config.canvas_w,
+    config.canvas_h,
+    // 图层布局的每一项（位置 / 尺寸 / 裁剪 / 可见性），少一个就会"拖了没反应"
+    config.screen_layout.x,
+    config.screen_layout.y,
+    config.screen_layout.w,
+    config.screen_layout.h,
+    config.screen_layout.crop_x,
+    config.screen_layout.crop_y,
+    config.screen_layout.crop_w,
+    config.screen_layout.crop_h,
+    config.screen_layout.visible,
+    config.camera_layout.x,
+    config.camera_layout.y,
+    config.camera_layout.w,
+    config.camera_layout.h,
+    config.camera_layout.crop_x,
+    config.camera_layout.crop_y,
+    config.camera_layout.crop_w,
+    config.camera_layout.crop_h,
     config.camera_layout.visible,
   ]);
 
@@ -1028,6 +1114,9 @@ export default function RecordingPage() {
               onCameraLayoutChange={(l) => updateLayer("camera_layout", l)}
               disabled={status.recording}
               showLive={config.preview_enabled && previewRunning && previewPort > 0}
+              previewState={previewState}
+              previewError={previewError}
+              previewEnabled={config.preview_enabled}
             />
           </Box>
 

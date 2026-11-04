@@ -1,6 +1,6 @@
-import { Box, Flex, Text, HStack, VStack, useColorModeValue } from "@chakra-ui/react";
+import { Box, Flex, Text, HStack, VStack, Spinner, useColorModeValue } from "@chakra-ui/react";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Monitor, Camera, Eye, EyeOff, Move, Maximize2, Crop } from "lucide-react";
+import { Monitor, Camera, AlertTriangle } from "lucide-react";
 
 /** 单个采集图层的布局（画布像素坐标） */
 export interface LayerLayout {
@@ -41,6 +41,12 @@ interface CanvasPreviewProps {
   disabled?: boolean;
   /** 是否显示实时预览画面 */
   showLive: boolean;
+  /** 预览状态：用于显示准确占位文案，避免「开着预览却显示已关闭」 */
+  previewState?: "idle" | "starting" | "running" | "error";
+  /** 预览失败原因 */
+  previewError?: string;
+  /** 预览开关是否开启（与 previewState 区分：开着但可能启动中/失败） */
+  previewEnabled?: boolean;
 }
 
 /**
@@ -68,6 +74,9 @@ export default function CanvasPreview({
   onCameraLayoutChange,
   disabled = false,
   showLive,
+  previewState = "idle",
+  previewError = "",
+  previewEnabled = false,
 }: CanvasPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [displayW, setDisplayW] = useState(0);
@@ -342,7 +351,7 @@ export default function CanvasPreview({
           />
         ) : (
           <Flex>
-            {/* 无预览时给个提示 */}
+            {/* 无画面时给出**准确**的原因，而不是一律说"预览已关闭" */}
             <VStack
               position="absolute"
               inset={0}
@@ -350,9 +359,42 @@ export default function CanvasPreview({
               justify="center"
               spacing={1}
               color="gray.500"
+              px={4}
+              textAlign="center"
             >
-              <Monitor size={24} opacity={0.4} />
-              <Text fontSize="2xs">{showLive ? "等待预览" : "预览已关闭"}</Text>
+              {previewState === "error" ? (
+                <>
+                  <AlertTriangle size={22} opacity={0.6} />
+                  <Text fontSize="2xs" color="orange.300">
+                    预览失败
+                  </Text>
+                  {previewError && (
+                    <Text fontSize="2xs" opacity={0.75} wordBreak="break-all">
+                      {previewError}
+                    </Text>
+                  )}
+                </>
+              ) : previewEnabled && previewState === "starting" ? (
+                <>
+                  <Spinner size="sm" />
+                  <Text fontSize="2xs">预览启动中…</Text>
+                </>
+              ) : previewEnabled && previewState === "running" ? (
+                <>
+                  <Monitor size={22} opacity={0.4} />
+                  <Text fontSize="2xs">等待画面…</Text>
+                </>
+              ) : previewEnabled ? (
+                <>
+                  <Monitor size={22} opacity={0.4} />
+                  <Text fontSize="2xs">预览未启动</Text>
+                </>
+              ) : (
+                <>
+                  <Monitor size={22} opacity={0.4} />
+                  <Text fontSize="2xs">预览已关闭</Text>
+                </>
+              )}
             </VStack>
           </Flex>
         )}

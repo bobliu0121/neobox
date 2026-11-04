@@ -1017,7 +1017,9 @@ pub async fn recorder_preview_start(config: RecorderConfig) -> Result<u16, Strin
         camera_device: cfg.camera_device.clone(),
         canvas_w: cfg.canvas_w,
         canvas_h: cfg.canvas_h,
-        camera_visible: cfg.camera_layout.visible,
+        // 预览必须用与录制相同的图层布局，否则拖拽/裁剪后预览与录制不一致
+        screen_layout: cfg.screen_layout.clone(),
+        camera_layout: cfg.camera_layout.clone(),
     };
 
     crate::recorder_preview::start_preview_server(ffmpeg, params).await

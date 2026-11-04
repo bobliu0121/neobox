@@ -42,6 +42,10 @@ static PREVIEW_PARAMS: Mutex<Option<(std::path::PathBuf, PreviewParams)>> = Mute
 use std::os::windows::process::CommandExt;
 
 /// 预览参数：低清、低帧率，明显区别于录制
+///
+/// 关键：预览必须使用与录制**完全相同**的图层布局（位置/尺寸/裁剪），
+/// 否则用户拖拽或裁剪图层后，预览画面与最终录出的视频不一致 ——
+/// 那会让用户以为布局设置没生效，比没有预览更糟。
 #[derive(Clone)]
 pub struct PreviewParams {
     pub screen_enabled: bool,
@@ -49,8 +53,10 @@ pub struct PreviewParams {
     pub camera_device: String,
     pub canvas_w: u32,
     pub canvas_h: u32,
-    /// 是否包含摄像头图层
-    pub camera_visible: bool,
+    /// 屏幕图层布局
+    pub screen_layout: crate::recorder::LayerLayout,
+    /// 摄像头图层布局
+    pub camera_layout: crate::recorder::LayerLayout,
 }
 
 /// 构造预览用的 ffmpeg 子进程（输出 mpjpeg 到 stdout）
@@ -61,12 +67,14 @@ fn build_preview_child(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
 
     // 预览固定最大宽度 640，兼顾清晰度与开销
     let target_w = 640u32;
-    let ratio = if p.canvas_w > 0 {
-        target_w as f64 / p.canvas_w as f64
-    } else {
-        1.0
+    let target_h = {
+        let r = if p.canvas_w > 0 {
+            target_w as f64 / p.canvas_w as f64
+        } else {
+            1.0
+        };
+        ((p.canvas_h as f64 * r) as u32).max(2)
     };
-    let target_h = ((p.canvas_h as f64 * ratio) as u32).max(2);
     let target_w = target_w - target_w % 2;
     let target_h = target_h - target_h % 2;
 
@@ -100,21 +108,105 @@ fn build_preview_child(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
         let _ = idx;
     }
 
-    // 画面合成：缩放画布尺寸，若两源都在则画中画预览
-    let filter = match (screen_idx, cam_idx, p.camera_visible) {
-        (Some(_s), Some(c), true) => {
-            // 预览也做画中画，让用户在预览里就能看到布局关系
-            format!(
-                "[0:v]scale={target_w}:{target_h}[bg];\
-                 [{c}:v]scale=-2:{pw}[cam];\
-                 [bg][cam]overlay=x=W-w-16:y=H-h-16[v]",
-                pw = (target_h / 3).max(2)
-            )
+    // 画面合成：**完全复刻录制的画布式布局**，只是整体缩小到预览尺寸。
+    //
+    // 做法：先在「画布像素坐标系」里按图层 x/y/w/h/crop 生成 overlay 链，
+    // 最后统一 scale 到预览分辨率。这样布局比例与录制结果一致，
+    // 用户拖到哪里、裁哪里，预览就显示到哪里。
+    //
+    // 之所以不能沿用旧的「固定右下角画中画」：那完全不参考 layer 的
+    // 位置与裁剪参数，移动/裁剪图层后预览不动，会误导用户。
+
+    let canvas_w = p.canvas_w.max(2);
+    let canvas_h = p.canvas_h.max(2);
+
+    let mut filters: Vec<String> = Vec::new();
+    // 空白画布
+    filters.push(format!(
+        "color=c=black:s={canvas_w}x{canvas_h}:r={fps}[canvas0]"
+    ));
+    let mut composed = String::from("[canvas0]");
+    let mut layer_no = 0usize;
+
+    // 屏幕图层
+    if let Some(s) = screen_idx {
+        let lay = &p.screen_layout;
+        if lay.visible {
+            let mut chain = String::new();
+            if lay.crop_w > 0 && lay.crop_h > 0 {
+                chain.push_str(&format!(
+                    "crop={}:{}:{}:{},",
+                    lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
+                ));
+            }
+            let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
+            let dh = if lay.h > 0 {
+                lay.h - lay.h % 2
+            } else {
+                canvas_h - canvas_h % 2
+            };
+            chain.push_str(&format!("scale={dw}:{dh}"));
+            let label = format!("[scr{layer_no}]");
+            filters.push(format!("[{s}:v]setpts=PTS-STARTPTS,{chain}{label}"));
+            filters.push(format!(
+                "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
+                lay.x.max(0),
+                lay.y.max(0),
+                layer_no + 1
+            ));
+            composed = format!("[canvas{}]", layer_no + 1);
+            layer_no += 1;
         }
-        (Some(_s), _, _) => format!("[0:v]scale={target_w}:{target_h}[v]"),
-        (None, Some(c), _) => format!("[{c}:v]scale={target_w}:-2[v]"),
-        (None, None, _) => return Err("没有可预览的采集源".to_string()),
-    };
+    }
+
+    // 摄像头图层
+    if let Some(c) = cam_idx {
+        let lay = &p.camera_layout;
+        if lay.visible {
+            let mut chain = String::new();
+            if lay.crop_w > 0 && lay.crop_h > 0 {
+                chain.push_str(&format!(
+                    "crop={}:{}:{}:{},",
+                    lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
+                ));
+            }
+            let dw = if lay.w > 0 {
+                lay.w - lay.w % 2
+            } else {
+                (canvas_w / 4) - (canvas_w / 4) % 2
+            };
+            let dh = if lay.h > 0 {
+                lay.h - lay.h % 2
+            } else {
+                0
+            };
+            if dh > 0 {
+                chain.push_str(&format!("scale={dw}:{dh}"));
+            } else {
+                chain.push_str(&format!("scale={dw}:-2"));
+            }
+            let label = format!("[cam{layer_no}]");
+            filters.push(format!("[{c}:v]setpts=PTS-STARTPTS,{chain}{label}"));
+            filters.push(format!(
+                "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
+                lay.x.max(0),
+                lay.y.max(0),
+                layer_no + 1
+            ));
+            composed = format!("[canvas{}]", layer_no + 1);
+            let _ = layer_no + 1;
+        }
+    }
+
+    // 没有任何可见图层：直接报错，避免用户看到全黑却不知原因
+    if layer_no == 0 {
+        return Err("没有可见的图层可预览（请在画布上启用至少一个图层）".to_string());
+    }
+
+    // 整体缩放到预览分辨率
+    filters.push(format!("{composed}scale={target_w}:{target_h},format=yuv420p[v]"));
+
+    let filter = filters.join(";");
 
     args.extend([
         "-filter_complex".into(), filter,
