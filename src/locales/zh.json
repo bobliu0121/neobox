@@ -2755,6 +2755,10 @@
     "cropW": "裁剪宽度",
     "cropH": "裁剪高度",
     "layerPosition": "位置 / 尺寸 / 裁剪（画布像素）",
-    "previewHint": "预览会额外占用一个 ffmpeg 采集进程，关闭可省资源；录制不受影响。"
+    "previewHint": "预览会额外占用一个 ffmpeg 采集进程，关闭可省资源；录制不受影响。",
+    "aspect": "画面比例",
+    "restoreDefaults": "恢复默认布局",
+    "customSize": "自定义",
+    "canvasSize": "画布尺寸"
   }
 }

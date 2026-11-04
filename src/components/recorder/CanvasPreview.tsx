@@ -15,50 +15,54 @@ export interface LayerLayout {
   visible: boolean;
 }
 
-/** 拖拽 / 缩放 / 裁剪的交互模式 */
-type DragMode = "none" | "move" | "resize" | "crop";
+/** 交互模式 */
+type DragMode =
+  | "none"
+  | "move"
+  | "resize-tl"
+  | "resize-tr"
+  | "resize-bl"
+  | "resize-br"
+  | "crop";
+
+/** 角句柄位置 */
+const CORNERS = ["tl", "tr", "bl", "br"] as const;
+type Corner = (typeof CORNERS)[number];
 
 interface CanvasPreviewProps {
-  /** 画布真实尺寸（像素，如 1920x1080） */
   canvasW: number;
   canvasH: number;
-  /** 屏幕图层布局 */
   screenLayout: LayerLayout;
-  /** 摄像头图层布局 */
   cameraLayout: LayerLayout;
-  /** 是否启用屏幕源 */
   screenEnabled: boolean;
-  /** 摄像头设备名（空表示未启用） */
   cameraDevice: string;
-  /** MJPEG 预览地址（空表示不显示实时流） */
-  previewUrl: string;
-  /** 当前选中的图层 */
+  /** 屏幕源的 MJPEG 流地址 */
+  screenStreamUrl: string;
+  /** 摄像头源的 MJPEG 流地址 */
+  cameraStreamUrl: string;
   activeLayer: "screen" | "camera" | null;
   onActiveLayerChange: (layer: "screen" | "camera" | null) => void;
   onScreenLayoutChange: (layout: LayerLayout) => void;
   onCameraLayoutChange: (layout: LayerLayout) => void;
-  /** 是否处于录制中（禁用手柄交互） */
   disabled?: boolean;
-  /** 是否显示实时预览画面 */
-  showLive: boolean;
-  /** 预览状态：用于显示准确占位文案，避免「开着预览却显示已关闭」 */
   previewState?: "idle" | "starting" | "running" | "error";
-  /** 预览失败原因 */
   previewError?: string;
-  /** 预览开关是否开启（与 previewState 区分：开着但可能启动中/失败） */
   previewEnabled?: boolean;
 }
 
 /**
- * 可拖拽的采集画布。
+ * 可拖拽的分层合成画布。
  *
- * 设计要点：
- * - 预览区按比例缩小显示真实画布，拖拽时把显示像素换算回画布像素再上报，
- *   所以布局在不同分辨率下都稳定（后端收到的永远是画布像素）。
- * - 三个操作手柄：整体拖拽（move）、右下角缩放（resize）、裁剪框（crop）。
- *   裁剪只改变「采集内容区域」，不改变图层在画布上的位置与显示尺寸，
- *   两者解耦后用户能分别调整「看哪一块」与「显示多大」。
- * - 实时预览用 <img> 指向后端 MJPEG 流；关掉预览时退化为示意图。
+ * # 为什么预览在前端合成
+ *
+ * 早期让后端 ffmpeg 合成整幅画面，导致任何布局变化都要重启 ffmpeg 进程，
+ * 拖动图层时画面要等几百毫秒才更新 —— 用户感受是「拖过去了画面才跳过去」。
+ *
+ * 现在每个采集源各输出一路原始 MJPEG 流，前端用两条 <img> 叠加并按
+ * 图层布局做 CSS 变换。拖拽只改 CSS 内联样式，浏览器合成层下一帧就重绘，
+ * 真正做到「手指在动，画面就跟」。
+ *
+ * 录制成片仍由后端 ffmpeg 按同一套布局参数合成，所以预览所见即录所得。
  */
 export default function CanvasPreview({
   canvasW,
@@ -67,13 +71,13 @@ export default function CanvasPreview({
   cameraLayout,
   screenEnabled,
   cameraDevice,
-  previewUrl,
+  screenStreamUrl,
+  cameraStreamUrl,
   activeLayer,
   onActiveLayerChange,
   onScreenLayoutChange,
   onCameraLayoutChange,
   disabled = false,
-  showLive,
   previewState = "idle",
   previewError = "",
   previewEnabled = false,
@@ -82,10 +86,12 @@ export default function CanvasPreview({
   const [displayW, setDisplayW] = useState(0);
   const [dragMode, setDragMode] = useState<DragMode>("none");
   const [dragLayer, setDragLayer] = useState<"screen" | "camera" | null>(null);
-  const [dragStart, setDragStart] = useState({ mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0, cw: 0, ch: 0 });
+  const [dragStart, setDragStart] = useState({
+    mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0, cw: 0, ch: 0,
+  });
 
   const borderColor = useColorModeValue("gray.300", "rgba(255,255,255,0.2)");
-  const canvasBg = useColorModeValue("#1a1a1a", "#0d0d0d");
+  const canvasBg = useColorModeValue("#111", "#0a0a0a");
   const activeColor = useColorModeValue("blue.500", "#4B8BD6");
   const labelBg = useColorModeValue("rgba(0,0,0,0.75)", "rgba(0,0,0,0.8)");
 
@@ -102,11 +108,9 @@ export default function CanvasPreview({
     return () => ro.disconnect();
   }, []);
 
-  // 显示比例：显示像素 / 画布像素
   const scale = displayW > 0 && canvasW > 0 ? displayW / canvasW : 0;
   const displayH = canvasH * scale;
 
-  /** 把鼠标位移换算成画布像素 */
   const toCanvasDelta = useCallback(
     (dxPx: number, dyPx: number) => {
       if (scale <= 0) return { dx: 0, dy: 0 };
@@ -115,7 +119,6 @@ export default function CanvasPreview({
     [scale]
   );
 
-  /** 开始拖拽 */
   const startDrag = useCallback(
     (e: React.MouseEvent, layer: "screen" | "camera", mode: DragMode) => {
       if (disabled) return;
@@ -125,23 +128,16 @@ export default function CanvasPreview({
       setDragLayer(layer);
       setDragMode(mode);
       setDragStart({
-        mx: e.clientX,
-        my: e.clientY,
-        x: layout.x,
-        y: layout.y,
-        w: layout.w,
-        h: layout.h,
-        cx: layout.crop_x,
-        cy: layout.crop_y,
-        cw: layout.crop_w,
-        ch: layout.crop_h,
+        mx: e.clientX, my: e.clientY,
+        x: layout.x, y: layout.y, w: layout.w, h: layout.h,
+        cx: layout.crop_x, cy: layout.crop_y, cw: layout.crop_w, ch: layout.crop_h,
       });
       onActiveLayerChange(layer);
     },
     [disabled, screenLayout, cameraLayout, onActiveLayerChange]
   );
 
-  // 全局鼠标事件：拖出画布外也能继续
+  // 全局拖拽：不限制在画布内（允许把图层拖到画面外）
   useEffect(() => {
     if (dragMode === "none" || !dragLayer) return;
 
@@ -149,41 +145,71 @@ export default function CanvasPreview({
       const { dx, dy } = toCanvasDelta(e.clientX - dragStart.mx, e.clientY - dragStart.my);
       const layer = dragLayer;
       const origin = layer === "screen" ? screenLayout : cameraLayout;
+      const apply = (next: LayerLayout) => {
+        if (layer === "screen") onScreenLayoutChange(next);
+        else onCameraLayoutChange(next);
+      };
 
       if (dragMode === "move") {
-        // 位置：钳制在画布范围内（允许部分出界但至少留一角可见）
-        const nx = Math.max(-origin.w + 40, Math.min(canvasW - 40, dragStart.x + dx));
-        const ny = Math.max(-origin.h + 40, Math.min(canvasH - 40, dragStart.y + dy));
-        const next = { ...origin, x: nx, y: ny };
-        if (layer === "screen") onScreenLayoutChange(next);
-        else onCameraLayoutChange(next);
-      } else if (dragMode === "resize") {
-        // 缩放：最小 64x36，保证偶数
-        const nw = Math.max(64, Math.min(canvasW, dragStart.w + dx));
-        const nh = Math.max(36, Math.min(canvasH, dragStart.h + dy));
-        const next = {
-          ...origin,
-          w: nw - (nw % 2),
-          h: nh - (nh % 2),
-        };
-        if (layer === "screen") onScreenLayoutChange(next);
-        else onCameraLayoutChange(next);
-      } else if (dragMode === "crop") {
-        // 裁剪：起点+尺寸，钳制在源画面范围内
-        const ncx = Math.max(0, dragStart.cx + dx);
-        const ncy = Math.max(0, dragStart.cy + dy);
+        // 不钳制：允许拖到画布外（后端 overlay 支持负坐标）
+        apply({ ...origin, x: dragStart.x + dx, y: dragStart.y + dy });
+        return;
+      }
+
+      if (dragMode === "crop") {
         const ncw = Math.max(32, dragStart.cw + dx);
         const nch = Math.max(32, dragStart.ch + dy);
-        const next = {
+        apply({
           ...origin,
-          crop_x: ncx,
-          crop_y: ncy,
+          crop_x: Math.max(0, dragStart.cx + dx),
+          crop_y: Math.max(0, dragStart.cy + dy),
           crop_w: ncw - (ncw % 2),
           crop_h: nch - (nch % 2),
-        };
-        if (layer === "screen") onScreenLayoutChange(next);
-        else onCameraLayoutChange(next);
+        });
+        return;
       }
+
+      // 四角缩放：拖哪个角，对角的坐标保持不动
+      //
+      // 必须一次性算出最终的 x/y/w/h 再提交：若先改宽度再改高度分别提交，
+      // 两次 setState 会互相覆盖（第二次基于旧 origin），导致缩放乱跳。
+      const minW = 64;
+      const minH = 36;
+      const fromLeft = dragMode === "resize-tl" || dragMode === "resize-bl";
+      const fromTop = dragMode === "resize-tl" || dragMode === "resize-tr";
+
+      let nx = dragStart.x;
+      let ny = dragStart.y;
+      let nw = dragStart.w;
+      let nh = dragStart.h;
+
+      if (fromLeft) {
+        // 左边界跟着鼠标走，右边界固定
+        const right = dragStart.x + dragStart.w;
+        const movedX = Math.min(right - minW, dragStart.x + dx);
+        nx = movedX;
+        nw = right - movedX;
+      } else {
+        nw = Math.max(minW, dragStart.w + dx);
+      }
+
+      if (fromTop) {
+        // 上边界跟着鼠标走，下边界固定
+        const bottom = dragStart.y + dragStart.h;
+        const movedY = Math.min(bottom - minH, dragStart.y + dy);
+        ny = movedY;
+        nh = bottom - movedY;
+      } else {
+        nh = Math.max(minH, dragStart.h + dy);
+      }
+
+      apply({
+        ...origin,
+        x: nx,
+        y: ny,
+        w: nw - (nw % 2),
+        h: nh - (nh % 2),
+      });
     };
 
     const onUp = () => {
@@ -198,33 +224,30 @@ export default function CanvasPreview({
       window.removeEventListener("mouseup", onUp);
     };
   }, [
-    dragMode,
-    dragLayer,
-    dragStart,
-    toCanvasDelta,
-    canvasW,
-    canvasH,
-    screenLayout,
-    cameraLayout,
-    onScreenLayoutChange,
-    onCameraLayoutChange,
+    dragMode, dragLayer, dragStart, toCanvasDelta,
+    screenLayout, cameraLayout,
+    onScreenLayoutChange, onCameraLayoutChange,
   ]);
 
-  /** 渲染单个图层框 */
+  /** 渲染图层：源画面 + CSS 变换 + 手柄 */
   const renderLayer = (
     key: "screen" | "camera",
     layout: LayerLayout,
+    streamUrl: string,
     icon: React.ReactNode,
     label: string,
     hasSource: boolean
   ) => {
     if (!hasSource) return null;
     const isActive = activeLayer === key;
-    // 显示坐标
     const dx = layout.x * scale;
     const dy = layout.y * scale;
     const dw = layout.w * scale;
     const dh = layout.h * scale;
+
+    // 裁剪：用外层容器的 overflow hidden + 内层 img 反向偏移实现
+    // 这样 css 变换即可，不需要 img 真的被裁
+    const hasCrop = layout.crop_w > 0 && layout.crop_h > 0;
 
     return (
       <Box
@@ -234,18 +257,47 @@ export default function CanvasPreview({
         top={`${dy}px`}
         width={`${dw}px`}
         height={`${dh}px`}
+        overflow="hidden"
         border="2px solid"
         borderColor={isActive ? activeColor : borderColor}
-        borderRadius="4px"
-        bg={layout.visible ? "transparent" : "rgba(0,0,0,0.5)"}
-        opacity={layout.visible ? 1 : 0.55}
+        borderRadius="2px"
+        opacity={layout.visible ? 1 : 0.35}
         cursor={disabled ? "default" : "move"}
         onMouseDown={(e) => startDrag(e, key, "move")}
-        onDoubleClick={() => onActiveLayerChange(isActive ? null : key)}
-        zIndex={isActive ? 20 : 10}
+        zIndex={isActive ? 30 : 20}
+        // 拖拽时关掉过渡，保证画面紧跟鼠标；非拖拽时给边框一点动画
         transition={dragMode === "none" ? "border-color 0.15s" : "none"}
         _hover={{ borderColor: activeColor }}
+        sx={{ willChange: "left, top, width, height" }}
       >
+        {/* 源画面 */}
+        {streamUrl ? (
+          <img
+            src={streamUrl}
+            alt={label}
+            draggable={false}
+            style={{
+              position: "absolute",
+              // 裁剪偏移：把「整幅源」按裁剪区放大并左移，实现内容裁剪
+              left: hasCrop ? `${-(layout.crop_x / Math.max(layout.crop_w, 1)) * 100}%` : 0,
+              top: hasCrop ? `${-(layout.crop_y / Math.max(layout.crop_h, 1)) * 100}%` : 0,
+              width: hasCrop ? `${(layout.w / Math.max(layout.crop_w, 1)) * 100}%` : "100%",
+              height: hasCrop ? `${(layout.h / Math.max(layout.crop_h, 1)) * 100}%` : "100%",
+              objectFit: "fill",
+              pointerEvents: "none",
+              userSelect: "none",
+            }}
+          />
+        ) : (
+          <Box
+            position="absolute"
+            inset={0}
+            bg={key === "screen" ? "rgba(59,130,246,0.18)" : "rgba(16,185,129,0.18)"}
+            border="1px dashed"
+            borderColor="rgba(255,255,255,0.25)"
+          />
+        )}
+
         {/* 图层标签 */}
         <HStack
           position="absolute"
@@ -265,50 +317,49 @@ export default function CanvasPreview({
           {!layout.visible && <Text opacity={0.7}>(隐藏)</Text>}
         </HStack>
 
-        {/* 裁剪区域示意（虚线内框） */}
-        {(layout.crop_w > 0 || layout.crop_h > 0) && (
-          <Box
-            position="absolute"
-            left={`${(layout.crop_x / Math.max(layout.w, 1)) * 100}%`}
-            top={`${(layout.crop_y / Math.max(layout.h, 1)) * 100}%`}
-            width={`${(layout.crop_w / Math.max(layout.w, 1)) * 100}%`}
-            height={`${(layout.crop_h / Math.max(layout.h, 1)) * 100}%`}
-            border="1px dashed"
-            borderColor="yellow.400"
-            pointerEvents="none"
-          />
-        )}
+        {/* 四角缩放手柄 */}
+        {!disabled &&
+          CORNERS.map((corner) => {
+            const pos: Record<Corner, React.CSSProperties> = {
+              tl: { left: -6, top: -6, cursor: "nwse-resize" },
+              tr: { right: -6, top: -6, cursor: "nesw-resize" },
+              bl: { left: -6, bottom: -6, cursor: "nesw-resize" },
+              br: { right: -6, bottom: -6, cursor: "nwse-resize" },
+            };
+            return (
+              <Box
+                key={corner}
+                position="absolute"
+                w="12px"
+                h="12px"
+                borderRadius="2px"
+                bg={activeColor}
+                border="1px solid rgba(255,255,255,0.6)"
+                style={pos[corner]}
+                zIndex={40}
+                onMouseDown={(e) => startDrag(e, key, `resize-${corner}` as DragMode)}
+                _hover={{ transform: "scale(1.15)" }}
+              />
+            );
+          })}
 
-        {/* 右下角缩放手柄 */}
+        {/* 裁剪手柄（黄色，放在底边中点，避免和四角缩放混淆） */}
         {!disabled && (
           <Box
             position="absolute"
-            right="-6px"
+            left="50%"
             bottom="-6px"
-            w="12px"
-            h="12px"
-            borderRadius="2px"
-            bg={activeColor}
-            cursor="nwse-resize"
-            onMouseDown={(e) => startDrag(e, key, "resize")}
-            zIndex={30}
-            _hover={{ transform: "scale(1.2)" }}
-          />
-        )}
-        {/* 左侧裁剪手柄 */}
-        {!disabled && (
-          <Box
-            position="absolute"
-            left="-6px"
-            bottom="-6px"
-            w="12px"
-            h="12px"
+            w="14px"
+            h="14px"
+            mt="-7px"
+            ml="-7px"
             borderRadius="full"
             bg="yellow.400"
+            border="1px solid rgba(0,0,0,0.4)"
             cursor="crosshair"
+            zIndex={40}
             onMouseDown={(e) => startDrag(e, key, "crop")}
-            zIndex={30}
-            _hover={{ transform: "scale(1.2)" }}
+            _hover={{ transform: "scale(1.15)" }}
           />
         )}
       </Box>
@@ -319,9 +370,10 @@ export default function CanvasPreview({
     return <Box ref={containerRef} w="full" h="200px" />;
   }
 
+  const anyLive = (screenEnabled && screenStreamUrl) || (cameraDevice && cameraStreamUrl);
+
   return (
     <VStack align="stretch" spacing={2} w="full">
-      {/* 画布 */}
       <Box
         ref={containerRef}
         position="relative"
@@ -335,83 +387,60 @@ export default function CanvasPreview({
         minH={`${displayH}px`}
         onMouseDown={() => onActiveLayerChange(null)}
       >
-        {/* 实时预览底图 */}
-        {showLive && previewUrl ? (
-          <img
-            src={previewUrl}
-            alt="preview"
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "fill",
-              pointerEvents: "none",
-            }}
-          />
-        ) : (
-          <Flex>
-            {/* 无画面时给出**准确**的原因，而不是一律说"预览已关闭" */}
-            <VStack
-              position="absolute"
-              inset={0}
-              align="center"
-              justify="center"
-              spacing={1}
-              color="gray.500"
-              px={4}
-              textAlign="center"
-            >
-              {previewState === "error" ? (
-                <>
-                  <AlertTriangle size={22} opacity={0.6} />
-                  <Text fontSize="2xs" color="orange.300">
-                    预览失败
-                  </Text>
-                  {previewError && (
-                    <Text fontSize="2xs" opacity={0.75} wordBreak="break-all">
-                      {previewError}
-                    </Text>
-                  )}
-                </>
-              ) : previewEnabled && previewState === "starting" ? (
-                <>
-                  <Spinner size="sm" />
-                  <Text fontSize="2xs">预览启动中…</Text>
-                </>
-              ) : previewEnabled && previewState === "running" ? (
-                <>
-                  <Monitor size={22} opacity={0.4} />
-                  <Text fontSize="2xs">等待画面…</Text>
-                </>
-              ) : previewEnabled ? (
-                <>
-                  <Monitor size={22} opacity={0.4} />
-                  <Text fontSize="2xs">预览未启动</Text>
-                </>
-              ) : (
-                <>
-                  <Monitor size={22} opacity={0.4} />
-                  <Text fontSize="2xs">预览已关闭</Text>
-                </>
-              )}
-            </VStack>
-          </Flex>
+        {/* 无任何画面时给出准确状态 */}
+        {!anyLive && (
+          <VStack
+            position="absolute"
+            inset={0}
+            align="center"
+            justify="center"
+            spacing={1}
+            color="gray.500"
+            px={4}
+            textAlign="center"
+            pointerEvents="none"
+            zIndex={10}
+          >
+            {previewState === "error" ? (
+              <>
+                <AlertTriangle size={22} opacity={0.6} />
+                <Text fontSize="2xs" color="orange.300">预览失败</Text>
+                {previewError && (
+                  <Text fontSize="2xs" opacity={0.75} wordBreak="break-all">{previewError}</Text>
+                )}
+              </>
+            ) : previewEnabled && previewState === "starting" ? (
+              <>
+                <Spinner size="sm" />
+                <Text fontSize="2xs">预览启动中…</Text>
+              </>
+            ) : previewEnabled && previewState === "running" ? (
+              <>
+                <Monitor size={22} opacity={0.4} />
+                <Text fontSize="2xs">等待画面…</Text>
+              </>
+            ) : previewEnabled ? (
+              <>
+                <Monitor size={22} opacity={0.4} />
+                <Text fontSize="2xs">预览未启动</Text>
+              </>
+            ) : (
+              <>
+                <Monitor size={22} opacity={0.4} />
+                <Text fontSize="2xs">预览已关闭</Text>
+              </>
+            )}
+          </VStack>
         )}
 
-        {/* 图层 */}
-        {screenEnabled && renderLayer("screen", screenLayout, <Monitor size={10} />, "屏幕", true)}
-        {cameraDevice !== "" && renderLayer("camera", cameraLayout, <Camera size={10} />, "摄像头", true)}
+        {/* 图层（屏幕在下、摄像头在上） */}
+        {renderLayer("screen", screenLayout, screenEnabled ? screenStreamUrl : "", <Monitor size={10} />, "屏幕", screenEnabled)}
+        {renderLayer("camera", cameraLayout, cameraDevice !== "" ? cameraStreamUrl : "", <Camera size={10} />, "摄像头", cameraDevice !== "")}
       </Box>
 
-      {/* 画布信息 */}
       <HStack justify="space-between" fontSize="2xs" color="gray.500" px={1}>
-        <Text>
-          画布 {canvasW}×{canvasH}
-        </Text>
-        <Text>
-          显示比例 {scale > 0 ? `${(scale * 100).toFixed(1)}%` : "-"}
-        </Text>
+        <Text>画布 {canvasW}×{canvasH}</Text>
+        <Text>显示比例 {scale > 0 ? `${(scale * 100).toFixed(1)}%` : "-"}</Text>
       </HStack>
     </VStack>
   );

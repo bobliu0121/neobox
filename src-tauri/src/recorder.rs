@@ -745,8 +745,9 @@ pub fn build_args(
         filters.push(format!("[0:v]setpts=PTS-STARTPTS,{chain}{label}"));
         filters.push(format!(
             "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
-            lay.x.max(0),
-            lay.y.max(0),
+            // 允许负坐标：图层可以拖到画布外（超出部分自然被裁掉）
+            lay.x,
+            lay.y,
             layer_no + 1
         ));
         composed = format!("[canvas{}]", layer_no + 1);
@@ -781,8 +782,9 @@ pub fn build_args(
             filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS,{chain}{label}"));
             filters.push(format!(
                 "{composed}{label}overlay=x={}:y={}:shortest=0[canvas{}]",
-                lay.x.max(0),
-                lay.y.max(0),
+                // 允许负坐标：图层可以拖到画布外
+                lay.x,
+                lay.y,
                 layer_no + 1
             ));
             composed = format!("[canvas{}]", layer_no + 1);
@@ -1011,15 +1013,11 @@ pub async fn recorder_preview_start(config: RecorderConfig) -> Result<u16, Strin
     let mut cfg = config;
     cfg.normalize(sw, sh);
 
+    // 预览不再需要图层布局与画布尺寸：每源输出原始画面，由前端分层合成
     let params = crate::recorder_preview::PreviewParams {
         screen_enabled: cfg.screen_enabled,
         screen_fps: cfg.screen_fps,
         camera_device: cfg.camera_device.clone(),
-        canvas_w: cfg.canvas_w,
-        canvas_h: cfg.canvas_h,
-        // 预览必须用与录制相同的图层布局，否则拖拽/裁剪后预览与录制不一致
-        screen_layout: cfg.screen_layout.clone(),
-        camera_layout: cfg.camera_layout.clone(),
     };
 
     crate::recorder_preview::start_preview_server(ffmpeg, params).await

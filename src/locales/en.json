@@ -2945,6 +2945,10 @@
     "cropW": "Crop width",
     "cropH": "Crop height",
     "layerPosition": "Position / size / crop (canvas px)",
-    "previewHint": "Preview runs an extra ffmpeg capture process; turn it off to save resources. Recording is unaffected."
+    "previewHint": "Preview runs an extra ffmpeg capture process; turn it off to save resources. Recording is unaffected.",
+    "aspect": "Aspect ratio",
+    "restoreDefaults": "Restore default layout",
+    "customSize": "Custom",
+    "canvasSize": "Canvas size"
   }
 }

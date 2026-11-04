@@ -49,6 +49,7 @@ import {
   Eye,
   EyeOff,
   Crop,
+  RotateCcw,
 } from "lucide-react";
 import CanvasPreview, { type LayerLayout } from "@/components/recorder/CanvasPreview";
 
@@ -112,6 +113,33 @@ interface FfmpegProbe {
   has_gdigrab: boolean;
   has_dshow: boolean;
   hw_encoders: string[];
+}
+
+/** 录制画面比例预设 */
+const ASPECT_PRESETS: { label: string; w: number; h: number }[] = [
+  { label: "16:9", w: 16, h: 9 },
+  { label: "9:16", w: 9, h: 16 },
+  { label: "1:1", w: 1, h: 1 },
+  { label: "4:3", w: 4, h: 3 },
+  { label: "4:5", w: 4, h: 5 },
+  { label: "21:9", w: 21, h: 9 },
+];
+
+/**
+ * 按比例算出画布尺寸，保持面积（对角线长度）大致不变，避免切比例后尺寸突变。
+ *
+ * area 保持不变时：w = sqrt(area * rw/rh)，h = w * rh/rw。
+ * 两者都强制偶数（yuv420p 要求）。
+ */
+function canvasForAspect(ratioW: number, ratioH: number, refW: number, refH: number) {
+  const area = Math.max(16, refW) * Math.max(16, refH);
+  let w = Math.sqrt((area * ratioW) / ratioH);
+  let h = w * (ratioH / ratioW);
+  w = Math.max(2, Math.round(w));
+  h = Math.max(2, Math.round(h));
+  w -= w % 2;
+  h -= h % 2;
+  return { w, h };
 }
 
 const DEFAULT_CONFIG: RecorderConfig = {
@@ -210,6 +238,9 @@ export default function RecordingPage() {
   // 预览流加时间戳，强制 <img> 重新连接（MJPEG 流被读干后无法续读）
   const [previewStamp, setPreviewStamp] = useState(() => Date.now());
   const [activeLayer, setActiveLayer] = useState<"screen" | "camera" | null>(null);
+  // 画布宽高的输入框草稿（失焦/回车才提交，避免边输入边重建）
+  const [canvasWInput, setCanvasWInput] = useState("");
+  const [canvasHInput, setCanvasHInput] = useState("");
   // 最新 config / status 的 ref：供按关键字段触发的 effect 读取，避免闭包陈旧
   const configRef = useRef(config);
   const statusRef = useRef(status);
@@ -219,6 +250,13 @@ export default function RecordingPage() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+  // 画布尺寸变化时同步输入框显示值（切换比例预设后要能立刻看到新宽高）
+  useEffect(() => {
+    const w = config.canvas_w || screenInfo.width;
+    const h = config.canvas_h || screenInfo.height;
+    setCanvasWInput(String(w));
+    setCanvasHInput(String(h));
+  }, [config.canvas_w, config.canvas_h, screenInfo.width, screenInfo.height]);
 
   const cameras = useMemo(() => devices.filter((d) => d.kind === "video"), [devices]);
   const mics = useMemo(() => devices.filter((d) => d.kind === "audio"), [devices]);
@@ -394,6 +432,100 @@ export default function RecordingPage() {
     [persistConfig]
   );
 
+  /**
+   * 恢复默认配置。
+   *
+   * 只重置**布局与采集参数**，保留输出目录、码率、编码器等「用户偏好」：
+   * 一次误点就把码率和输出路径也清掉会很恼人。
+   * 设备选择（摄像头/麦克风）也保留，因为那通常与硬件环境绑定。
+   */
+  const handleRestoreDefaults = useCallback(() => {
+    setConfig((prev) => {
+      const next: RecorderConfig = {
+        ...prev,
+        // 采集参数
+        screen_enabled: DEFAULT_CONFIG.screen_enabled,
+        screen_fps: DEFAULT_CONFIG.screen_fps,
+        camera_width: DEFAULT_CONFIG.camera_width,
+        camera_height: DEFAULT_CONFIG.camera_height,
+        mic_volume: DEFAULT_CONFIG.mic_volume,
+        system_volume: DEFAULT_CONFIG.system_volume,
+        // 画布与布局
+        canvas_w: screenInfo.width,
+        canvas_h: screenInfo.height,
+        screen_layout: { ...DEFAULT_LAYER },
+        camera_layout: { ...DEFAULT_LAYER },
+      };
+      void persistConfig(next);
+      return next;
+    });
+    setActiveLayer(null);
+    toast({ title: "已恢复默认布局", status: "info", duration: 2000 });
+  }, [persistConfig, screenInfo.width, screenInfo.height, toast]);
+
+  /** 切换录制画面比例（按面积不变重算宽高，避免尺寸突变） */
+  const handleAspectChange = useCallback(
+    (ratioW: number, ratioH: number) => {
+      setConfig((prev) => {
+        const refW = prev.canvas_w || screenInfo.width;
+        const refH = prev.canvas_h || screenInfo.height;
+        const { w, h } = canvasForAspect(ratioW, ratioH, refW, refH);
+        // 画布尺寸变化后，图层坐标需要按新画布等比迁移，否则布局会错位
+        const sx = w / Math.max(1, refW);
+        const sy = h / Math.max(1, refH);
+        const scaleLayer = (l: LayerLayout): LayerLayout => ({
+          ...l,
+          x: Math.round(l.x * sx),
+          y: Math.round(l.y * sy),
+          w: Math.max(2, Math.round(l.w * sx / 2) * 2),
+          h: Math.max(2, Math.round(l.h * sy / 2) * 2),
+        });
+        const next: RecorderConfig = {
+          ...prev,
+          canvas_w: w,
+          canvas_h: h,
+          screen_layout: scaleLayer(prev.screen_layout),
+          camera_layout: scaleLayer(prev.camera_layout),
+        };
+        void persistConfig(next);
+        return next;
+      });
+    },
+    [persistConfig, screenInfo.width, screenInfo.height]
+  );
+
+  /** 自定义画布宽高的直接输入 */
+  const handleCanvasSizeChange = useCallback(
+    (w: number, h: number) => {
+      setConfig((prev) => {
+        const refW = prev.canvas_w || screenInfo.width;
+        const refH = prev.canvas_h || screenInfo.height;
+        // 强制偶数（yuv420p 要求），最小 64
+        const nw = Math.max(64, w - (w % 2));
+        const nh = Math.max(64, h - (h % 2));
+        const sx = nw / Math.max(1, refW);
+        const sy = nh / Math.max(1, refH);
+        const scaleLayer = (l: LayerLayout): LayerLayout => ({
+          ...l,
+          x: Math.round(l.x * sx),
+          y: Math.round(l.y * sy),
+          w: Math.max(2, Math.round(l.w * sx / 2) * 2),
+          h: Math.max(2, Math.round(l.h * sy / 2) * 2),
+        });
+        const next: RecorderConfig = {
+          ...prev,
+          canvas_w: nw,
+          canvas_h: nh,
+          screen_layout: scaleLayer(prev.screen_layout),
+          camera_layout: scaleLayer(prev.camera_layout),
+        };
+        void persistConfig(next);
+        return next;
+      });
+    },
+    [persistConfig, screenInfo.width, screenInfo.height]
+  );
+
   /** 启动实时预览 */
   const startPreview = useCallback(async () => {
     setPreviewState("starting");
@@ -447,22 +579,18 @@ export default function RecordingPage() {
   );
 
   /**
-   * 图层布局 / 采集源变化时自动重启预览。
+   * 只有「采集源」变化时才需要重启预览进程。
    *
-   * # 为什么必须重启
+   * # 为什么不再监听图层布局
    *
-   * 预览是独立 ffmpeg 进程，按启动那一刻的参数采集。用户拖拽或裁剪图层后，
-   * 录制会按新布局产出，但旧预览进程仍在按旧布局出图 —— 两者不一致，
-   * 用户会误以为布局"没生效"。所以布局一变就要用新参数重启预览。
+   * 预览现在由前端分层合成（每个源一路流 + CSS 定位），
+   * 拖拽/缩放/裁剪只是改 CSS，浏览器下一帧就重绘 —— 真正的实时。
+   * 因此图层布局变化**不应该**重启 ffmpeg：那会导致拖动时画面反复黑掉重建。
    *
-   * # 两个容易踩的坑（都已修正）
+   * 只有换摄像头、开关屏幕源、改帧率这类「采集参数」变化，才必须重启流进程。
    *
-   * 1) 判定条件不能用 `previewRunning`：
-   *    预览一旦启动失败过（如设备被占用），previewRunning 就是 false，
-   *    而开关绑的是 preview_enabled（仍为 true）→ effect 永远提前 return，
-   *    表现为"开着预览却一直显示预览关闭"。这里改用 preview_enabled 判定。
-   * 2) 必须防抖：拖拽时会连续产生几十次布局变化，每次都重启 ffmpeg
-   *    会让画面疯狂闪烁且 CPU 飙高。这里延迟 350ms，只在停手后重启一次。
+   * 判定用 preview_enabled 而非 previewRunning：后者在预览失败后为 false，
+   * 会让 effect 永远提前 return，导致"开着预览却一直显示关闭"。
    */
   useEffect(() => {
     if (!config.preview_enabled) return;
@@ -484,10 +612,9 @@ export default function RecordingPage() {
         })
         .catch((e) => {
           const msg = String(e ?? "");
-          console.error("preview auto-restart failed:", msg);
+          console.error("preview start failed:", msg);
           setPreviewRunning(false);
-          // 空源是用户配置问题，不当作错误，避免误报红字
-          if (msg.includes("没有可见的图层") || msg.includes("没有可预览的采集源")) {
+          if (msg.includes("没有可预览的采集源") || msg.includes("请启用屏幕")) {
             setPreviewState("idle");
             setPreviewError("");
           } else {
@@ -499,33 +626,10 @@ export default function RecordingPage() {
 
     return () => window.clearTimeout(timer);
   }, [
-    // 采集源
     config.preview_enabled,
     config.screen_enabled,
     config.screen_fps,
     config.camera_device,
-    // 画布尺寸（改了画布，图层坐标含义随之变化，必须重启）
-    config.canvas_w,
-    config.canvas_h,
-    // 图层布局的每一项（位置 / 尺寸 / 裁剪 / 可见性），少一个就会"拖了没反应"
-    config.screen_layout.x,
-    config.screen_layout.y,
-    config.screen_layout.w,
-    config.screen_layout.h,
-    config.screen_layout.crop_x,
-    config.screen_layout.crop_y,
-    config.screen_layout.crop_w,
-    config.screen_layout.crop_h,
-    config.screen_layout.visible,
-    config.camera_layout.x,
-    config.camera_layout.y,
-    config.camera_layout.w,
-    config.camera_layout.h,
-    config.camera_layout.crop_x,
-    config.camera_layout.crop_y,
-    config.camera_layout.crop_w,
-    config.camera_layout.crop_h,
-    config.camera_layout.visible,
   ]);
 
   /** 开始录制 */
@@ -1084,7 +1188,7 @@ export default function RecordingPage() {
                   </Badge>
                 )}
               </HStack>
-              <HStack spacing={2}>
+              <HStack spacing={3}>
                 <HStack spacing={1.5} fontSize="xs" color={subTextColor}>
                   <Text>{t("recording.preview")}</Text>
                   <Switch
@@ -1094,8 +1198,91 @@ export default function RecordingPage() {
                     colorScheme="blue"
                   />
                 </HStack>
+                <Tooltip label={t("recording.restoreDefaults")} hasArrow>
+                  <IconButton
+                    aria-label={t("recording.restoreDefaults")}
+                    icon={<RotateCcw size={15} />}
+                    size="xs"
+                    variant="ghost"
+                    color={subTextColor}
+                    isDisabled={status.recording}
+                    onClick={handleRestoreDefaults}
+                  />
+                </Tooltip>
               </HStack>
             </HStack>
+
+            {/* 录制画面比例 */}
+            <HStack spacing={2} mb={2} flexWrap="wrap" rowGap={2} align="center">
+              <Text fontSize="xs" color={subTextColor} flexShrink={0}>
+                {t("recording.aspect")}
+              </Text>
+              {ASPECT_PRESETS.map((p) => {
+                const active =
+                  config.canvas_w > 0 &&
+                  Math.abs(config.canvas_w / Math.max(1, config.canvas_h) - p.w / p.h) < 0.02;
+                return (
+                  <Button
+                    key={p.label}
+                    size="xs"
+                    px={2.5}
+                    height="22px"
+                    fontSize="2xs"
+                    variant={active ? "solid" : "outline"}
+                    bg={active ? activeColor : "transparent"}
+                    color={active ? "white" : subTextColor}
+                    borderColor={active ? activeColor : borderColor}
+                    isDisabled={status.recording}
+                    onClick={() => handleAspectChange(p.w, p.h)}
+                    _hover={{ borderColor: activeColor, color: active ? "white" : textColor }}
+                  >
+                    {p.label}
+                  </Button>
+                );
+              })}
+              <HStack spacing={1} ml={2}>
+                <Input
+                  size="xs"
+                  w="62px"
+                  h="22px"
+                  px={1.5}
+                  fontSize="2xs"
+                  textAlign="center"
+                  value={canvasWInput}
+                  onChange={(e) => setCanvasWInput(e.target.value)}
+                  onBlur={() => handleCanvasSizeChange(Number(canvasWInput) || config.canvas_w, config.canvas_h)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleCanvasSizeChange(Number(canvasWInput) || config.canvas_w, config.canvas_h);
+                    }
+                  }}
+                  isDisabled={status.recording}
+                  borderColor={borderColor}
+                  color={textColor}
+                />
+                <Text fontSize="2xs" color={subTextColor}>×</Text>
+                <Input
+                  size="xs"
+                  w="62px"
+                  h="22px"
+                  px={1.5}
+                  fontSize="2xs"
+                  textAlign="center"
+                  value={canvasHInput}
+                  onChange={(e) => setCanvasHInput(e.target.value)}
+                  onBlur={() => handleCanvasSizeChange(config.canvas_w, Number(canvasHInput) || config.canvas_h)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleCanvasSizeChange(config.canvas_w, Number(canvasHInput) || config.canvas_h);
+                    }
+                  }}
+                  isDisabled={status.recording}
+                  borderColor={borderColor}
+                  color={textColor}
+                />
+              </HStack>
+            </HStack>
+
             <CanvasPreview
               canvasW={config.canvas_w || screenInfo.width}
               canvasH={config.canvas_h || screenInfo.height}
@@ -1103,9 +1290,14 @@ export default function RecordingPage() {
               cameraLayout={config.camera_layout}
               screenEnabled={config.screen_enabled}
               cameraDevice={config.camera_device}
-              previewUrl={
+              screenStreamUrl={
                 previewRunning && previewPort > 0
-                  ? `http://127.0.0.1:${previewPort}/preview?t=${previewStamp}`
+                  ? `http://127.0.0.1:${previewPort}/preview/screen?t=${previewStamp}`
+                  : ""
+              }
+              cameraStreamUrl={
+                previewRunning && previewPort > 0
+                  ? `http://127.0.0.1:${previewPort}/preview/camera?t=${previewStamp}`
                   : ""
               }
               activeLayer={activeLayer}
@@ -1113,7 +1305,6 @@ export default function RecordingPage() {
               onScreenLayoutChange={(l) => updateLayer("screen_layout", l)}
               onCameraLayoutChange={(l) => updateLayer("camera_layout", l)}
               disabled={status.recording}
-              showLive={config.preview_enabled && previewRunning && previewPort > 0}
               previewState={previewState}
               previewError={previewError}
               previewEnabled={config.preview_enabled}
