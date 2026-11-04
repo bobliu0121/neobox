@@ -704,9 +704,15 @@ pub fn build_args(
     // ── 滤镜链：画面（画布式布局）──
     //
     // 设计：先建一张固定尺寸的空白画布，再把每个「可见图层」依次 overlay 上去。
-    // 每个图层的处理顺序是 crop（内容裁剪）→ scale（缩放到目标显示尺寸）→ overlay（定位）。
-    // 之所以要一张显式画布而不是拿屏幕当底图：
-    // 屏幕图层本身也可能被缩放/移动/裁剪，不能假定它铺满整个输出。
+    //
+    // 每个图层的处理顺序：
+    //   crop（内容裁剪）→ 等比缩放 → pad 补黑边到目标框 → overlay（定位）
+    //
+    // 关键：缩放用 `force_original_aspect_ratio=decrease` + `pad`，
+    // **保持采集源自身的宽高比**，而不是把它拉伸成图层的 w:h。
+    // 这样用户改画布比例（如 16:9 → 9:16）时，屏幕/摄像头画面不会变形，
+    // 比例不匹配的部分自动留黑边 —— 符合「改比例只改画布，不改采集源」的语义。
+    // 若不做等比而直接 scale={w}:{h}，源画面会被拉扁拉长，肉眼可见变形。
     let mut filters: Vec<String> = Vec::new();
 
     let canvas_w = config.canvas_w.max(2);
@@ -737,10 +743,14 @@ pub fn build_args(
                 lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
             ));
         }
-        // scale：缩放到图层显示尺寸（保证偶数）
+        // 目标框尺寸（偶数）。w/h 为 0 表示自动铺满画布。
         let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
-        let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h / 2 };
-        chain.push_str(&format!("scale={dw}:{dh}"));
+        let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h };
+        // 等比缩放 + 补黑边：保持采集源原始宽高比，不随画布比例变形
+        chain.push_str(&format!(
+            "scale={dw}:{dh}:force_original_aspect_ratio=decrease,\
+             pad={dw}:{dh}:(ow-iw)/2:(oh-ih)/2:color=black"
+        ));
         let label = format!("[scr{layer_no}]");
         filters.push(format!("[0:v]setpts=PTS-STARTPTS,{chain}{label}"));
         filters.push(format!(
@@ -771,13 +781,19 @@ pub fn build_args(
             } else {
                 (canvas_w / 4) - (canvas_w / 4) % 2
             };
-            let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { 0 };
-            if dh > 0 {
-                chain.push_str(&format!("scale={dw}:{dh}"));
+            // h 为 0 时按 3:4 估一个默认框高（摄像头常见比例），不再用 -2 自适应，
+            // 因为 pad 需要一个确定的框尺寸才能补黑边
+            let dh = if lay.h > 0 {
+                lay.h - lay.h % 2
             } else {
-                // 高度留空则按宽高比自动（-2 保证偶数）
-                chain.push_str(&format!("scale={dw}:-2"));
-            }
+                let est = dw * 3 / 4;
+                (est - est % 2).max(2)
+            };
+            // 等比缩放 + 补黑边，与屏幕图层同策略：不变形，比例不符处留黑
+            chain.push_str(&format!(
+                "scale={dw}:{dh}:force_original_aspect_ratio=decrease,\
+                 pad={dw}:{dh}:(ow-iw)/2:(oh-ih)/2:color=black"
+            ));
             let label = format!("[cam{layer_no}]");
             filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS,{chain}{label}"));
             filters.push(format!(

@@ -142,6 +142,40 @@ function canvasForAspect(ratioW: number, ratioH: number, refW: number, refH: num
   return { w, h };
 }
 
+/**
+ * 画布尺寸变化时迁移图层布局。
+ *
+ * 两个必须遵守的规则：
+ * 1. `w`/`h` 为 0 表示「按画布自动铺满」，**必须保持 0**。
+ *    早先这里对 0 也套了 `Math.max(2, ...)`，结果恢复默认（图层 w=0）
+ *    之后再切比例，图层就被"放大"成 2×2 甚至 4×2 像素，
+ *    录制出来整片黑 —— 这是「恢复默认后黑屏」的真正原因。
+ * 2. 非 0 的图层坐标按画布缩放比例等比迁移，否则切比例后布局会错位。
+ */
+function migrateLayersForCanvas(
+  layer: LayerLayout,
+  sx: number,
+  sy: number
+): LayerLayout {
+  const scaleVal = (v: number, s: number, min: number) => {
+    if (v === 0) return 0; // 0 = 自动铺满，保持 0
+    const scaled = Math.round(v * s);
+    const even = Math.round(scaled / 2) * 2;
+    return Math.max(min, even);
+  };
+  return {
+    ...layer,
+    x: Math.round(layer.x * sx),
+    y: Math.round(layer.y * sy),
+    w: scaleVal(layer.w, sx, 2),
+    h: scaleVal(layer.h, sy, 2),
+    crop_x: Math.round(layer.crop_x * sx),
+    crop_y: Math.round(layer.crop_y * sy),
+    crop_w: scaleVal(layer.crop_w, sx, 0),
+    crop_h: scaleVal(layer.crop_h, sy, 0),
+  };
+}
+
 const DEFAULT_CONFIG: RecorderConfig = {
   screen_enabled: true,
   screen_fps: 30,
@@ -441,6 +475,10 @@ export default function RecordingPage() {
    */
   const handleRestoreDefaults = useCallback(() => {
     setConfig((prev) => {
+      // 画布尺寸必须来自可靠的屏幕尺寸：screenInfo 若还没加载好（0 或异常小），
+      // 直接用它会把画布设成极小值，录制出来整片黑。这里做下限保护。
+      const safeW = screenInfo.width >= 320 ? screenInfo.width : 1920;
+      const safeH = screenInfo.height >= 240 ? screenInfo.height : 1080;
       const next: RecorderConfig = {
         ...prev,
         // 采集参数
@@ -450,9 +488,9 @@ export default function RecordingPage() {
         camera_height: DEFAULT_CONFIG.camera_height,
         mic_volume: DEFAULT_CONFIG.mic_volume,
         system_volume: DEFAULT_CONFIG.system_volume,
-        // 画布与布局
-        canvas_w: screenInfo.width,
-        canvas_h: screenInfo.height,
+        // 画布与布局：canvas 用有效屏幕尺寸，图层 w/h 保持 0（= 自动铺满画布）
+        canvas_w: safeW - (safeW % 2),
+        canvas_h: safeH - (safeH % 2),
         screen_layout: { ...DEFAULT_LAYER },
         camera_layout: { ...DEFAULT_LAYER },
       };
@@ -463,29 +501,27 @@ export default function RecordingPage() {
     toast({ title: "已恢复默认布局", status: "info", duration: 2000 });
   }, [persistConfig, screenInfo.width, screenInfo.height, toast]);
 
-  /** 切换录制画面比例（按面积不变重算宽高，避免尺寸突变） */
+  /**
+   * 切换录制画面比例。
+   *
+   * 只改变**画布**尺寸，图层内容按画布缩放比例等比迁移：
+   * - 图层 w/h 为 0（自动铺满）时保持 0，因此屏幕图层会跟着新画布自动铺满
+   * - 已手动定位的图层按比例跟随，不会跑到画布外
+   */
   const handleAspectChange = useCallback(
     (ratioW: number, ratioH: number) => {
       setConfig((prev) => {
         const refW = prev.canvas_w || screenInfo.width;
         const refH = prev.canvas_h || screenInfo.height;
         const { w, h } = canvasForAspect(ratioW, ratioH, refW, refH);
-        // 画布尺寸变化后，图层坐标需要按新画布等比迁移，否则布局会错位
         const sx = w / Math.max(1, refW);
         const sy = h / Math.max(1, refH);
-        const scaleLayer = (l: LayerLayout): LayerLayout => ({
-          ...l,
-          x: Math.round(l.x * sx),
-          y: Math.round(l.y * sy),
-          w: Math.max(2, Math.round(l.w * sx / 2) * 2),
-          h: Math.max(2, Math.round(l.h * sy / 2) * 2),
-        });
         const next: RecorderConfig = {
           ...prev,
           canvas_w: w,
           canvas_h: h,
-          screen_layout: scaleLayer(prev.screen_layout),
-          camera_layout: scaleLayer(prev.camera_layout),
+          screen_layout: migrateLayersForCanvas(prev.screen_layout, sx, sy),
+          camera_layout: migrateLayersForCanvas(prev.camera_layout, sx, sy),
         };
         void persistConfig(next);
         return next;
@@ -505,19 +541,12 @@ export default function RecordingPage() {
         const nh = Math.max(64, h - (h % 2));
         const sx = nw / Math.max(1, refW);
         const sy = nh / Math.max(1, refH);
-        const scaleLayer = (l: LayerLayout): LayerLayout => ({
-          ...l,
-          x: Math.round(l.x * sx),
-          y: Math.round(l.y * sy),
-          w: Math.max(2, Math.round(l.w * sx / 2) * 2),
-          h: Math.max(2, Math.round(l.h * sy / 2) * 2),
-        });
         const next: RecorderConfig = {
           ...prev,
           canvas_w: nw,
           canvas_h: nh,
-          screen_layout: scaleLayer(prev.screen_layout),
-          camera_layout: scaleLayer(prev.camera_layout),
+          screen_layout: migrateLayersForCanvas(prev.screen_layout, sx, sy),
+          camera_layout: migrateLayersForCanvas(prev.camera_layout, sx, sy),
         };
         void persistConfig(next);
         return next;

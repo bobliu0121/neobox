@@ -283,7 +283,9 @@ export default function CanvasPreview({
               top: hasCrop ? `${-(layout.crop_y / Math.max(layout.crop_h, 1)) * 100}%` : 0,
               width: hasCrop ? `${(layout.w / Math.max(layout.crop_w, 1)) * 100}%` : "100%",
               height: hasCrop ? `${(layout.h / Math.max(layout.crop_h, 1)) * 100}%` : "100%",
-              objectFit: "fill",
+              // contain：等比缩放 + 留黑边，与后端 scale(force_original_aspect_ratio)+pad 一致。
+              // 用 fill 会把采集源拉扁拉长，改画布比例时画面会变形。
+              objectFit: "contain",
               pointerEvents: "none",
               userSelect: "none",
             }}
