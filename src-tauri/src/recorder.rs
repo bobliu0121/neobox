@@ -775,20 +775,13 @@ pub fn build_args(
                     lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
                 ));
             }
-            // 摄像头未设显示尺寸时给个合理默认（画布的 1/4 宽）
-            let dw = if lay.w > 0 {
-                lay.w - lay.w % 2
-            } else {
-                (canvas_w / 4) - (canvas_w / 4) % 2
-            };
-            // h 为 0 时按 3:4 估一个默认框高（摄像头常见比例），不再用 -2 自适应，
-            // 因为 pad 需要一个确定的框尺寸才能补黑边
-            let dh = if lay.h > 0 {
-                lay.h - lay.h % 2
-            } else {
-                let est = dw * 3 / 4;
-                (est - est % 2).max(2)
-            };
+            // 目标框尺寸（偶数）。与屏幕图层规则**完全一致**：
+            // w/h 为 0 表示自动铺满画布，不再给摄像头单独的小尺寸默认值。
+            // 早先摄像头 w=0 时用 canvas_w/4、h=0 时按 3:4 估算，
+            // 导致「恢复默认」后屏幕铺满、摄像头却是角落里一小块，
+            // 两个图层行为不一致，用户无法预期。
+            let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
+            let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h };
             // 等比缩放 + 补黑边，与屏幕图层同策略：不变形，比例不符处留黑
             chain.push_str(&format!(
                 "scale={dw}:{dh}:force_original_aspect_ratio=decrease,\

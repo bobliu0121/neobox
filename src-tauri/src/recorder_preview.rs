@@ -98,7 +98,7 @@ fn build_screen_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     cmd.spawn().map_err(|e| format!("启动屏幕预览失败: {e}"))
 }
 
@@ -124,8 +124,44 @@ fn build_camera_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     cmd.spawn().map_err(|e| format!("启动摄像头预览失败: {e}"))
+}
+
+/// 读取子进程 stderr 的前若干行（用于启动失败时给出可读原因）。
+///
+/// ffmpeg 在设备打不开时会把原因写 stderr 后**立即退出**（stdout 为空），
+/// 若把 stderr 丢进 Stdio::null()，前端就只能看到一片空白，
+/// 完全不知道为什么没有画面 —— 这正是「摄像头无法预览」难以定位的原因。
+fn drain_stderr(child: &mut Child) -> String {
+    use std::io::Read;
+    if let Some(mut err) = child.stderr.take() {
+        let mut buf = String::new();
+        let _ = err.read_to_string(&mut buf);
+        return buf.trim().to_string();
+    }
+    String::new()
+}
+
+/// 启动某一源后立即检查它是否已经异常退出；若已退出则返回 stderr 里的原因。
+///
+/// dshow 设备不存在 / 被其它程序独占时，ffmpeg 几毫秒内就会失败退出。
+/// 这里等一小段时间再查，能区分「真在采集」与「一启动就挂了」。
+fn check_early_exit(child: &mut Child, label: &str) -> Option<String> {
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let err = drain_stderr(child);
+            let reason = if err.is_empty() {
+                format!("{label}采集进程已退出（退出码 {:?}）", status.code())
+            } else {
+                format!("{label}采集失败：{err}")
+            };
+            warn!("[Recorder] {reason}");
+            Some(reason)
+        }
+        _ => None,
+    }
 }
 
 fn kill_stream(slot: &Mutex<Option<PreviewStream>>) {
@@ -163,14 +199,19 @@ pub async fn start_preview_server(
     // 屏幕流
     if params.screen_enabled {
         match build_screen_stream(&ffmpeg_path, &params) {
-            Ok(child) => {
-                if let Ok(mut g) = SCREEN_STREAM.lock() {
-                    *g = Some(PreviewStream { child, stdout: None });
+            Ok(mut child) => {
+                // 启动后立刻查一次是否已秒退（例如 gdigrab 被占用）
+                if let Some(reason) = check_early_exit(&mut child, "屏幕") {
+                    last_err = reason;
+                } else {
+                    if let Ok(mut g) = SCREEN_STREAM.lock() {
+                        *g = Some(PreviewStream { child, stdout: None });
+                    }
+                    if let Ok(mut g) = SCREEN_PARAMS.lock() {
+                        *g = Some((ffmpeg_path.clone(), params.clone()));
+                    }
+                    started_any = true;
                 }
-                if let Ok(mut g) = SCREEN_PARAMS.lock() {
-                    *g = Some((ffmpeg_path.clone(), params.clone()));
-                }
-                started_any = true;
             }
             Err(e) => { warn!("[Recorder] 屏幕预览启动失败: {e}"); last_err = e; }
         }
@@ -179,19 +220,25 @@ pub async fn start_preview_server(
     // 摄像头流
     if !params.camera_device.trim().is_empty() {
         match build_camera_stream(&ffmpeg_path, &params) {
-            Ok(child) => {
-                if let Ok(mut g) = CAMERA_STREAM.lock() {
-                    *g = Some(PreviewStream { child, stdout: None });
+            Ok(mut child) => {
+                if let Some(reason) = check_early_exit(&mut child, "摄像头") {
+                    last_err = reason;
+                } else {
+                    if let Ok(mut g) = CAMERA_STREAM.lock() {
+                        *g = Some(PreviewStream { child, stdout: None });
+                    }
+                    if let Ok(mut g) = CAMERA_PARAMS.lock() {
+                        *g = Some((ffmpeg_path.clone(), params.clone()));
+                    }
+                    started_any = true;
                 }
-                if let Ok(mut g) = CAMERA_PARAMS.lock() {
-                    *g = Some((ffmpeg_path.clone(), params.clone()));
-                }
-                started_any = true;
             }
             Err(e) => { warn!("[Recorder] 摄像头预览启动失败: {e}"); last_err = e; }
         }
     }
 
+    // 一路都没起来：返回**具体原因**，让界面能显示为什么没画面
+    // （设备不存在、被独占、ffmpeg 缺 dshow 等都能据此定位）
     if !started_any {
         let msg = if !params.screen_enabled && params.camera_device.trim().is_empty() {
             "没有可预览的采集源（请启用屏幕或选择摄像头）".to_string()

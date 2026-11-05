@@ -467,6 +467,47 @@ export default function RecordingPage() {
   );
 
   /**
+   * 选择/切换摄像头。
+   *
+   * 摄像头的图层规则与屏幕**完全一致**（w/h=0 表示铺满画布、可拖拽缩放裁剪、
+   * 切比例等比迁移）。但若首次启用时也按「铺满画布」来，摄像头会整片盖住屏幕，
+   * 用户第一眼只会看到摄像头画面、以为屏幕没生效。
+   * 因此首次选中时自动给一个合理初始尺寸（画布宽 1/4、按 4:3 估高、右下角留边距），
+   * 之后用户把它拖成什么样就保持什么样（含清零语义）。
+   */
+  const handleCameraDeviceChange = useCallback(
+    (device: string) => {
+      setConfig((prev) => {
+        const next: RecorderConfig = { ...prev, camera_device: device };
+        // 首次启用（原来没选设备，现在选了）且摄像头布局仍为初始状态时，给初始尺寸
+        const wasEmpty = prev.camera_device.trim() === "";
+        const layerUntouched =
+          prev.camera_layout.w === 0 &&
+          prev.camera_layout.h === 0 &&
+          prev.camera_layout.x === 0 &&
+          prev.camera_layout.y === 0;
+        if (device.trim() !== "" && wasEmpty && layerUntouched) {
+          const cw = prev.canvas_w || screenInfo.width;
+          const ch = prev.canvas_h || screenInfo.height;
+          const camW = Math.max(160, Math.round(cw / 4 / 2) * 2);
+          const camH = Math.max(120, Math.round((camW * 3 / 4) / 2) * 2);
+          const margin = Math.round(Math.min(cw, ch) * 0.03);
+          next.camera_layout = {
+            ...prev.camera_layout,
+            w: camW,
+            h: camH,
+            x: Math.max(0, cw - camW - margin),
+            y: Math.max(0, ch - camH - margin),
+          };
+        }
+        void persistConfig(next);
+        return next;
+      });
+    },
+    [persistConfig, screenInfo.width, screenInfo.height]
+  );
+
+  /**
    * 恢复默认配置。
    *
    * 只重置**布局与采集参数**，保留输出目录、码率、编码器等「用户偏好」：
@@ -479,6 +520,14 @@ export default function RecordingPage() {
       // 直接用它会把画布设成极小值，录制出来整片黑。这里做下限保护。
       const safeW = screenInfo.width >= 320 ? screenInfo.width : 1920;
       const safeH = screenInfo.height >= 240 ? screenInfo.height : 1080;
+      const cw = safeW - (safeW % 2);
+      const ch = safeH - (safeH % 2);
+      // 摄像头若已选设备，给与「首次启用」相同的默认小窗，避免恢复默认后它盖住屏幕；
+      // 未选设备时保持全 0（不参与合成）。
+      const hasCamera = prev.camera_device.trim() !== "";
+      const camW = Math.max(160, Math.round(cw / 4 / 2) * 2);
+      const camH = Math.max(120, Math.round((camW * 3 / 4) / 2) * 2);
+      const margin = Math.round(Math.min(cw, ch) * 0.03);
       const next: RecorderConfig = {
         ...prev,
         // 采集参数
@@ -488,11 +537,21 @@ export default function RecordingPage() {
         camera_height: DEFAULT_CONFIG.camera_height,
         mic_volume: DEFAULT_CONFIG.mic_volume,
         system_volume: DEFAULT_CONFIG.system_volume,
-        // 画布与布局：canvas 用有效屏幕尺寸，图层 w/h 保持 0（= 自动铺满画布）
-        canvas_w: safeW - (safeW % 2),
-        canvas_h: safeH - (safeH % 2),
+        // 画布与布局：canvas 用有效屏幕尺寸
+        canvas_w: cw,
+        canvas_h: ch,
+        // 屏幕图层 w/h=0 → 自动铺满画布
         screen_layout: { ...DEFAULT_LAYER },
-        camera_layout: { ...DEFAULT_LAYER },
+        // 摄像头图层：有设备时给同样的初始小窗（行为规则与屏幕一致，仅初始值更合理）
+        camera_layout: hasCamera
+          ? {
+              ...DEFAULT_LAYER,
+              w: camW,
+              h: camH,
+              x: Math.max(0, cw - camW - margin),
+              y: Math.max(0, ch - camH - margin),
+            }
+          : { ...DEFAULT_LAYER },
       };
       void persistConfig(next);
       return next;
@@ -960,7 +1019,7 @@ export default function RecordingPage() {
             <Select
               size="sm"
               value={config.camera_device}
-              onChange={(e) => updateConfig("camera_device", e.target.value)}
+              onChange={(e) => handleCameraDeviceChange(e.target.value)}
               isDisabled={status.recording}
               mb={3}
               borderColor={borderColor}
