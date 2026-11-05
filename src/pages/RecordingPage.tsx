@@ -51,7 +51,7 @@ import {
   Crop,
   RotateCcw,
 } from "lucide-react";
-import CanvasPreview, { type LayerLayout } from "@/components/recorder/CanvasPreview";
+import CanvasPreview, { type LayerLayout, heightForWidth } from "@/components/recorder/CanvasPreview";
 
 // ── 与后端一致的类型定义 ──
 
@@ -61,11 +61,14 @@ interface CaptureDevice {
   alt_name: string;
 }
 
-/** 图层默认布局（LayerLayout 类型由 CanvasPreview 组件导出） */
+/**
+ * 图层默认布局。
+ *
+ * 只有 x/y/w/visible：高度由采集源宽高比自动推导（见 CanvasPreview.heightForWidth），
+ * 裁剪功能已整体移除。
+ */
 const DEFAULT_LAYER: LayerLayout = {
-  x: 0, y: 0, w: 0, h: 0,
-  crop_x: 0, crop_y: 0, crop_w: 0, crop_h: 0,
-  visible: true,
+  x: 0, y: 0, w: 0, visible: true,
 };
 
 interface RecorderConfig {
@@ -145,34 +148,25 @@ function canvasForAspect(ratioW: number, ratioH: number, refW: number, refH: num
 /**
  * 画布尺寸变化时迁移图层布局。
  *
- * 两个必须遵守的规则：
- * 1. `w`/`h` 为 0 表示「按画布自动铺满」，**必须保持 0**。
- *    早先这里对 0 也套了 `Math.max(2, ...)`，结果恢复默认（图层 w=0）
- *    之后再切比例，图层就被"放大"成 2×2 甚至 4×2 像素，
- *    录制出来整片黑 —— 这是「恢复默认后黑屏」的真正原因。
- * 2. 非 0 的图层坐标按画布缩放比例等比迁移，否则切比例后布局会错位。
+ * 规则：
+ * 1. `w` 为 0 表示「铺满画布宽度」，**必须保持 0**。早先对 0 也套了
+ *    `Math.max(2, ...)`，结果恢复默认（w=0）后再切比例，图层被"放大"成
+ *    2×2 像素，录制出来整片黑 —— 这是「恢复默认后黑屏」的根因。
+ * 2. 非 0 的宽度与坐标按画布缩放比例等比迁移，否则切比例后布局会错位。
+ *
+ * 高度不参与迁移：它由采集源宽高比自动推导，与画布尺寸无关。
  */
-function migrateLayersForCanvas(
-  layer: LayerLayout,
-  sx: number,
-  sy: number
-): LayerLayout {
-  const scaleVal = (v: number, s: number, min: number) => {
-    if (v === 0) return 0; // 0 = 自动铺满，保持 0
-    const scaled = Math.round(v * s);
-    const even = Math.round(scaled / 2) * 2;
-    return Math.max(min, even);
+function migrateLayersForCanvas(layer: LayerLayout, sx: number, sy: number): LayerLayout {
+  const scaleWidth = (v: number) => {
+    if (v === 0) return 0; // 0 = 铺满画布宽度，保持 0
+    const scaled = Math.round(v * sx);
+    return Math.max(2, Math.round(scaled / 2) * 2);
   };
   return {
     ...layer,
     x: Math.round(layer.x * sx),
     y: Math.round(layer.y * sy),
-    w: scaleVal(layer.w, sx, 2),
-    h: scaleVal(layer.h, sy, 2),
-    crop_x: Math.round(layer.crop_x * sx),
-    crop_y: Math.round(layer.crop_y * sy),
-    crop_w: scaleVal(layer.crop_w, sx, 0),
-    crop_h: scaleVal(layer.crop_h, sy, 0),
+    w: scaleWidth(layer.w),
   };
 }
 
@@ -247,6 +241,19 @@ export default function RecordingPage() {
   const [config, setConfig] = useState<RecorderConfig>(DEFAULT_CONFIG);
   const [devices, setDevices] = useState<CaptureDevice[]>([]);
   const [probe, setProbe] = useState<FfmpegProbe | null>(null);
+  /**
+   * 摄像头采集源的原始宽高比（宽/高）。
+   *
+   * 图层高度必须按源比例推导，否则画面会被拉伸变形。
+   * 摄像头未指定分辨率时设备默认值未知，先用 16:9 作为占位；
+   * 若用户填了 camera_width/camera_height 则用真实比例。
+   */
+  const cameraAspect = useMemo(() => {
+    const w = config.camera_width;
+    const h = config.camera_height;
+    if (w > 0 && h > 0) return w / h;
+    return 16 / 9;
+  }, [config.camera_width, config.camera_height]);
   /** 各源预览的失败原因（屏幕/摄像头分别记录，避免"整体成功但某路失败"被静默） */
   const [screenPreviewError, setScreenPreviewError] = useState("");
   const [cameraPreviewError, setCameraPreviewError] = useState("");
@@ -482,23 +489,22 @@ export default function RecordingPage() {
     (device: string) => {
       setConfig((prev) => {
         const next: RecorderConfig = { ...prev, camera_device: device };
-        // 首次启用（原来没选设备，现在选了）且摄像头布局仍为初始状态时，给初始尺寸
+        // 首次启用（原来没选设备，现在选了）且摄像头布局仍为初始状态时，给初始宽度
         const wasEmpty = prev.camera_device.trim() === "";
         const layerUntouched =
           prev.camera_layout.w === 0 &&
-          prev.camera_layout.h === 0 &&
           prev.camera_layout.x === 0 &&
           prev.camera_layout.y === 0;
         if (device.trim() !== "" && wasEmpty && layerUntouched) {
           const cw = prev.canvas_w || screenInfo.width;
           const ch = prev.canvas_h || screenInfo.height;
           const camW = Math.max(160, Math.round(cw / 4 / 2) * 2);
-          const camH = Math.max(120, Math.round((camW * 3 / 4) / 2) * 2);
+          // 高度按**摄像头源比例**推导（不是随意估 4:3），保证初始就不变形
+          const camH = heightForWidth(camW, cameraAspect);
           const margin = Math.round(Math.min(cw, ch) * 0.03);
           next.camera_layout = {
             ...prev.camera_layout,
             w: camW,
-            h: camH,
             x: Math.max(0, cw - camW - margin),
             y: Math.max(0, ch - camH - margin),
           };
@@ -507,7 +513,7 @@ export default function RecordingPage() {
         return next;
       });
     },
-    [persistConfig, screenInfo.width, screenInfo.height]
+    [persistConfig, screenInfo.width, screenInfo.height, cameraAspect]
   );
 
   /**
@@ -529,7 +535,8 @@ export default function RecordingPage() {
       // 未选设备时保持全 0（不参与合成）。
       const hasCamera = prev.camera_device.trim() !== "";
       const camW = Math.max(160, Math.round(cw / 4 / 2) * 2);
-      const camH = Math.max(120, Math.round((camW * 3 / 4) / 2) * 2);
+      // 高度按摄像头源比例推导（保证不变形）
+      const camH = heightForWidth(camW, cameraAspect);
       const margin = Math.round(Math.min(cw, ch) * 0.03);
       const next: RecorderConfig = {
         ...prev,
@@ -543,14 +550,13 @@ export default function RecordingPage() {
         // 画布与布局：canvas 用有效屏幕尺寸
         canvas_w: cw,
         canvas_h: ch,
-        // 屏幕图层 w/h=0 → 自动铺满画布
+        // 屏幕图层 w=0 → 铺满画布宽度
         screen_layout: { ...DEFAULT_LAYER },
-        // 摄像头图层：有设备时给同样的初始小窗（行为规则与屏幕一致，仅初始值更合理）
+        // 摄像头图层：有设备时给初始宽度（高度按源比例自动），规则与屏幕一致
         camera_layout: hasCamera
           ? {
               ...DEFAULT_LAYER,
               w: camW,
-              h: camH,
               x: Math.max(0, cw - camW - margin),
               y: Math.max(0, ch - camH - margin),
             }
@@ -561,7 +567,7 @@ export default function RecordingPage() {
     });
     setActiveLayer(null);
     toast({ title: "已恢复默认布局", status: "info", duration: 2000 });
-  }, [persistConfig, screenInfo.width, screenInfo.height, toast]);
+  }, [persistConfig, screenInfo.width, screenInfo.height, cameraAspect, toast]);
 
   /**
    * 切换录制画面比例。
@@ -1419,6 +1425,11 @@ export default function RecordingPage() {
               previewEnabled={config.preview_enabled}
               screenPreviewError={screenPreviewError}
               cameraPreviewError={cameraPreviewError}
+              screenAspect={
+                (config.canvas_w || screenInfo.width) /
+                Math.max(1, config.canvas_h || screenInfo.height)
+              }
+              cameraAspect={cameraAspect}
             />
           </Box>
 
@@ -1604,7 +1615,8 @@ interface LayerNumericEditorProps {
 /**
  * 图层精确数值编辑（拖拽之外的精确控制方式）。
  *
- * 拖拽适合粗调，但用手柄很难对齐到整像素，所以这里提供位置/尺寸/裁剪的直接输入。
+ * 只有 X / Y / W 三个字段：高度由采集源宽高比自动推导，裁剪功能已移除，
+ * 所以不再提供 H 与裁剪项，避免用户设出一个会拉伸画面的高度。
  * 输入框失焦或回车才提交，避免边输入边刷新导致光标跳动。
  */
 function LayerNumericEditor({
@@ -1620,11 +1632,6 @@ function LayerNumericEditor({
     { key: "x", label: "X", min: -10000, max: 10000 },
     { key: "y", label: "Y", min: -10000, max: 10000 },
     { key: "w", label: "W", min: 2, max: 10000 },
-    { key: "h", label: "H", min: 2, max: 10000 },
-    { key: "crop_x", label: "CX", min: 0, max: 10000 },
-    { key: "crop_y", label: "CY", min: 0, max: 10000 },
-    { key: "crop_w", label: "CW", min: 0, max: 10000 },
-    { key: "crop_h", label: "CH", min: 0, max: 10000 },
   ];
 
   const commit = (key: keyof LayerLayout, raw: string) => {

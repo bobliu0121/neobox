@@ -59,36 +59,44 @@ pub struct CaptureDevice {
 /// 坐标全部使用 **画布像素**，由前端画布直接给出：
 /// - 前端预览区显示的是按比例缩小的画布，拖拽后按比例换算成真实画布像素再传给后端，
 ///   所以这里不需要「百分比」语义，避免屏幕分辨率变化时布局漂移。
+///
+/// # 只控宽度，高度由源宽高比自动推导
+///
+/// 采集源（屏幕 / 摄像头）有各自的原始宽高比，**不能被拉伸变形**。
+/// 因此图层只记录显示宽度 `w`，高度由 ffmpeg 的 `scale=w:-2` 按源比例算出来；
+/// 前端预览同样用 CSS `aspect-ratio` 保持源比例。
+/// 这样无论用户怎么缩放、怎么改画布比例，画面都保持源比例。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LayerLayout {
-    /// 图层左上角在画布中的 x（像素）
+    /// 图层左上角在画布中的 x（像素，可为负 = 移出画布）
     #[serde(default)]
     pub x: i32,
-    /// 图层左上角在画布中的 y（像素）
+    /// 图层左上角在画布中的 y（像素，可为负 = 移出画布）
     #[serde(default)]
     pub y: i32,
-    /// 图层显示宽度（像素，0 = 保持源原始尺寸）
+    /// 图层显示宽度（画布像素，0 = 铺满画布宽度）
     #[serde(default)]
     pub w: u32,
-    /// 图层显示高度（像素，0 = 按比例自动）
-    #[serde(default)]
+    /// 已废弃：高度由源宽高比自动推导。
+    /// 保留字段仅为兼容旧配置（读入后忽略，不再参与布局计算）。
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub h: u32,
-    // ── 内容裁剪（相对源原始画面）──
-    /// 裁剪起点 x（源像素）
-    #[serde(default)]
+    // ── 已废弃的裁剪字段（裁剪功能已移除，仅保留以兼容旧配置反序列化）──
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub crop_x: u32,
-    /// 裁剪起点 y（源像素）
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub crop_y: u32,
-    /// 裁剪宽度（源像素，0 = 不裁剪，取整幅）
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub crop_w: u32,
-    /// 裁剪高度（源像素，0 = 不裁剪，取整幅）
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub crop_h: u32,
     /// 图层是否显示（关掉可临时隐藏该源，不必删配置）
     #[serde(default = "default_true")]
     pub visible: bool,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 /// 录制源配置
@@ -705,14 +713,12 @@ pub fn build_args(
     //
     // 设计：先建一张固定尺寸的空白画布，再把每个「可见图层」依次 overlay 上去。
     //
-    // 每个图层的处理顺序：
-    //   crop（内容裁剪）→ 等比缩放 → pad 补黑边到目标框 → overlay（定位）
+    // 每个图层的处理顺序：`scale=<宽度>:-2` → overlay（按 x/y 定位）
     //
-    // 关键：缩放用 `force_original_aspect_ratio=decrease` + `pad`，
-    // **保持采集源自身的宽高比**，而不是把它拉伸成图层的 w:h。
-    // 这样用户改画布比例（如 16:9 → 9:16）时，屏幕/摄像头画面不会变形，
-    // 比例不匹配的部分自动留黑边 —— 符合「改比例只改画布，不改采集源」的语义。
-    // 若不做等比而直接 scale={w}:{h}，源画面会被拉扁拉长，肉眼可见变形。
+    // 关键：只用 `scale=w:-2`，**高度由采集源自身的宽高比自动算出**，
+    // 因此屏幕与摄像头画面在任何缩放/画布比例下都不会被拉伸变形。
+    // 早期版本把宽度和高度都写死再去 pad 补黑边，既复杂又会出现
+    // 「框比画面大、四周一圈黑」的问题；现在图层框与画面严格同比例。
     let mut filters: Vec<String> = Vec::new();
 
     let canvas_w = config.canvas_w.max(2);
@@ -735,22 +741,10 @@ pub fn build_args(
     // 屏幕图层（输入 0）
     if has_screen && config.screen_layout.visible {
         let lay = &config.screen_layout;
-        let mut chain = String::new();
-        // crop：仅当设置了裁剪尺寸才裁
-        if lay.crop_w > 0 && lay.crop_h > 0 {
-            chain.push_str(&format!(
-                "crop={}:{}:{}:{},",
-                lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
-            ));
-        }
-        // 目标框尺寸（偶数）。w/h 为 0 表示自动铺满画布。
+        // 只控宽度，高度按源宽高比自动（-2 保证偶数）。
+        // w=0 表示铺满画布宽度。
         let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
-        let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h };
-        // 等比缩放 + 补黑边：保持采集源原始宽高比，不随画布比例变形
-        chain.push_str(&format!(
-            "scale={dw}:{dh}:force_original_aspect_ratio=decrease,\
-             pad={dw}:{dh}:(ow-iw)/2:(oh-ih)/2:color=black"
-        ));
+        let chain = format!("scale={dw}:-2");
         let label = format!("[scr{layer_no}]");
         filters.push(format!("[0:v]setpts=PTS-STARTPTS,{chain}{label}"));
         filters.push(format!(
@@ -768,25 +762,9 @@ pub fn build_args(
     if let Some(cam) = camera_index {
         let lay = &config.camera_layout;
         if lay.visible {
-            let mut chain = String::new();
-            if lay.crop_w > 0 && lay.crop_h > 0 {
-                chain.push_str(&format!(
-                    "crop={}:{}:{}:{},",
-                    lay.crop_w, lay.crop_h, lay.crop_x, lay.crop_y
-                ));
-            }
-            // 目标框尺寸（偶数）。与屏幕图层规则**完全一致**：
-            // w/h 为 0 表示自动铺满画布，不再给摄像头单独的小尺寸默认值。
-            // 早先摄像头 w=0 时用 canvas_w/4、h=0 时按 3:4 估算，
-            // 导致「恢复默认」后屏幕铺满、摄像头却是角落里一小块，
-            // 两个图层行为不一致，用户无法预期。
+            // 与屏幕图层规则完全一致：只控宽度，高度按源比例自动
             let dw = if lay.w > 0 { lay.w - lay.w % 2 } else { canvas_w };
-            let dh = if lay.h > 0 { lay.h - lay.h % 2 } else { canvas_h };
-            // 等比缩放 + 补黑边，与屏幕图层同策略：不变形，比例不符处留黑
-            chain.push_str(&format!(
-                "scale={dw}:{dh}:force_original_aspect_ratio=decrease,\
-                 pad={dw}:{dh}:(ow-iw)/2:(oh-ih)/2:color=black"
-            ));
+            let chain = format!("scale={dw}:-2");
             let label = format!("[cam{layer_no}]");
             filters.push(format!("[{cam}:v]setpts=PTS-STARTPTS,{chain}{label}"));
             filters.push(format!(
@@ -1574,16 +1552,16 @@ mod tests {
         assert_eq!(cfg.canvas_h % 2, 0, "canvas_h must be even");
     }
 
-    /// 图层裁剪应产出 crop 滤镜
+    /// 图层缩放只指定宽度，高度由源比例自动（scale=w:-2），保证不变形
     #[test]
-    fn layer_crop_emits_crop_filter() {
+    fn layer_scale_width_only_preserves_source_aspect() {
         let mut config = RecorderConfig::default();
         config.normalize(1920, 1080);
         config.camera_device = "cam".into();
         config.camera_layout = LayerLayout {
             x: 100, y: 100, w: 640, h: 480,
-            crop_x: 10, crop_y: 20, crop_w: 800, crop_h: 600,
             visible: true,
+            ..Default::default()
         };
         let out = PathBuf::from("out.mp4");
         let (args, _) = build_args(&config, "libx264", &out, "摄像头", "", "").expect("ok");
@@ -1592,9 +1570,34 @@ mod tests {
             .position(|a| a == "-filter_complex")
             .map(|i| &args[i + 1])
             .expect("filter_complex");
-        assert!(filter.contains("crop=800:600:10:20"), "crop applied: {filter}");
-        assert!(filter.contains("scale=640:480"), "scale applied: {filter}");
+        // 只写宽度，高度为 -2：由 ffmpeg 按源宽高比算出
+        assert!(filter.contains("scale=640:-2"), "width-only scale: {filter}");
+        // 不应再出现写死高度的 scale=640:480，或 pad/crop 补边
+        assert!(!filter.contains("scale=640:480"), "height must not be fixed: {filter}");
+        assert!(!filter.contains("pad="), "no letterbox pad: {filter}");
+        assert!(!filter.contains("crop="), "crop feature removed: {filter}");
         assert!(filter.contains("overlay=x=100:y=100"), "position applied: {filter}");
+    }
+
+    /// 画布比例改变时，图层宽度按画布比例迁移，高度仍由源比例决定
+    #[test]
+    fn aspect_change_scales_layer_width() {
+        let mut config = RecorderConfig::default();
+        config.normalize(1920, 1080);
+        config.camera_layout = LayerLayout { x: 1400, y: 780, w: 480, visible: true, ..Default::default() };
+        // 模拟画布变为 1080x1920（9:16），宽缩放 0.5625
+        config.canvas_w = 1080;
+        config.canvas_h = 1920;
+        let out = PathBuf::from("out.mp4");
+        let (args, _) = build_args(&config, "libx264", &out, "摄像头", "", "").expect("ok");
+        let filter = args
+            .iter()
+            .position(|a| a == "-filter_complex")
+            .map(|i| &args[i + 1])
+            .expect("filter_complex");
+        // 仍只写宽度，不写死高度
+        assert!(filter.contains("scale=480:-2"), "width only: {filter}");
+        assert!(!filter.contains("pad="), "no pad: {filter}");
     }
 
     /// 图层隐藏时不应出现在滤镜链里

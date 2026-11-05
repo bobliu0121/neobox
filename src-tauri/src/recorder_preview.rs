@@ -127,14 +127,26 @@ fn build_screen_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
 }
 
 /// 构造摄像头预览进程：输出摄像头原始画面
+///
+/// # 为什么**不能**给 dshow 摄像头传 `-framerate`
+///
+/// 实测（用户设备 HP Wide 摄像头）：带上 `-framerate 10` 时 ffmpeg 直接报
+///   `[dshow] Could not set video options` → `Error opening input: I/O error`
+/// 设备打不开，预览一片空白；而**录制**没有任何视频输出选项，所以同一台设备
+/// 录制完全正常 —— 这正是「预览失败但录制正常」的原因。
+///
+/// dshow 的 `-framerate` 是「强制设备切到该帧率」，很多摄像头只支持特定帧率
+/// （常见 30fps / 15fps），强行指定不在支持列表的值就会打开失败。
+/// 因此这里不传帧率、也不传 `-video_size`，完全交给设备默认值，
+/// 与录制路径保持完全一致。预览的降帧交给后面的 `fps` 滤镜完成。
 fn build_camera_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, String> {
-    let fps = (p.screen_fps / 3).clamp(2, 12);
     let tw = preview_target_width();
-    let filter = format!("[0:v]scale={tw}:-2,format=yuv420p[v]");
+    // 预览帧率只作用于**输出**（fps 滤镜），不影响采集：设备按自己的默认帧率出图
+    let preview_fps = (p.screen_fps / 3).clamp(2, 12);
+    let filter = format!("[0:v]fps={preview_fps},scale={tw}:-2,format=yuv420p[v]");
     let args: Vec<String> = vec![
         "-hide_banner".into(), "-loglevel".into(), "error".into(),
         "-f".into(), "dshow".into(),
-        "-framerate".into(), fps.to_string(),
         "-i".into(), format!("video={}", p.camera_device),
         "-filter_complex".into(), filter,
         "-map".into(), "[v]".into(),

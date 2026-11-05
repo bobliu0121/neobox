@@ -2,32 +2,45 @@ import { Box, Flex, Text, HStack, VStack, Spinner, useColorModeValue } from "@ch
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Monitor, Camera, AlertTriangle } from "lucide-react";
 
-/** 单个采集图层的布局（画布像素坐标） */
+/**
+ * 单个采集图层的布局（画布像素坐标）。
+ *
+ * # 为什么只有宽度没有高度
+ *
+ * 采集源（屏幕 / 摄像头）有各自的原始宽高比，拉伸会变形。
+ * 因此图层只记录显示**宽度** `w`，高度由源宽高比自动推导（见 `heightForWidth`），
+ * 后端对应 `scale=w:-2`。这样缩放、改画布比例都不会让画面变形。
+ */
 export interface LayerLayout {
   x: number;
   y: number;
   w: number;
-  h: number;
-  crop_x: number;
-  crop_y: number;
-  crop_w: number;
-  crop_h: number;
   visible: boolean;
 }
 
-/** 交互模式 */
+/** 交互模式（只保留整体拖拽与四角缩放宽高比） */
 type DragMode =
   | "none"
   | "move"
   | "resize-tl"
   | "resize-tr"
   | "resize-bl"
-  | "resize-br"
-  | "crop";
+  | "resize-br";
 
 /** 角句柄位置 */
 const CORNERS = ["tl", "tr", "bl", "br"] as const;
 type Corner = (typeof CORNERS)[number];
+
+/**
+ * 由宽度算高度：严格保持采集源宽高比。
+ *
+ * 结果按 2 取整（yuv420p 要求偶数），保证与后端 scale=w:-2 得到相同的比例。
+ */
+export function heightForWidth(w: number, srcAspect: number): number {
+  if (w <= 0 || srcAspect <= 0) return 0;
+  const h = Math.round(w / srcAspect);
+  return Math.max(2, h - (h % 2));
+}
 
 interface CanvasPreviewProps {
   canvasW: number;
@@ -52,6 +65,10 @@ interface CanvasPreviewProps {
   screenPreviewError?: string;
   /** 摄像头源预览失败原因（空 = 正常） */
   cameraPreviewError?: string;
+  /** 屏幕采集源的原始宽高比（宽/高），用于按源比例算图层高度 */
+  screenAspect: number;
+  /** 摄像头采集源的原始宽高比（宽/高），用于按源比例算图层高度 */
+  cameraAspect: number;
 }
 
 /**
@@ -87,14 +104,14 @@ export default function CanvasPreview({
   previewEnabled = false,
   screenPreviewError = "",
   cameraPreviewError = "",
+  screenAspect,
+  cameraAspect,
 }: CanvasPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [displayW, setDisplayW] = useState(0);
   const [dragMode, setDragMode] = useState<DragMode>("none");
   const [dragLayer, setDragLayer] = useState<"screen" | "camera" | null>(null);
-  const [dragStart, setDragStart] = useState({
-    mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0, cw: 0, ch: 0,
-  });
+  const [dragStart, setDragStart] = useState({ mx: 0, my: 0, x: 0, y: 0, w: 0 });
 
   const borderColor = useColorModeValue("gray.300", "rgba(255,255,255,0.2)");
   const canvasBg = useColorModeValue("#111", "#0a0a0a");
@@ -135,8 +152,7 @@ export default function CanvasPreview({
       setDragMode(mode);
       setDragStart({
         mx: e.clientX, my: e.clientY,
-        x: layout.x, y: layout.y, w: layout.w, h: layout.h,
-        cx: layout.crop_x, cy: layout.crop_y, cw: layout.crop_w, ch: layout.crop_h,
+        x: layout.x, y: layout.y, w: layout.w,
       });
       onActiveLayerChange(layer);
     },
@@ -151,6 +167,7 @@ export default function CanvasPreview({
       const { dx, dy } = toCanvasDelta(e.clientX - dragStart.mx, e.clientY - dragStart.my);
       const layer = dragLayer;
       const origin = layer === "screen" ? screenLayout : cameraLayout;
+      const aspect = layer === "screen" ? screenAspect : cameraAspect;
       const apply = (next: LayerLayout) => {
         if (layer === "screen") onScreenLayoutChange(next);
         else onCameraLayoutChange(next);
@@ -162,60 +179,24 @@ export default function CanvasPreview({
         return;
       }
 
-      if (dragMode === "crop") {
-        const ncw = Math.max(32, dragStart.cw + dx);
-        const nch = Math.max(32, dragStart.ch + dy);
-        apply({
-          ...origin,
-          crop_x: Math.max(0, dragStart.cx + dx),
-          crop_y: Math.max(0, dragStart.cy + dy),
-          crop_w: ncw - (ncw % 2),
-          crop_h: nch - (nch % 2),
-        });
-        return;
-      }
-
-      // 四角缩放：拖哪个角，对角的坐标保持不动
+      // 四角缩放：**只改变宽度**，高度由源宽高比自动推导，保证不变形。
       //
-      // 必须一次性算出最终的 x/y/w/h 再提交：若先改宽度再改高度分别提交，
-      // 两次 setState 会互相覆盖（第二次基于旧 origin），导致缩放乱跳。
+      // 拖左侧的角（tl / bl）时，右边界固定，左边界随鼠标移动，因此
+      // 宽度 = 右边界 - 新左边界，同时 x 要跟着变；拖右侧的角则只改宽度。
       const minW = 64;
-      const minH = 36;
       const fromLeft = dragMode === "resize-tl" || dragMode === "resize-bl";
-      const fromTop = dragMode === "resize-tl" || dragMode === "resize-tr";
-
-      let nx = dragStart.x;
-      let ny = dragStart.y;
-      let nw = dragStart.w;
-      let nh = dragStart.h;
 
       if (fromLeft) {
-        // 左边界跟着鼠标走，右边界固定
         const right = dragStart.x + dragStart.w;
         const movedX = Math.min(right - minW, dragStart.x + dx);
-        nx = movedX;
-        nw = right - movedX;
+        const nw = right - movedX;
+        apply({ ...origin, x: movedX, w: Math.max(minW, nw - (nw % 2)) });
       } else {
-        nw = Math.max(minW, dragStart.w + dx);
+        const nw = Math.max(minW, dragStart.w + dx);
+        apply({ ...origin, w: nw - (nw % 2) });
       }
-
-      if (fromTop) {
-        // 上边界跟着鼠标走，下边界固定
-        const bottom = dragStart.y + dragStart.h;
-        const movedY = Math.min(bottom - minH, dragStart.y + dy);
-        ny = movedY;
-        nh = bottom - movedY;
-      } else {
-        nh = Math.max(minH, dragStart.h + dy);
-      }
-
-      apply({
-        ...origin,
-        x: nx,
-        y: ny,
-        w: nw - (nw % 2),
-        h: nh - (nh % 2),
-      });
+      // 高度无需处理：渲染时按 aspect 自动算（heightForWidth）
+      void aspect;
     };
 
     const onUp = () => {
@@ -231,7 +212,7 @@ export default function CanvasPreview({
     };
   }, [
     dragMode, dragLayer, dragStart, toCanvasDelta,
-    screenLayout, cameraLayout,
+    screenLayout, cameraLayout, screenAspect, cameraAspect,
     onScreenLayoutChange, onCameraLayoutChange,
   ]);
 
@@ -246,19 +227,18 @@ export default function CanvasPreview({
   ) => {
     if (!hasSource) return null;
     const isActive = activeLayer === key;
-    // 该源在图层的宽高：w/h 为 0 表示「自动铺满画布」，与后端规则一致
+    // 该源的原始宽高比
+    const aspect = key === "screen" ? screenAspect : cameraAspect;
+    // 图层宽度：w 为 0 表示铺满画布宽度（与后端 scale=canvas_w:-2 一致）
     const layerW = layout.w > 0 ? layout.w : canvasW;
-    const layerH = layout.h > 0 ? layout.h : canvasH;
+    // 高度**按源比例自动推导**，不读配置里的 h，保证画面永不变形
+    const layerH = heightForWidth(layerW, aspect);
     const dx = layout.x * scale;
     const dy = layout.y * scale;
     const dw = layerW * scale;
     const dh = layerH * scale;
     // 该源的预览失败原因（屏幕/摄像头各记各的）
     const sourceError = key === "screen" ? screenPreviewError : cameraPreviewError;
-
-    // 裁剪：用外层容器的 overflow hidden + 内层 img 反向偏移实现
-    // 这样 css 变换即可，不需要 img 真的被裁
-    const hasCrop = layout.crop_w > 0 && layout.crop_h > 0;
 
     return (
       <Box
@@ -289,14 +269,11 @@ export default function CanvasPreview({
             draggable={false}
             style={{
               position: "absolute",
-              // 裁剪偏移：把「整幅源」按裁剪区放大并左移，实现内容裁剪
-              left: hasCrop ? `${-(layout.crop_x / Math.max(layout.crop_w, 1)) * 100}%` : 0,
-              top: hasCrop ? `${-(layout.crop_y / Math.max(layout.crop_h, 1)) * 100}%` : 0,
-              width: hasCrop ? `${(layerW / Math.max(layout.crop_w, 1)) * 100}%` : "100%",
-              height: hasCrop ? `${(layerH / Math.max(layout.crop_h, 1)) * 100}%` : "100%",
-              // contain：等比缩放 + 留黑边，与后端 scale(force_original_aspect_ratio)+pad 一致。
-              // 用 fill 会把采集源拉扁拉长，改画布比例时画面会变形。
-              objectFit: "contain",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              // fill：容器宽高已严格按源比例算出，填满即不变形
+              objectFit: "fill",
               pointerEvents: "none",
               userSelect: "none",
             }}
@@ -374,26 +351,6 @@ export default function CanvasPreview({
               />
             );
           })}
-
-        {/* 裁剪手柄（黄色，放在底边中点，避免和四角缩放混淆） */}
-        {!disabled && (
-          <Box
-            position="absolute"
-            left="50%"
-            bottom="-6px"
-            w="14px"
-            h="14px"
-            mt="-7px"
-            ml="-7px"
-            borderRadius="full"
-            bg="yellow.400"
-            border="1px solid rgba(0,0,0,0.4)"
-            cursor="crosshair"
-            zIndex={40}
-            onMouseDown={(e) => startDrag(e, key, "crop")}
-            _hover={{ transform: "scale(1.15)" }}
-          />
-        )}
       </Box>
     );
   };
