@@ -1042,9 +1042,13 @@ pub async fn recorder_preview_stop() -> Result<(), String> {
 /// 查询预览状态（端口 / 是否运行）
 #[tauri::command]
 pub async fn recorder_preview_status() -> Result<serde_json::Value, String> {
+    // 按源返回错误：屏幕正常但摄像头失败时，前端仍能在摄像头区域显示原因
+    let (screen_err, camera_err) = crate::recorder_preview::preview_source_errors();
     Ok(serde_json::json!({
         "running": crate::recorder_preview::preview_running(),
         "port": crate::recorder_preview::get_preview_port(),
+        "screenError": screen_err,
+        "cameraError": camera_err,
     }))
 }
 

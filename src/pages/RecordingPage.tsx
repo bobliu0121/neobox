@@ -247,6 +247,9 @@ export default function RecordingPage() {
   const [config, setConfig] = useState<RecorderConfig>(DEFAULT_CONFIG);
   const [devices, setDevices] = useState<CaptureDevice[]>([]);
   const [probe, setProbe] = useState<FfmpegProbe | null>(null);
+  /** 各源预览的失败原因（屏幕/摄像头分别记录，避免"整体成功但某路失败"被静默） */
+  const [screenPreviewError, setScreenPreviewError] = useState("");
+  const [cameraPreviewError, setCameraPreviewError] = useState("");
   const [status, setStatus] = useState<RecorderStatus>({
     recording: false,
     elapsed_sec: 0,
@@ -614,6 +617,22 @@ export default function RecordingPage() {
     [persistConfig, screenInfo.width, screenInfo.height]
   );
 
+  /** 查询各源预览状态并记下失败原因（供界面按源提示） */
+  const refreshPreviewSourceErrors = useCallback(async () => {
+    try {
+      const st = await invoke<{
+        running: boolean;
+        port: number;
+        screenError: string;
+        cameraError: string;
+      }>("recorder_preview_status");
+      setScreenPreviewError(st.screenError ?? "");
+      setCameraPreviewError(st.cameraError ?? "");
+    } catch (e) {
+      console.error("recorder_preview_status failed:", e);
+    }
+  }, []);
+
   /** 启动实时预览 */
   const startPreview = useCallback(async () => {
     setPreviewState("starting");
@@ -625,6 +644,8 @@ export default function RecordingPage() {
       setPreviewError("");
       // 新流需要新的时间戳参数，否则浏览器可能复用已断的旧连接
       setPreviewStamp(Date.now());
+      // 立刻查一次按源状态：屏幕成功但摄像头失败时也要把原因显示出来
+      void refreshPreviewSourceErrors();
     } catch (e) {
       const msg = String(e ?? "");
       console.error("recorder_preview_start failed:", msg);
@@ -639,7 +660,7 @@ export default function RecordingPage() {
         toast({ title: `预览启动失败：${msg.slice(0, 120)}`, status: "warning", duration: 4000 });
       }
     }
-  }, [config, toast]);
+  }, [config, toast, refreshPreviewSourceErrors]);
 
   /** 停止实时预览 */
   const stopPreview = useCallback(async () => {
@@ -1396,6 +1417,8 @@ export default function RecordingPage() {
               previewState={previewState}
               previewError={previewError}
               previewEnabled={config.preview_enabled}
+              screenPreviewError={screenPreviewError}
+              cameraPreviewError={cameraPreviewError}
             />
           </Box>
 

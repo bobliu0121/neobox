@@ -48,6 +48,10 @@ interface CanvasPreviewProps {
   previewState?: "idle" | "starting" | "running" | "error";
   previewError?: string;
   previewEnabled?: boolean;
+  /** 屏幕源预览失败原因（空 = 正常） */
+  screenPreviewError?: string;
+  /** 摄像头源预览失败原因（空 = 正常） */
+  cameraPreviewError?: string;
 }
 
 /**
@@ -81,6 +85,8 @@ export default function CanvasPreview({
   previewState = "idle",
   previewError = "",
   previewEnabled = false,
+  screenPreviewError = "",
+  cameraPreviewError = "",
 }: CanvasPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [displayW, setDisplayW] = useState(0);
@@ -240,10 +246,15 @@ export default function CanvasPreview({
   ) => {
     if (!hasSource) return null;
     const isActive = activeLayer === key;
+    // 该源在图层的宽高：w/h 为 0 表示「自动铺满画布」，与后端规则一致
+    const layerW = layout.w > 0 ? layout.w : canvasW;
+    const layerH = layout.h > 0 ? layout.h : canvasH;
     const dx = layout.x * scale;
     const dy = layout.y * scale;
-    const dw = layout.w * scale;
-    const dh = layout.h * scale;
+    const dw = layerW * scale;
+    const dh = layerH * scale;
+    // 该源的预览失败原因（屏幕/摄像头各记各的）
+    const sourceError = key === "screen" ? screenPreviewError : cameraPreviewError;
 
     // 裁剪：用外层容器的 overflow hidden + 内层 img 反向偏移实现
     // 这样 css 变换即可，不需要 img 真的被裁
@@ -281,8 +292,8 @@ export default function CanvasPreview({
               // 裁剪偏移：把「整幅源」按裁剪区放大并左移，实现内容裁剪
               left: hasCrop ? `${-(layout.crop_x / Math.max(layout.crop_w, 1)) * 100}%` : 0,
               top: hasCrop ? `${-(layout.crop_y / Math.max(layout.crop_h, 1)) * 100}%` : 0,
-              width: hasCrop ? `${(layout.w / Math.max(layout.crop_w, 1)) * 100}%` : "100%",
-              height: hasCrop ? `${(layout.h / Math.max(layout.crop_h, 1)) * 100}%` : "100%",
+              width: hasCrop ? `${(layerW / Math.max(layout.crop_w, 1)) * 100}%` : "100%",
+              height: hasCrop ? `${(layerH / Math.max(layout.crop_h, 1)) * 100}%` : "100%",
               // contain：等比缩放 + 留黑边，与后端 scale(force_original_aspect_ratio)+pad 一致。
               // 用 fill 会把采集源拉扁拉长，改画布比例时画面会变形。
               objectFit: "contain",
@@ -297,7 +308,26 @@ export default function CanvasPreview({
             bg={key === "screen" ? "rgba(59,130,246,0.18)" : "rgba(16,185,129,0.18)"}
             border="1px dashed"
             borderColor="rgba(255,255,255,0.25)"
-          />
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            px={2}
+          >
+            {/* 该源具体的失败原因：屏幕正常但摄像头失败时，
+                用户能在摄像头这块区域直接看到原因，不必去别处找 */}
+            {sourceError ? (
+              <VStack spacing={0.5} textAlign="center">
+                <AlertTriangle size={14} color="orange.400" />
+                <Text fontSize="2xs" color="orange.300" noOfLines={3}>
+                  {sourceError}
+                </Text>
+              </VStack>
+            ) : (
+              <Text fontSize="2xs" color="rgba(255,255,255,0.45)">
+                {label}无画面
+              </Text>
+            )}
+          </Box>
         )}
 
         {/* 图层标签 */}

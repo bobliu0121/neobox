@@ -50,6 +50,30 @@ static CAMERA_STREAM: Mutex<Option<PreviewStream>> = Mutex::new(None);
 static SCREEN_PARAMS: Mutex<Option<(PathBuf, PreviewParams)>> = Mutex::new(None);
 static CAMERA_PARAMS: Mutex<Option<(PathBuf, PreviewParams)>> = Mutex::new(None);
 
+/// 每一路预览各自的失败原因（空 = 正常或未启用）。
+///
+/// 必须按源记录：屏幕成功、摄像头失败时整体函数仍算「启动成功」，
+/// 若只记一个全局错误，摄像头那一路的原因就会被静默丢掉，
+/// 用户看到摄像头区域一片空白却没有任何提示。
+static SCREEN_ERROR: Mutex<String> = Mutex::new(String::new());
+static CAMERA_ERROR: Mutex<String> = Mutex::new(String::new());
+
+fn set_source_error(slot: &Mutex<String>, msg: &str) {
+    if let Ok(mut g) = slot.lock() {
+        *g = msg.to_string();
+    }
+}
+
+fn clear_source_error(slot: &Mutex<String>) {
+    if let Ok(mut g) = slot.lock() {
+        g.clear();
+    }
+}
+
+fn read_source_error(slot: &Mutex<String>) -> String {
+    slot.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -179,6 +203,8 @@ pub fn stop_preview() {
     kill_stream(&CAMERA_STREAM);
     if let Ok(mut g) = SCREEN_PARAMS.lock() { *g = None; }
     if let Ok(mut g) = CAMERA_PARAMS.lock() { *g = None; }
+    clear_source_error(&SCREEN_ERROR);
+    clear_source_error(&CAMERA_ERROR);
     PREVIEW_ENABLED.store(false, Ordering::SeqCst);
     info!("[Recorder] 预览已全部停止");
 }
@@ -197,12 +223,14 @@ pub async fn start_preview_server(
     let mut last_err = String::new();
 
     // 屏幕流
+    clear_source_error(&SCREEN_ERROR);
     if params.screen_enabled {
         match build_screen_stream(&ffmpeg_path, &params) {
             Ok(mut child) => {
                 // 启动后立刻查一次是否已秒退（例如 gdigrab 被占用）
                 if let Some(reason) = check_early_exit(&mut child, "屏幕") {
-                    last_err = reason;
+                    last_err = reason.clone();
+                    set_source_error(&SCREEN_ERROR, &reason);
                 } else {
                     if let Ok(mut g) = SCREEN_STREAM.lock() {
                         *g = Some(PreviewStream { child, stdout: None });
@@ -213,16 +241,22 @@ pub async fn start_preview_server(
                     started_any = true;
                 }
             }
-            Err(e) => { warn!("[Recorder] 屏幕预览启动失败: {e}"); last_err = e; }
+            Err(e) => {
+                warn!("[Recorder] 屏幕预览启动失败: {e}");
+                last_err = e.clone();
+                set_source_error(&SCREEN_ERROR, &e);
+            }
         }
     }
 
     // 摄像头流
+    clear_source_error(&CAMERA_ERROR);
     if !params.camera_device.trim().is_empty() {
         match build_camera_stream(&ffmpeg_path, &params) {
             Ok(mut child) => {
                 if let Some(reason) = check_early_exit(&mut child, "摄像头") {
-                    last_err = reason;
+                    last_err = reason.clone();
+                    set_source_error(&CAMERA_ERROR, &reason);
                 } else {
                     if let Ok(mut g) = CAMERA_STREAM.lock() {
                         *g = Some(PreviewStream { child, stdout: None });
@@ -233,7 +267,11 @@ pub async fn start_preview_server(
                     started_any = true;
                 }
             }
-            Err(e) => { warn!("[Recorder] 摄像头预览启动失败: {e}"); last_err = e; }
+            Err(e) => {
+                warn!("[Recorder] 摄像头预览启动失败: {e}");
+                last_err = e.clone();
+                set_source_error(&CAMERA_ERROR, &e);
+            }
         }
     }
 
@@ -286,6 +324,15 @@ pub fn get_preview_port() -> u16 {
 
 pub fn preview_running() -> bool {
     PREVIEW_ENABLED.load(Ordering::SeqCst)
+}
+
+/// 各源预览的失败原因（供前端按源显示，避免"整体成功但某一路失败"被静默）。
+/// 返回 (screen_error, camera_error)，空串表示该源正常或未启用。
+pub fn preview_source_errors() -> (String, String) {
+    (
+        read_source_error(&SCREEN_ERROR),
+        read_source_error(&CAMERA_ERROR),
+    )
 }
 
 async fn screen_handler() -> axum::response::Response {
