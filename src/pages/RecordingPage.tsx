@@ -46,9 +46,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Move,
-  Eye,
-  EyeOff,
-  Crop,
   RotateCcw,
 } from "lucide-react";
 import CanvasPreview, { type LayerLayout, heightForWidth } from "@/components/recorder/CanvasPreview";
@@ -724,6 +721,9 @@ export default function RecordingPage() {
           setPreviewState("running");
           // 新请求必须带新的时间戳，否则 <img> 会复用已断开的旧连接
           setPreviewStamp(Date.now());
+          // 这条是页面加载后真正生效的启动路径，必须也拉取按源错误，
+          // 否则「摄像头被占用」这类单路失败在首次进页面时不会有任何提示
+          void refreshPreviewSourceErrors();
         })
         .catch((e) => {
           const msg = String(e ?? "");
@@ -745,6 +745,7 @@ export default function RecordingPage() {
     config.screen_enabled,
     config.screen_fps,
     config.camera_device,
+    refreshPreviewSourceErrors,
   ]);
 
   /** 开始录制 */
@@ -752,16 +753,29 @@ export default function RecordingPage() {
     if (starting || status.recording) return;
     setStarting(true);
     try {
+      // 必须先停掉预览：预览是独立的 ffmpeg 采集进程，
+      // 与录制同时打开同一个 gdigrab / dshow 设备会互相干扰（抢 D3D/设备锁，
+      // 轻则录制掉帧、重则录制进程启动即退出，界面却显示「录制中」在空转）。
+      // 录制期间也不该再保留预览，减少 CPU 占用。
+      if (previewRunning) {
+        await invoke("recorder_preview_stop").catch((e) => {
+          console.error("stop preview before recording failed:", e);
+        });
+        setPreviewRunning(false);
+        setPreviewState("idle");
+      }
+
       const path = await invoke<string>("recorder_start", { config });
       toast({ title: `开始录制：${path.split(/[\\/]/).pop()}`, status: "success", duration: 3000 });
       await loadStatus();
     } catch (e) {
       const msg = String(e ?? "");
       toast({ title: `启动录制失败：${msg.slice(0, 160)}`, status: "error", duration: 5000 });
+      await loadStatus();
     } finally {
       setStarting(false);
     }
-  }, [config, starting, status.recording, toast, loadStatus]);
+  }, [config, starting, status.recording, toast, loadStatus, previewRunning]);
 
   /** 停止录制 */
   const handleStop = useCallback(async () => {
@@ -1425,10 +1439,11 @@ export default function RecordingPage() {
               previewEnabled={config.preview_enabled}
               screenPreviewError={screenPreviewError}
               cameraPreviewError={cameraPreviewError}
-              screenAspect={
-                (config.canvas_w || screenInfo.width) /
-                Math.max(1, config.canvas_h || screenInfo.height)
-              }
+              // 屏幕源的原始比例是**固定的系统分辨率比例**，与画布比例无关。
+              // 后端对屏幕用 scale=<w>:-2，高度按 gdigrab 抓到的原始画面算；
+              // 若这里误用画布比例，改录制比例后预览框高度就会与真实画面不符，
+              // 摄像头叠放位置也会错位（预览与成片不一致）。
+              screenAspect={screenInfo.width / Math.max(1, screenInfo.height)}
               cameraAspect={cameraAspect}
             />
           </Box>
@@ -1655,6 +1670,11 @@ function LayerNumericEditor({
               {f.label}
             </Text>
             <Input
+              // key 与「当前值」绑定：拖拽/缩放图层后，外部值变化会让输入框
+              // 重新挂载并刷新显示。若只用 defaultValue 而不带 key，
+              // 非受控输入只在挂载时取值，拖完之后面板里仍是旧数字，
+              // 用户很容易把「看着 100 实际 800」的宽度改坏。
+              key={`${f.key}-${layer[f.key] ?? 0}`}
               size="xs"
               px={1}
               textAlign="center"

@@ -24,22 +24,39 @@
 // ============================================================================
 
 use log::{info, warn};
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 /// 预览 HTTP 服务端口
 static PREVIEW_PORT: AtomicU16 = AtomicU16::new(0);
 /// 预览总开关
 static PREVIEW_ENABLED: AtomicBool = AtomicBool::new(false);
+/// 预览 HTTP 服务是否存活。
+///
+/// 必须单独跟踪：axum serve 异常退出时端口号不会变，
+/// 早先只缓存端口，导致之后每次 start 都直接返回一个**已失效的端口**，
+/// 前端请求连接被拒、界面却显示「预览已开启」，且无法自愈（只能重启程序）。
+static SERVER_ALIVE: AtomicBool = AtomicBool::new(false);
 
 /// 一路预览源（屏幕 / 摄像头）
 struct PreviewStream {
     child: Child,
     /// stdout 已被某个客户端取走时置 None；下次请求会重建进程
     stdout: Option<ChildStdout>,
+    /// stderr 末尾若干行（由后台线程持续消费）
+    ///
+    /// 必须持续读走：ffmpeg 若持续输出 error 日志，管道缓冲（约 64KB）写满后
+    /// 会阻塞它写日志 → 采集停止 → 预览画面冻结。
+    /// 录制路径有专门的消费线程，预览路径早先漏了这一点。
+    stderr_tail: Arc<Mutex<Vec<String>>>,
+    /// 该路的 stdout 是否已被某个客户端占用。
+    ///
+    /// 一路 MJPEG 流只能有一个消费者。用这个标志拒绝第二个并发请求，
+    /// 避免「新请求 kill 掉正在供流的进程」导致画面闪断与进程反复重建。
+    in_use: bool,
 }
 
 /// 屏幕流与摄像头流各自独立
@@ -58,20 +75,31 @@ static CAMERA_PARAMS: Mutex<Option<(PathBuf, PreviewParams)>> = Mutex::new(None)
 static SCREEN_ERROR: Mutex<String> = Mutex::new(String::new());
 static CAMERA_ERROR: Mutex<String> = Mutex::new(String::new());
 
+/// 预览 start / stop 的串行闸门。
+///
+/// 两个命令并发穿插时会出现「`preview_running()` 为 true 但采集进程已被杀」
+/// 的状态（A 正在 start、B 执行 stop 杀掉进程、A 随后置 enabled=true 并返回端口）。
+///
+/// 注意必须用 **tokio 的异步 Mutex**：std 的 `MutexGuard` 不是 `Send`，
+/// 持着它跨越 `.await` 会让整个命令的 Future 失去 `Send`，Tauri 直接编译不过。
+static PREVIEW_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// stop_preview 是同步函数，无法 await 异步闸门；
+/// 它改用这把 std 锁，并且**不**跨越 await（只在同步段内持有）。
+/// 与 start 的串行仍由 PREVIEW_GATE 的主路径保证。
+static STOP_GATE: Mutex<()> = Mutex::new(());
+
 fn set_source_error(slot: &Mutex<String>, msg: &str) {
-    if let Ok(mut g) = slot.lock() {
-        *g = msg.to_string();
-    }
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
 }
 
 fn clear_source_error(slot: &Mutex<String>) {
-    if let Ok(mut g) = slot.lock() {
-        g.clear();
-    }
+    slot.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 fn read_source_error(slot: &Mutex<String>) -> String {
-    slot.lock().map(|g| g.clone()).unwrap_or_default()
+    // 锁中毒不放弃：错误原因必须能透出，否则用户只能看到空白画面
+    slot.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[cfg(windows)]
@@ -164,30 +192,55 @@ fn build_camera_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
     cmd.spawn().map_err(|e| format!("启动摄像头预览失败: {e}"))
 }
 
-/// 读取子进程 stderr 的前若干行（用于启动失败时给出可读原因）。
+/// 构造预览进程后，接管它的 stderr 并启动后台消费线程。
 ///
-/// ffmpeg 在设备打不开时会把原因写 stderr 后**立即退出**（stdout 为空），
-/// 若把 stderr 丢进 Stdio::null()，前端就只能看到一片空白，
-/// 完全不知道为什么没有画面 —— 这正是「摄像头无法预览」难以定位的原因。
-fn drain_stderr(child: &mut Child) -> String {
-    use std::io::Read;
-    if let Some(mut err) = child.stderr.take() {
-        let mut buf = String::new();
-        let _ = err.read_to_string(&mut buf);
-        return buf.trim().to_string();
+/// # 为什么必须持续消费 stderr
+///
+/// ffmpeg 在设备打不开时会把原因写 stderr 后**立即退出**（stdout 为空）；
+/// 而正常运行期间它也会持续输出 error 日志（丢帧、设备异常等）。
+/// 若不读走，管道缓冲（Windows 约 64KB）写满后会阻塞 ffmpeg 写日志，
+/// 采集随之停止 —— 表现为「预览画面突然冻结」。
+///
+/// 因此把 stderr 交给一个后台线程持续读，只保留末尾若干行用于诊断。
+fn attach_stderr_consumer(child: &mut Child) -> Arc<Mutex<Vec<String>>> {
+    let tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let t = tail.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let mut guard = t.lock().unwrap_or_else(|e| e.into_inner());
+                guard.push(line);
+                if guard.len() > 20 {
+                    let drain = guard.len() - 20;
+                    guard.drain(0..drain);
+                }
+            }
+        });
     }
-    String::new()
+    tail
 }
 
-/// 启动某一源后立即检查它是否已经异常退出；若已退出则返回 stderr 里的原因。
+/// 立即检查子进程是否已异常退出；若已退出则返回 stderr 里的原因。
 ///
-/// dshow 设备不存在 / 被其它程序独占时，ffmpeg 几毫秒内就会失败退出。
-/// 这里等一小段时间再查，能区分「真在采集」与「一启动就挂了」。
-fn check_early_exit(child: &mut Child, label: &str) -> Option<String> {
-    std::thread::sleep(std::time::Duration::from_millis(600));
+/// 调用前需已 `attach_stderr_consumer`（否则 stderr 已被接管）。
+/// 注意：本函数是**同步**的，调用方（async 上下文）必须用
+/// `tokio::task::spawn_blocking` 包起来，否则会阻塞 tokio worker。
+fn early_exit_reason(
+    child: &mut Child,
+    tail: &Arc<Mutex<Vec<String>>>,
+    label: &str,
+) -> Option<String> {
     match child.try_wait() {
         Ok(Some(status)) => {
-            let err = drain_stderr(child);
+            let err = tail
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
             let reason = if err.is_empty() {
                 format!("{label}采集进程已退出（退出码 {:?}）", status.code())
             } else {
@@ -200,21 +253,43 @@ fn check_early_exit(child: &mut Child, label: &str) -> Option<String> {
     }
 }
 
-fn kill_stream(slot: &Mutex<Option<PreviewStream>>) {
-    if let Ok(mut g) = slot.lock() {
-        if let Some(mut s) = g.take() {
-            let _ = s.child.kill();
-            let _ = s.child.wait();
-        }
+/// 启动后等待一小段时间，判断该源是否「一启动就退出」。
+///
+/// 返回 `None` 表示仍在正常采集；`Some(原因)` 表示启动失败。
+///
+/// 用 `tokio::time::sleep` 而不是 `std::thread::sleep`：
+/// 本函数在 async 上下文里被 await，同步 sleep 会占住 tokio worker
+/// （两路各 600ms 共 1.2 秒，期间其它 IPC 全被排到后面）。
+async fn wait_start_ok(
+    child: &mut Child,
+    tail: &Arc<Mutex<Vec<String>>>,
+    label: &str,
+) -> Option<String> {
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    early_exit_reason(child, tail, label)
+}
+
+fn lock_stream(slot: &'static Mutex<Option<PreviewStream>>) -> std::sync::MutexGuard<'static, Option<PreviewStream>> {
+    slot.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn kill_stream(slot: &'static Mutex<Option<PreviewStream>>) {
+    if let Some(mut s) = lock_stream(slot).take() {
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 }
 
 /// 停止全部预览
 pub fn stop_preview() {
+    // 同步函数无法 await 异步闸门，这里用 std 锁保护「清空槽位」这段临界区。
+    // 它只在同步段内持有，不会跨越 await，因此不影响 Future 的 Send。
+    let _gate = STOP_GATE.lock().unwrap_or_else(|e| e.into_inner());
+
     kill_stream(&SCREEN_STREAM);
     kill_stream(&CAMERA_STREAM);
-    if let Ok(mut g) = SCREEN_PARAMS.lock() { *g = None; }
-    if let Ok(mut g) = CAMERA_PARAMS.lock() { *g = None; }
+    *SCREEN_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *CAMERA_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     clear_source_error(&SCREEN_ERROR);
     clear_source_error(&CAMERA_ERROR);
     PREVIEW_ENABLED.store(false, Ordering::SeqCst);
@@ -226,10 +301,15 @@ pub async fn start_preview_server(
     ffmpeg_path: PathBuf,
     params: PreviewParams,
 ) -> Result<u16, String> {
-    let existing_port = PREVIEW_PORT.load(Ordering::SeqCst);
+    // 串行化启动，防止两个并发 start 各自杀对方刚起的进程。
+    // 用 tokio 异步锁：它在 await 点上是 Send 的。
+    let _gate = PREVIEW_GATE.lock().await;
 
     // 全部重启，保证参数是最新的
-    stop_preview();
+    kill_stream(&SCREEN_STREAM);
+    kill_stream(&CAMERA_STREAM);
+    *SCREEN_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *CAMERA_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     let mut started_any = false;
     let mut last_err = String::new();
@@ -239,18 +319,24 @@ pub async fn start_preview_server(
     if params.screen_enabled {
         match build_screen_stream(&ffmpeg_path, &params) {
             Ok(mut child) => {
-                // 启动后立刻查一次是否已秒退（例如 gdigrab 被占用）
-                if let Some(reason) = check_early_exit(&mut child, "屏幕") {
-                    last_err = reason.clone();
-                    set_source_error(&SCREEN_ERROR, &reason);
-                } else {
-                    if let Ok(mut g) = SCREEN_STREAM.lock() {
-                        *g = Some(PreviewStream { child, stdout: None });
+                // 挂 stderr 消费线程，再异步等一小段判断是否秒退
+                let tail = attach_stderr_consumer(&mut child);
+                match wait_start_ok(&mut child, &tail, "屏幕").await {
+                    None => {
+                        *lock_stream(&SCREEN_STREAM) = Some(PreviewStream {
+                            child,
+                            stdout: None,
+                            stderr_tail: tail,
+                            in_use: false,
+                        });
+                        *SCREEN_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some((ffmpeg_path.clone(), params.clone()));
+                        started_any = true;
                     }
-                    if let Ok(mut g) = SCREEN_PARAMS.lock() {
-                        *g = Some((ffmpeg_path.clone(), params.clone()));
+                    Some(reason) => {
+                        last_err = reason.clone();
+                        set_source_error(&SCREEN_ERROR, &reason);
                     }
-                    started_any = true;
                 }
             }
             Err(e) => {
@@ -266,17 +352,23 @@ pub async fn start_preview_server(
     if !params.camera_device.trim().is_empty() {
         match build_camera_stream(&ffmpeg_path, &params) {
             Ok(mut child) => {
-                if let Some(reason) = check_early_exit(&mut child, "摄像头") {
-                    last_err = reason.clone();
-                    set_source_error(&CAMERA_ERROR, &reason);
-                } else {
-                    if let Ok(mut g) = CAMERA_STREAM.lock() {
-                        *g = Some(PreviewStream { child, stdout: None });
+                let tail = attach_stderr_consumer(&mut child);
+                match wait_start_ok(&mut child, &tail, "摄像头").await {
+                    None => {
+                        *lock_stream(&CAMERA_STREAM) = Some(PreviewStream {
+                            child,
+                            stdout: None,
+                            stderr_tail: tail,
+                            in_use: false,
+                        });
+                        *CAMERA_PARAMS.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some((ffmpeg_path.clone(), params.clone()));
+                        started_any = true;
                     }
-                    if let Ok(mut g) = CAMERA_PARAMS.lock() {
-                        *g = Some((ffmpeg_path.clone(), params.clone()));
+                    Some(reason) => {
+                        last_err = reason.clone();
+                        set_source_error(&CAMERA_ERROR, &reason);
                     }
-                    started_any = true;
                 }
             }
             Err(e) => {
@@ -302,7 +394,11 @@ pub async fn start_preview_server(
 
     PREVIEW_ENABLED.store(true, Ordering::SeqCst);
 
-    if existing_port > 0 {
+    // 只有当 HTTP 服务确实还活着时才复用端口。
+    // 早先无条件复用：axum serve 异常退出后端口号不变，之后每次 start 都返回
+    // 一个已失效的端口，前端请求连接被拒、界面却显示「预览已开启」，无法自愈。
+    let existing_port = PREVIEW_PORT.load(Ordering::SeqCst);
+    if existing_port > 0 && SERVER_ALIVE.load(Ordering::SeqCst) {
         info!("[Recorder] 预览进程已重启（复用端口 {existing_port}）");
         return Ok(existing_port);
     }
@@ -319,12 +415,17 @@ pub async fn start_preview_server(
         .map_err(|e| format!("获取预览端口失败: {e}"))?
         .port();
     PREVIEW_PORT.store(port, Ordering::SeqCst);
+    SERVER_ALIVE.store(true, Ordering::SeqCst);
 
     tokio::spawn(async move {
         info!("[Recorder] 预览服务监听 127.0.0.1:{port}");
         if let Err(e) = axum::serve(listener, app).await {
             warn!("[Recorder] 预览服务异常退出: {e}");
         }
+        // 服务结束（正常或异常）都必须复位存活标志，
+        // 否则下次 start 会继续复用这个已经没人监听的端口
+        SERVER_ALIVE.store(false, Ordering::SeqCst);
+        PREVIEW_PORT.store(0, Ordering::SeqCst);
     });
 
     Ok(port)
@@ -382,36 +483,66 @@ async fn stream_response(kind: StreamKind) -> axum::response::Response {
 
     // 先尝试直接取已有进程的 stdout
     let mut got: Option<ChildStdout> = None;
-    if let Ok(mut g) = slot.lock() {
+    let mut busy = false;
+    {
+        let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = g.as_mut() {
-            got = s.stdout.take();
+            if s.in_use {
+                // 已有客户端正在消费这路流。
+                //
+                // 早先这里会 kill 掉正在供流的进程再重建，于是前一个客户端立即 EOF
+                // 变空白（预览闪断），重建的进程又可能被下一个请求杀掉，
+                // 形成「重建 → 被杀 → 再重建」的循环，CPU 与设备占用反复抖动。
+                // 正确做法是让新请求稍后重试，而不是抢走别人的流。
+                busy = true;
+            } else {
+                got = s.stdout.take();
+                if got.is_some() {
+                    s.in_use = true;
+                }
+            }
         }
+    }
+    if busy {
+        return (StatusCode::SERVICE_UNAVAILABLE, "preview stream busy, retry")
+            .into_response();
     }
 
     // 没有可用的 stdout（首次请求 / 浏览器重连 / 进程已退出）→ 重建进程
     let stdout = match got {
         Some(s) => s,
         None => {
-            // 清掉旧进程
+            // 清掉旧进程（此时已确认没有活跃消费者）
             kill_stream(slot);
-            let params = match params_slot.lock() {
-                Ok(g) => g.clone(),
-                Err(e) => e.into_inner().clone(),
-            };
+            let params = params_slot.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let Some((ffmpeg_path, params)) = params else {
                 return (StatusCode::SERVICE_UNAVAILABLE, "preview params missing").into_response();
             };
             match rebuild_fn(&ffmpeg_path, &params) {
                 Ok(mut child) => {
+                    // 重建也要挂 stderr 消费者，否则长时预览会因管道写满而冻结
+                    let tail = attach_stderr_consumer(&mut child);
                     let taken = child.stdout.take();
-                    if let Ok(mut g) = slot.lock() {
-                        *g = Some(PreviewStream { child, stdout: None });
-                    }
                     match taken {
-                        Some(s) => s,
+                        Some(s) => {
+                            {
+                                let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+                                *g = Some(PreviewStream {
+                                    child,
+                                    stdout: None,
+                                    stderr_tail: tail,
+                                    in_use: true,
+                                });
+                            }
+                            s
+                        }
                         None => {
-                            return (StatusCode::SERVICE_UNAVAILABLE, "no stdout")
-                                .into_response();
+                            // 拿不到 stdout 就别把半初始化的 child 塞进 slot：
+                            // 它没有任何消费者，只会白占设备与 CPU。
+                            let mut c = child;
+                            let _ = c.kill();
+                            let _ = c.wait();
+                            return (StatusCode::SERVICE_UNAVAILABLE, "no stdout").into_response();
                         }
                     }
                 }
@@ -441,6 +572,20 @@ async fn stream_response(kind: StreamKind) -> axum::response::Response {
                 Err(e) => {
                     let _ = tx.blocking_send(Err(e));
                     break;
+                }
+            }
+        }
+
+        // 客户端断开（或流读干）后必须收尾，否则这一路会永久停留在 in_use，
+        // 之后的请求全部被 503 拒绝，预览从此不再出画面。
+        // 这里把该进程收掉并清空 in_use，让下一次请求能重新拉起一路干净的流。
+        {
+            let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(s) = g.as_mut() {
+                s.in_use = false;
+                if let Some(mut child) = g.take().map(|st| st.child) {
+                    let _ = child.kill();
+                    let _ = child.wait();
                 }
             }
         }

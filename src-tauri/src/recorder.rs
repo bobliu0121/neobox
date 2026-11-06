@@ -31,6 +31,9 @@ use std::os::windows::process::CommandExt;
 
 /// settings.json 中保存录制设置的键
 const SETTINGS_KEY: &str = "neobox_recorder_settings";
+/// 录制配置的当前版本。1 = 修复「图层默认不可见导致黑屏」之后的版本。
+/// 旧配置（version 0）在 normalize 时做一次性迁移。
+const RECORDER_CONFIG_VERSION: u32 = 1;
 /// 录制文件默认输出目录（在「视频」目录下建子目录）
 const OUTPUT_DIR_NAME: &str = "NeoBox 录制";
 /// 停止录制时等待 ffmpeg 优雅退出的上限
@@ -66,7 +69,7 @@ pub struct CaptureDevice {
 /// 因此图层只记录显示宽度 `w`，高度由 ffmpeg 的 `scale=w:-2` 按源比例算出来；
 /// 前端预览同样用 CSS `aspect-ratio` 保持源比例。
 /// 这样无论用户怎么缩放、怎么改画布比例，画面都保持源比例。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerLayout {
     /// 图层左上角在画布中的 x（像素，可为负 = 移出画布）
     #[serde(default)]
@@ -93,6 +96,32 @@ pub struct LayerLayout {
     /// 图层是否显示（关掉可临时隐藏该源，不必删配置）
     #[serde(default = "default_true")]
     pub visible: bool,
+}
+
+/// # 为什么必须手写 `Default`
+///
+/// `#[serde(default = "default_true")]` **只在反序列化缺字段时生效**，
+/// 对 `Default` trait 没有任何影响。而 derive 出来的 `Default` 会把
+/// `bool` 填成零值 `false` —— 结果 `RecorderConfig::default()` 的两个图层
+/// 都是不可见，`build_args` 跳过所有图层，只剩一张黑色画布：
+/// **新用户（或清空配置后）第一次录制直接产出纯黑视频**，而文件非空，
+/// 现有的 `size == 0` 校验还会通过，用户完全收不到错误提示。
+///
+/// 因此这里手写 `Default`，保证 `visible` 默认可见。
+impl Default for LayerLayout {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            crop_x: 0,
+            crop_y: 0,
+            crop_w: 0,
+            crop_h: 0,
+            visible: true,
+        }
+    }
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -129,6 +158,10 @@ pub struct RecorderConfig {
     /// 摄像头图层的布局
     #[serde(default)]
     pub camera_layout: LayerLayout,
+    /// 配置版本号：用于做一次性数据迁移（见 normalize）
+    /// 0 = 旧版本（可能存在 visible=false 的历史脏数据）
+    #[serde(default)]
+    pub config_version: u32,
     // 兼容旧配置：仍接受 pip_* 字段，读入后由 normalize 迁移到 camera_layout
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pip_scale: Option<u32>,
@@ -184,6 +217,8 @@ impl Default for RecorderConfig {
             canvas_h: 0,
             screen_layout: LayerLayout::default(),
             camera_layout: LayerLayout::default(),
+            // 新配置直接就是最新版本，不需要迁移
+            config_version: RECORDER_CONFIG_VERSION,
             pip_scale: None,
             pip_margin: None,
             pip_position: None,
@@ -244,8 +279,21 @@ impl RecorderConfig {
         // 屏幕图层若未设尺寸，默认铺满画布
         if self.screen_layout.w == 0 { self.screen_layout.w = self.canvas_w; }
         if self.screen_layout.h == 0 { self.screen_layout.h = self.canvas_h; }
-        if self.screen_layout.visible == false && self.screen_enabled {
-            // 旧配置没有 visible 字段时 serde 会填 default_true，这里不会误关
+
+        // 迁移历史遗留的「启用但不可见」矛盾配置。
+        //
+        // 旧版本因 derive(Default) 让 visible 默认 false，凡是保存过配置的用户
+        // 都可能把 visible=false 落盘；这些配置升级后仍然会录出黑屏。
+        // 用配置版本号做一次性迁移：只有 version < 1 的旧配置才强制置为可见，
+        // 之后用户主动隐藏图层的选择会被尊重（不会被反复改回 true）。
+        if self.config_version < RECORDER_CONFIG_VERSION {
+            if self.screen_enabled {
+                self.screen_layout.visible = true;
+            }
+            if !self.camera_device.trim().is_empty() {
+                self.camera_layout.visible = true;
+            }
+            self.config_version = RECORDER_CONFIG_VERSION;
         }
         // 迁移完成后清掉旧字段，避免之后再被重复迁移
         self.pip_scale = None;
@@ -331,6 +379,35 @@ static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 static ELAPSED_SEC: AtomicU64 = AtomicU64::new(0);
 /// 最近一次错误
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+/// 「启动录制」的串行闸门。
+///
+/// # 为什么需要单独一把锁
+///
+/// `recorder_start` 的流程是「检查是否在录 → 起 ffmpeg（耗时上百毫秒）→ 写入 ACTIVE」。
+/// 若只用 ACTIVE 锁，检查与写入之间会释放锁，两个并发调用（前端双击、页面重挂载、
+/// IPC 重入）都能通过检查，各自 spawn 一个 ffmpeg：
+/// 后写者覆盖 ACTIVE，**先写者的 Child 被 drop（Rust 的 Child::drop 不会杀进程）
+/// → 变成孤儿 ffmpeg 继续录制并写同一个文件**，stop / 退出清理都收不掉它。
+///
+/// 用这把独立闸门把整段「检查 → spawn → 写入」串行化，
+/// 由于它在整个流程内持有，不会与 ACTIVE 锁产生嵌套顺序问题。
+static START_GATE: Mutex<()> = Mutex::new(());
+
+/// 统一获取 ACTIVE 锁（锁中毒后继续使用内部数据）。
+///
+/// 这些状态都是普通数据，中毒意味着某次持锁线程 panic，但数据本身没有
+/// 会因此破坏的不变量，因此一律取回内部值继续用。
+/// 早先混用 `.map_err(|e| e.to_string())` 会让锁中毒后**永久无法停止录制**
+/// （stop 一直返回 Err，ffmpeg 残留），这里统一成不放弃的写法。
+fn lock_active() -> std::sync::MutexGuard<'static, Option<ActiveRecording>> {
+    ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 统一获取 LAST_ERROR 锁（同上，中毒不放弃）
+fn lock_last_error() -> std::sync::MutexGuard<'static, String> {
+    LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // ────────────────────────────────────────────────────────────
 //  ffmpeg 定位
@@ -1040,14 +1117,19 @@ pub async fn recorder_save_config(app: AppHandle, config: RecorderConfig) -> Res
 /// 开始录制
 #[tauri::command]
 pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<String, String> {
+    // 用启动闸门串行化整个「检查 → 起进程 → 写入 ACTIVE」流程。
+    // 锁中毒不放弃（内部数据仍可用），避免任何一次 panic 让录制功能永久不可用。
+    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+
     // 已在录制则直接返回当前文件，避免重复启动
-    if IS_RECORDING.load(Ordering::SeqCst) {
-        let guard = ACTIVE.lock().map_err(|e| e.to_string())?;
+    {
+        let guard = lock_active();
         if let Some(active) = guard.as_ref() {
             return Ok(active.output_path.to_string_lossy().into_owned());
         }
-        return Err("录制状态异常".to_string());
     }
+    // 修正可能残留的脏标志（例如上次异常退出没复位）
+    IS_RECORDING.store(false, Ordering::SeqCst);
 
     let Some(ffmpeg) = find_ffmpeg() else {
         return Err("未找到 ffmpeg。请安装 ffmpeg 并加入 PATH，或把 ffmpeg.exe 放到 NeoBox 程序目录旁".to_string());
@@ -1058,11 +1140,16 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
         return Err("请至少启用屏幕采集或选择一个摄像头".to_string());
     }
 
+    // 权威保护：录制前先停掉预览进程。
+    //
+    // 预览与录制会各自起一个 ffmpeg 打开同一个采集设备。虽然一般允许并存，
+    // 但并发访问会互相抢设备锁（表现为录制掉帧、甚至启动即退出而界面显示
+    // 「录制中」空转）。前端也会在开始录制前停预览，这里作为后端侧兜底，
+    // 保证无论从哪条路径触发录制都不会与预览抢设备。
+    crate::recorder_preview::stop_preview();
+
     // 归一化布局：补齐画布尺寸、迁移旧 pip_* 配置、强制偶数尺寸
     let (sw, sh) = screen_size();
-
-    // 保存设置，下次打开沿用
-    write_config(&app, &config);
 
     let dir = resolve_output_dir(&config);
     let output_path = make_output_path(&dir);
@@ -1070,10 +1157,10 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
     let mut config = config;
     config.normalize(sw, sh);
 
-    // 选编码器（auto 时实测硬件可用性）
+    // 先组装参数与编码器，任何失败都在起进程之前返回，不留半初始化状态
+    // （选编码器会实测硬件可用性，可能起若干探测进程，放在 spawn 之前更安全）
     let encoder = resolve_encoder(&ffmpeg, &config.encoder);
 
-    // 组装参数
     let (args, encoder) = build_args(
         &config,
         &encoder,
@@ -1103,10 +1190,13 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 let Ok(line) = line else { break };
-                let mut guard = match tail.lock() {
-                    Ok(g) => g,
-                    Err(_) => break,
-                };
+                // 锁中毒也必须继续读！
+                //
+                // 这个线程是 stderr 管道**唯一的读者**：一旦它因为锁中毒而退出，
+                // ffmpeg 写日志时管道无人消费、缓冲区（约 64KB）写满后会阻塞，
+                // 表现为「录到一半卡住」。锁中毒只是某次 panic 的连带结果，
+                // 内部 Vec 本身没有会被破坏的不变量，取回内部值继续用即可。
+                let mut guard = tail.lock().unwrap_or_else(|e| e.into_inner());
                 guard.push(line);
                 // 只保留末尾 40 行，长时录制不会吃光内存
                 if guard.len() > 40 {
@@ -1117,19 +1207,25 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
         });
     }
 
-    *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+    *lock_last_error() = String::new();
     ELAPSED_SEC.store(0, Ordering::SeqCst);
 
-    let mut guard = ACTIVE.lock().map_err(|e| e.to_string())?;
-    *guard = Some(ActiveRecording {
-        child,
-        output_path: output_path.clone(),
-        started_at: Instant::now(),
-        encoder: encoder.clone(),
-        stderr_tail,
-        bitrate_kbps: config.video_bitrate_kbps.clamp(500, 100_000),
-    });
+    {
+        let mut guard = lock_active();
+        *guard = Some(ActiveRecording {
+            child,
+            output_path: output_path.clone(),
+            started_at: Instant::now(),
+            encoder: encoder.clone(),
+            stderr_tail,
+            bitrate_kbps: config.video_bitrate_kbps.clamp(500, 100_000),
+        });
+    }
     IS_RECORDING.store(true, Ordering::SeqCst);
+
+    // ffmpeg 已成功启动，这时候才落盘配置 ——
+    // 若前面任何步骤失败，不应把用户的配置改成一份「没生效」的值。
+    write_config(&app, &config);
 
     Ok(output_path.to_string_lossy().into_owned())
 }
@@ -1139,7 +1235,7 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
 pub async fn recorder_stop() -> Result<String, String> {
     // 取出录制进程（避免持锁跨 await）
     let active = {
-        let mut guard = ACTIVE.lock().map_err(|e| e.to_string())?;
+        let mut guard = lock_active();
         guard.take()
     };
     let Some(mut active) = active else {
@@ -1151,12 +1247,45 @@ pub async fn recorder_stop() -> Result<String, String> {
     let elapsed = active.started_at.elapsed().as_secs();
     ELAPSED_SEC.store(elapsed, Ordering::SeqCst);
 
+    // 整个「写 q → 轮询等待 → 必要时 kill」是阻塞操作，最长可达
+    // GRACEFUL_STOP_TIMEOUT_MS。它必须放进 spawn_blocking：
+    // 直接在 async 命令里 std::thread::sleep 会占住 tokio worker，
+    // 期间其它 IPC（状态轮询、预览）会被排到后面，界面表现为「停止中」卡住。
+    let stop_result = tokio::task::spawn_blocking(move || stop_active_recording(&mut active))
+        .await
+        .map_err(|e| format!("停止录制任务异常: {e}"))?;
+
+    match stop_result {
+        Ok(path_str) => {
+            info!("[Recorder] 录制结束 output={path_str} elapsed={elapsed}s");
+            Ok(path_str)
+        }
+        Err(msg) => {
+            *lock_last_error() = msg.clone();
+            Err(msg)
+        }
+    }
+}
+
+/// 同步的「收尾录制」流程（供 spawn_blocking 调用）。
+///
+/// 返回 Ok(输出路径) 或 Err(错误信息)。
+fn stop_active_recording(active: &mut ActiveRecording) -> Result<String, String> {
     // 先尝试优雅结束：向 ffmpeg 的 stdin 写 "q"。
     // ffmpeg 收到 q 会正常收尾并写入 moov（mp4 的索引），强制 kill 则文件可能不可播。
     let mut graceful = false;
-    if let Some(stdin) = active.child.stdin.as_mut() {
-        if stdin.write_all(b"q").is_ok() && stdin.flush().is_ok() {
-            graceful = true;
+    match active.child.stdin.as_mut() {
+        Some(stdin) => match stdin.write_all(b"q") {
+            Ok(()) => match stdin.flush() {
+                Ok(()) => graceful = true,
+                Err(e) => warn!("[Recorder] 停止信号 flush 失败: {e}"),
+            },
+            // EPIPE 通常说明进程已经自行退出，不必再等；交给下面的 try_wait 判定
+            Err(e) => warn!("[Recorder] 停止信号写入失败: {e}"),
+        },
+        None => {
+            // stdin 已被取走/关闭：优雅停止不可能成功，直接走强杀，不要白等 8 秒
+            warn!("[Recorder] ffmpeg stdin 不可用，跳过优雅停止");
         }
     }
 
@@ -1164,8 +1293,15 @@ pub async fn recorder_stop() -> Result<String, String> {
     let mut exited = false;
     while Instant::now() < deadline {
         match active.child.try_wait() {
-            Ok(Some(_)) => { exited = true; break }
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Ok(Some(_)) => {
+                exited = true;
+                break;
+            }
+            Ok(None) => {
+                // 优雅停止失效时 ffmpeg 不会响应 "q"，没必要等满超时
+                let nap = if graceful { 100 } else { 50 };
+                std::thread::sleep(Duration::from_millis(nap));
+            }
             Err(_) => break,
         }
     }
@@ -1176,12 +1312,12 @@ pub async fn recorder_stop() -> Result<String, String> {
         let _ = active.child.wait();
     }
 
-    // 收集 stderr 末尾，异常时作为错误信息回传
+    // 收集 stderr 末尾，异常时作为错误信息回传（锁中毒也要取回内部数据）
     let tail = active
         .stderr_tail
         .lock()
         .map(|g| g.iter().cloned().collect::<Vec<_>>().join("\n"))
-        .unwrap_or_default();
+        .unwrap_or_else(|e| e.into_inner().iter().cloned().collect::<Vec<_>>().join("\n"));
 
     let path_str = active.output_path.to_string_lossy().into_owned();
 
@@ -1193,12 +1329,9 @@ pub async fn recorder_stop() -> Result<String, String> {
         } else {
             format!("录制失败：{tail}")
         };
-        *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = msg.clone();
         return Err(msg);
     }
 
-    // ffmpeg 退出码非 0 但文件非空：通常是收尾时的无害警告，记录但不报错
-    info!("[Recorder] 录制结束 output={path_str} size={size} elapsed={elapsed}s");
     Ok(path_str)
 }
 
@@ -1208,12 +1341,12 @@ pub async fn recorder_status() -> Result<RecorderStatus, String> {
     let recording = IS_RECORDING.load(Ordering::SeqCst);
     let mut status = RecorderStatus {
         recording,
-        last_error: LAST_ERROR.lock().map(|g| g.clone()).unwrap_or_default(),
+        last_error: lock_last_error().clone(),
         ..Default::default()
     };
 
     if recording {
-        let guard = ACTIVE.lock().map_err(|e| e.to_string())?;
+        let guard = lock_active();
         if let Some(active) = guard.as_ref() {
             let elapsed = active.started_at.elapsed().as_secs();
             ELAPSED_SEC.store(elapsed, Ordering::SeqCst);
@@ -1326,6 +1459,11 @@ pub async fn recorder_reveal_file(path: String) -> Result<(), String> {
 }
 
 /// 探测视频时长（供前端展示）
+///
+/// 优先用 ffprobe；便携包/只装了 ffmpeg.exe 的环境没有 ffprobe，
+/// 此时回退到解析 `ffmpeg -i` 输出里的 `Duration: HH:MM:SS.ss`。
+/// 早先回退分支直接拿 ffmpeg 跑 ffprobe 专用参数，ffmpeg 不认识 → stdout 为空
+/// → 恒返回 0，录制列表的时长列永远显示 0。
 #[tauri::command]
 pub async fn recorder_probe_duration(path: String) -> Result<u64, String> {
     let p = PathBuf::from(&path);
@@ -1333,24 +1471,53 @@ pub async fn recorder_probe_duration(path: String) -> Result<u64, String> {
         return Err("文件不存在".to_string());
     }
     let Some(ffmpeg) = find_ffmpeg() else { return Ok(0) };
-    // 用 ffprobe（与 ffmpeg 同目录）读时长
+
+    // 优先 ffprobe（与 ffmpeg 同目录）
     let ffprobe = ffmpeg.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
-    let tool = if ffprobe.is_file() { ffprobe } else { ffmpeg.clone() };
-    let out = ffmpeg_cmd(&tool)
-        .args([
-            "-hide_banner", "-loglevel", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            &path,
-        ])
-        .output();
+    if ffprobe.is_file() {
+        let out = ffmpeg_cmd(&ffprobe)
+            .args([
+                "-hide_banner", "-loglevel", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                &path,
+            ])
+            .output();
+        if let Ok(out) = out {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Ok(secs) = text.trim().parse::<f64>() {
+                return Ok(secs as u64);
+            }
+        }
+    }
+
+    // 回退：ffmpeg -i 会把元数据打到 stderr，其中含 "Duration: 00:00:05.00"
+    let out = ffmpeg_cmd(&ffmpeg).args(["-hide_banner", "-i", &path]).output();
     let Ok(out) = out else { return Ok(0) };
-    let text = String::from_utf8_lossy(&out.stdout);
-    Ok(text.trim().parse::<f64>().map(|d| d as u64).unwrap_or(0))
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Ok(parse_duration_from_ffmpeg_stderr(&stderr).unwrap_or(0))
+}
+
+/// 从 `ffmpeg -i` 的 stderr 里解析时长，返回秒数。
+///
+/// 形如 `Duration: 00:01:23.45, start: 0.000000, bitrate: ...`。
+fn parse_duration_from_ffmpeg_stderr(stderr: &str) -> Option<u64> {
+    let idx = stderr.find("Duration:")?;
+    let rest = &stderr[idx + "Duration:".len()..];
+    let token = rest.split(',').next()?.trim();
+    let mut parts = token.split(':');
+    let h: u64 = parts.next()?.trim().parse().ok()?;
+    let m: u64 = parts.next()?.trim().parse().ok()?;
+    let s: f64 = parts.next()?.trim().parse().ok()?;
+    Some(h * 3600 + m * 60 + s as u64)
 }
 
 /// 应用退出 / 崩溃前的兜底清理：结束残留的 ffmpeg 进程
 pub fn cleanup_on_exit() {
+    // 先把标志复位：早先这里放在函数末尾，而「ffmpeg 优雅退出」这一最常见路径
+    // 走的是 `return`，会跳过复位，导致退出期间别处仍看到「录制中」。
+    IS_RECORDING.store(false, Ordering::SeqCst);
+
     let active = {
         match ACTIVE.lock() {
             Ok(mut g) => g.take(),
@@ -1359,22 +1526,34 @@ pub fn cleanup_on_exit() {
     };
     if let Some(mut active) = active {
         warn!("[Recorder] 退出时仍在录制，尝试优雅收尾");
+        let mut sent = false;
         if let Some(stdin) = active.child.stdin.as_mut() {
-            let _ = stdin.write_all(b"q");
-            let _ = stdin.flush();
+            if stdin.write_all(b"q").is_ok() {
+                let _ = stdin.flush();
+                sent = true;
+            }
         }
         let deadline = Instant::now() + Duration::from_millis(3000);
+        let mut exited = false;
         while Instant::now() < deadline {
             match active.child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Ok(Some(_)) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) => {
+                    // 优雅信号没发出去就没必要等满 3 秒
+                    let nap = if sent { 100 } else { 50 };
+                    std::thread::sleep(Duration::from_millis(nap));
+                }
                 Err(_) => break,
             }
         }
-        let _ = active.child.kill();
-        let _ = active.child.wait();
+        if !exited {
+            let _ = active.child.kill();
+            let _ = active.child.wait();
+        }
     }
-    IS_RECORDING.store(false, Ordering::SeqCst);
 }
 
 #[cfg(test)]

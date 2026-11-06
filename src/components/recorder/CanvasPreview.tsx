@@ -216,6 +216,34 @@ export default function CanvasPreview({
     onScreenLayoutChange, onCameraLayoutChange,
   ]);
 
+  /** 渲染「无画面」占位：有错误原因就显示原因，否则显示「无画面」 */
+  const renderNoPicture = (key: "screen" | "camera", error: string) => (
+    <Box
+      position="absolute"
+      inset={0}
+      bg={key === "screen" ? "rgba(59,130,246,0.18)" : "rgba(16,185,129,0.18)"}
+      border="1px dashed"
+      borderColor="rgba(255,255,255,0.25)"
+      display="flex"
+      alignItems="center"
+      justifyContent="center"
+      px={2}
+    >
+      {error ? (
+        <VStack spacing={0.5} textAlign="center">
+          <AlertTriangle size={14} color="orange.400" />
+          <Text fontSize="2xs" color="orange.300" noOfLines={4}>
+            {error}
+          </Text>
+        </VStack>
+      ) : (
+        <Text fontSize="2xs" color="rgba(255,255,255,0.45)">
+          {key === "screen" ? "屏幕" : "摄像头"}无画面
+        </Text>
+      )}
+    </Box>
+  );
+
   /** 渲染图层：源画面 + CSS 变换 + 手柄 */
   const renderLayer = (
     key: "screen" | "camera",
@@ -262,7 +290,12 @@ export default function CanvasPreview({
         sx={{ willChange: "left, top, width, height" }}
       >
         {/* 源画面 */}
-        {streamUrl ? (
+        {sourceError ? (
+          // 该源启动失败：直接显示原因。
+          // 注意必须放在最前面判断 —— streamUrl 只要端口存在就非空，
+          // 若先判 streamUrl，失败那一路会走进 <img> 分支，错误信息永远看不到。
+          renderNoPicture(key, sourceError)
+        ) : streamUrl ? (
           <img
             src={streamUrl}
             alt={label}
@@ -279,32 +312,7 @@ export default function CanvasPreview({
             }}
           />
         ) : (
-          <Box
-            position="absolute"
-            inset={0}
-            bg={key === "screen" ? "rgba(59,130,246,0.18)" : "rgba(16,185,129,0.18)"}
-            border="1px dashed"
-            borderColor="rgba(255,255,255,0.25)"
-            display="flex"
-            alignItems="center"
-            justifyContent="center"
-            px={2}
-          >
-            {/* 该源具体的失败原因：屏幕正常但摄像头失败时，
-                用户能在摄像头这块区域直接看到原因，不必去别处找 */}
-            {sourceError ? (
-              <VStack spacing={0.5} textAlign="center">
-                <AlertTriangle size={14} color="orange.400" />
-                <Text fontSize="2xs" color="orange.300" noOfLines={3}>
-                  {sourceError}
-                </Text>
-              </VStack>
-            ) : (
-              <Text fontSize="2xs" color="rgba(255,255,255,0.45)">
-                {label}无画面
-              </Text>
-            )}
-          </Box>
+          renderNoPicture(key, "")
         )}
 
         {/* 图层标签 */}
