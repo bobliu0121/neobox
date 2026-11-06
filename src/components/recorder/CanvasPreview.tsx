@@ -112,6 +112,10 @@ export default function CanvasPreview({
   const [dragMode, setDragMode] = useState<DragMode>("none");
   const [dragLayer, setDragLayer] = useState<"screen" | "camera" | null>(null);
   const [dragStart, setDragStart] = useState({ mx: 0, my: 0, x: 0, y: 0, w: 0 });
+  // 从 MJPEG 流实测到的真实宽高比（0 = 尚未测得）。
+  // 这是「源比例」最可靠的事实来源：配置里的 camera_width/height 常为 0。
+  const [screenMeasuredAspect, setScreenMeasuredAspect] = useState(0);
+  const [cameraMeasuredAspect, setCameraMeasuredAspect] = useState(0);
 
   const borderColor = useColorModeValue("gray.300", "rgba(255,255,255,0.2)");
   const canvasBg = useColorModeValue("#111", "#0a0a0a");
@@ -244,6 +248,37 @@ export default function CanvasPreview({
     </Box>
   );
 
+  /** 该源在图层的宽高比：优先用实测值，其次用配置推导 */
+  const aspectOf = useCallback(
+    (key: "screen" | "camera") => {
+      const measured = key === "screen" ? screenMeasuredAspect : cameraMeasuredAspect;
+      // 实测值来自 MJPEG 流的真实像素尺寸，是最可靠的比例来源。
+      // 配置推导的 cameraAspect 只能猜（camera_width/height 常为 0，
+      // 多数摄像头实际是 4:3 而默认值按 16:9 估），会导致预览框与真实画面
+      // 高度不符、摄像头叠放位置与成片错位。
+      if (measured > 0) return measured;
+      return key === "screen" ? screenAspect : cameraAspect;
+    },
+    [screenMeasuredAspect, cameraMeasuredAspect, screenAspect, cameraAspect]
+  );
+
+  /** 源画面加载完成时记录真实宽高比 */
+  const handleImgLoad = useCallback(
+    (key: "screen" | "camera", e: React.SyntheticEvent<HTMLImageElement>) => {
+      const img = e.currentTarget;
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        const a = img.naturalWidth / img.naturalHeight;
+        // 变化足够大才更新，避免每帧 MJPEG 换帧都触发 re-render
+        if (key === "screen") {
+          setScreenMeasuredAspect((prev) => (Math.abs(prev - a) > 0.01 ? a : prev));
+        } else {
+          setCameraMeasuredAspect((prev) => (Math.abs(prev - a) > 0.01 ? a : prev));
+        }
+      }
+    },
+    []
+  );
+
   /** 渲染图层：源画面 + CSS 变换 + 手柄 */
   const renderLayer = (
     key: "screen" | "camera",
@@ -256,7 +291,7 @@ export default function CanvasPreview({
     if (!hasSource) return null;
     const isActive = activeLayer === key;
     // 该源的原始宽高比
-    const aspect = key === "screen" ? screenAspect : cameraAspect;
+    const aspect = aspectOf(key);
     // 图层宽度：w 为 0 表示铺满画布宽度（与后端 scale=canvas_w:-2 一致）
     const layerW = layout.w > 0 ? layout.w : canvasW;
     // 高度**按源比例自动推导**，不读配置里的 h，保证画面永不变形
@@ -300,6 +335,7 @@ export default function CanvasPreview({
             src={streamUrl}
             alt={label}
             draggable={false}
+            onLoad={(e) => handleImgLoad(key, e)}
             style={{
               position: "absolute",
               inset: 0,
