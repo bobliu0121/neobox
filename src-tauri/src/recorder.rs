@@ -1346,8 +1346,36 @@ pub async fn recorder_status() -> Result<RecorderStatus, String> {
     };
 
     if recording {
-        let guard = lock_active();
-        if let Some(active) = guard.as_ref() {
+        let mut guard = lock_active();
+        if let Some(active) = guard.as_mut() {
+            // ── 存活检测：ffmpeg 是否已经自己退出了 ──
+            //
+            // 设备被占用、gdigrab 秒退等情况下 ffmpeg 会立刻退出，
+            // 但 ACTIVE 与 IS_RECORDING 仍保持「录制中」。若不在这里查，
+            // 界面会一直显示红角标与走秒计时（还用码率估算出「不断增长的文件大小」），
+            // 用户录十几分钟后点停止才被告知「未生成有效文件」，整段录制静默丢失。
+            // 状态轮询是唯一高频入口，在这里做一次性修正最合适。
+            if matches!(active.child.try_wait(), Ok(Some(_))) {
+                let tail = active
+                    .stderr_tail
+                    .lock()
+                    .map(|g| g.iter().cloned().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_else(|e| {
+                        e.into_inner().iter().cloned().collect::<Vec<_>>().join(" ")
+                    });
+                let msg = if tail.is_empty() {
+                    "录制进程已意外退出（未生成有效文件）".to_string()
+                } else {
+                    format!("录制进程已意外退出：{tail}")
+                };
+                warn!("[Recorder] {msg}");
+                *lock_last_error() = msg.clone();
+                IS_RECORDING.store(false, Ordering::SeqCst);
+                status.recording = false;
+                status.last_error = msg;
+                return Ok(status);
+            }
+
             let elapsed = active.started_at.elapsed().as_secs();
             ELAPSED_SEC.store(elapsed, Ordering::SeqCst);
             status.elapsed_sec = elapsed;

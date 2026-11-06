@@ -122,17 +122,38 @@ export default function CanvasPreview({
   const activeColor = useColorModeValue("blue.500", "#4B8BD6");
   const labelBg = useColorModeValue("rgba(0,0,0,0.75)", "rgba(0,0,0,0.8)");
 
-  // 按容器宽度等比缩放画布
-  useEffect(() => {
+  // 按容器宽度等比缩放画布。
+  //
+  // 用 ref callback 而不是「effect 里 observe 一个 ref」：
+  // displayW===0 时组件会先渲染一个占位 Box，真正的画布 Box 稍后才出现。
+  // 若在 effect 里 observe，观察的就是那个随即被卸载的占位节点，
+  // 之后即使窗口缩放、侧栏折叠、全屏切换都不会再回调，
+  // displayW 永久冻结 → scale 用旧值 → 图层尺寸与拖拽灵敏度全部错位。
+  const roRef = useRef<ResizeObserver | null>(null);
+  const attachContainer = useCallback((node: HTMLDivElement | null) => {
+    // 先解绑旧的
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    containerRef.current = node;
+    if (!node) return;
     const measure = () => {
-      if (!containerRef.current) return;
-      const avail = containerRef.current.clientWidth;
+      const avail = node.clientWidth;
       if (avail > 0) setDisplayW(avail);
     };
     measure();
     const ro = new ResizeObserver(measure);
-    if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    ro.observe(node);
+    roRef.current = ro;
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (roRef.current) {
+        roRef.current.disconnect();
+        roRef.current = null;
+      }
+    };
   }, []);
 
   const scale = displayW > 0 && canvasW > 0 ? displayW / canvasW : 0;
@@ -156,11 +177,15 @@ export default function CanvasPreview({
       setDragMode(mode);
       setDragStart({
         mx: e.clientX, my: e.clientY,
-        x: layout.x, y: layout.y, w: layout.w,
+        x: layout.x, y: layout.y,
+        // 存「生效宽度」而不是配置值：w=0 是「铺满画布」哨兵，
+        // 渲染时按 canvasW 处理。若这里原样存 0，拖角会以真实宽度 0 计算，
+        // 首次 mousemove 就把满屏图层压成 64px 细条（后端也按 64 宽合成，成片近乎全黑）。
+        w: layout.w > 0 ? layout.w : canvasW,
       });
       onActiveLayerChange(layer);
     },
-    [disabled, screenLayout, cameraLayout, onActiveLayerChange]
+    [disabled, screenLayout, cameraLayout, onActiveLayerChange, canvasW]
   );
 
   // 全局拖拽：不限制在画布内（允许把图层拖到画面外）
@@ -400,7 +425,7 @@ export default function CanvasPreview({
   };
 
   if (displayW === 0) {
-    return <Box ref={containerRef} w="full" h="200px" />;
+    return <Box ref={attachContainer} w="full" h="200px" />;
   }
 
   const anyLive = (screenEnabled && screenStreamUrl) || (cameraDevice && cameraStreamUrl);
@@ -408,7 +433,7 @@ export default function CanvasPreview({
   return (
     <VStack align="stretch" spacing={2} w="full">
       <Box
-        ref={containerRef}
+        ref={attachContainer}
         position="relative"
         w="full"
         bg={canvasBg}

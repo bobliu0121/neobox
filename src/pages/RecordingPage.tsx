@@ -707,7 +707,10 @@ export default function RecordingPage() {
   useEffect(() => {
     if (!config.preview_enabled) return;
     // 录制中不动预览，避免抢占采集设备影响录制质量
-    if (statusRef.current.recording) return;
+    if (status.recording) return;
+    // 录制结束（recording 由 true 变 false）时也要重新拉起预览：
+    // 开始录制时我们主动停掉了预览，若这里不依赖 recording，
+    // 停录后预览永远不会自动恢复 —— 开关显示「开」但画面是「预览未启动」。
 
     const timer = window.setTimeout(() => {
       const latest = configRef.current;
@@ -745,6 +748,7 @@ export default function RecordingPage() {
     config.screen_enabled,
     config.screen_fps,
     config.camera_device,
+    status.recording,
     refreshPreviewSourceErrors,
   ]);
 
@@ -1325,6 +1329,11 @@ export default function RecordingPage() {
                     isChecked={config.preview_enabled}
                     onChange={(e) => handleTogglePreview(e.target.checked)}
                     colorScheme="blue"
+                    // 录制期间禁止切换预览：预览是独立的采集进程，
+                    // 录制中再起一路会与录制抢同一个 gdigrab/dshow 设备，
+                    // 导致掉帧甚至录制失败。自动重启 effect 已有此守卫，
+                    // 手动开关也必须拦住，否则等于绕过保护。
+                    isDisabled={status.recording}
                   />
                 </HStack>
                 <Tooltip label={t("recording.restoreDefaults")} hasArrow>
@@ -1646,7 +1655,11 @@ function LayerNumericEditor({
   const fields: { key: keyof LayerLayout; label: string; min: number; max: number }[] = [
     { key: "x", label: "X", min: -10000, max: 10000 },
     { key: "y", label: "Y", min: -10000, max: 10000 },
-    { key: "w", label: "W", min: 2, max: 10000 },
+    // W 的 min 必须是 0：w=0 是「铺满画布」的哨兵值，前端渲染与后端
+    // scale=canvas_w:-2 都依赖它。若把下限设成 2，用户输入 0 会被夹成 2px，
+    // 图层塌成一条细线（预览看似消失、成片是一条色条），
+    // 正是「恢复默认后黑屏」那类故障的复发入口。
+    { key: "w", label: "W", min: 0, max: 10000 },
   ];
 
   const commit = (key: keyof LayerLayout, raw: string) => {
@@ -1654,7 +1667,11 @@ function LayerNumericEditor({
     if (!Number.isFinite(num)) return;
     const meta = fields.find((f) => f.key === key);
     if (!meta) return;
-    const val = Math.max(meta.min, Math.min(meta.max, Math.round(num)));
+    let val = Math.max(meta.min, Math.min(meta.max, Math.round(num)));
+    // 宽度：0 保持 0（铺满），非 0 时最小 2 且取偶
+    if (key === "w" && val > 0) {
+      val = Math.max(2, val - (val % 2));
+    }
     onChange({ ...layer, [key]: val } as LayerLayout);
   };
 

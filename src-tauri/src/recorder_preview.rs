@@ -51,6 +51,10 @@ struct PreviewStream {
     /// 必须持续读走：ffmpeg 若持续输出 error 日志，管道缓冲（约 64KB）写满后
     /// 会阻塞它写日志 → 采集停止 → 预览画面冻结。
     /// 录制路径有专门的消费线程，预览路径早先漏了这一点。
+    ///
+    /// 这里保留句柄只为「让后台消费线程活着」——线程持有的是 Arc 副本，
+    /// 本字段本身不参与业务逻辑（诊断信息目前通过 early_exit_reason 读取）。
+    #[allow(dead_code)]
     stderr_tail: Arc<Mutex<Vec<String>>>,
     /// 该路的 stdout 是否已被某个客户端占用。
     ///
