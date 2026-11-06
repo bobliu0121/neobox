@@ -269,7 +269,10 @@ function App() {
             // 占位高度固定（route-fallback.tsx），chunk 到达后不会出现内容塌陷再撑开的跳动。
             // ErrorBoundary 在 Suspense 外层：某个页面 chunk 取失败时只坏内容区，
             // 侧边栏仍能切走（没有边界会卸载整棵树，变成整窗白屏且无法自救）。
-            <RouteErrorBoundary area="该页面">
+            // key={pathname} 让每次切页都重建边界实例：否则错误态会「粘」在
+            // 同一条边界上 —— 条件值仍为 true 时 React 复用同一实例，
+            // state.error 不清，切到别的页面也无法自救。
+            <RouteErrorBoundary key={location.pathname} area="该页面">
               <Suspense fallback={<RouteFallback />}>
                 <Routes location={location}>
                   <Route
