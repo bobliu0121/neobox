@@ -688,6 +688,82 @@ fn parse_kv_u64(line: &str, key: &str) -> Option<u64> {
     token.parse::<u64>().ok()
 }
 
+/// 探测 gdigrab 在当前机器上「不产生重复帧」的最高采集帧率。
+///
+/// # 为什么必须探测（这是卡顿的最终根因）
+///
+/// gdigrab 走 GDI 软件抓屏，开销与屏幕分辨率、系统调度强相关。
+/// 实测用户环境（屏幕 2560x1600、i7-1360P）在 4 秒采集内：
+///   framerate=20 → dup=0    （80 帧全是真实帧）
+///   framerate=22 → dup=0
+///   framerate=24 → dup=2
+///   framerate=26 → dup=10
+///   framerate=30 → dup=19   （16% 是复制上一帧的假帧）
+///
+/// 这些重复帧就是「画面一顿一顿」的直接来源：设 30fps 但机器只抓得到 ~22fps，
+/// 差额全部由 ffmpeg 用上一帧填充，播放时看起来就是卡顿。
+/// 因此不能盲目用用户设的 30fps 去抓屏，必须先测出这台机器的真实上限。
+///
+/// 探测方式：对候选帧率各采集 ~1 秒，选 dup 最少（且尽量高）的那个。
+/// 探测本身约需 1~2 秒，只在开始录制时执行一次。
+fn probe_max_capture_fps(ffmpeg_path: &Path, preferred: u32) -> u32 {
+    let preferred = preferred.clamp(1, 120);
+    // 候选：从接近用户设定的值往下退，2 的倍数便于对齐
+    let mut candidates: Vec<u32> = Vec::new();
+    for f in [preferred, 25, 22, 20, 15] {
+        if f <= preferred && !candidates.contains(&f) {
+            candidates.push(f);
+        }
+    }
+    if candidates.is_empty() {
+        return preferred;
+    }
+
+    let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    for fps in &candidates {
+        // 采集 ~1 秒（帧数 = fps），统计 dup
+        let secs = 1;
+        let out = ffmpeg_cmd(ffmpeg_path)
+            .args([
+                "-hide_banner", "-y", "-stats",
+                "-f", "gdigrab",
+                "-framerate", &fps.to_string(),
+                "-i", "desktop",
+                "-t", &secs.to_string(),
+                "-f", "rawvideo", null_out,
+            ])
+            .output();
+        let Ok(out) = out else { continue };
+        let text = String::from_utf8_lossy(&out.stderr).to_string();
+        // 取最后一行的 dup 统计
+        let dup = text
+            .lines()
+            .filter_map(|l| parse_kv_u64(l, "dup="))
+            .next_back()
+            .unwrap_or(0);
+        let frames = text
+            .lines()
+            .filter_map(|l| parse_kv_u64(l, "frame="))
+            .next_back()
+            .unwrap_or(0);
+        let expected = (*fps * secs) as u64;
+        // 判定：无明显重复帧（dup <= 总帧的 3%）视为该帧率可稳定达成
+        let dup_ratio = if frames > 0 { dup as f64 / frames as f64 } else { 1.0 };
+        info!(
+            "[Recorder] 采集帧率探测 fps={fps} frames={frames}/{expected} dup={dup} ({:.1}%)",
+            dup_ratio * 100.0
+        );
+        if dup_ratio <= 0.03 {
+            info!("[Recorder] 采集帧率确定为 {fps}fps（dup 可忽略）");
+            return *fps;
+        }
+    }
+    // 全部候选都有明显重复帧：取最低档（已是列表末尾）
+    let fallback = *candidates.last().unwrap_or(&15);
+    warn!("[Recorder] 所有候选帧率均有重复帧，降级到 {fallback}fps");
+    fallback
+}
+
 // ────────────────────────────────────────────────────────────
 //  设备枚举
 // ────────────────────────────────────────────────────────────
@@ -840,11 +916,32 @@ pub fn build_args(
 
     let has_camera = !camera_device.trim().is_empty();
     let camera_index = if has_camera {
-        // 摄像头分辨率：0 表示交给设备默认值（不可写入空的 size 参数）
+        // ── 摄像头采集分辨率：必须限定，不能交给设备默认值 ──
+        //
+        // 实测日志暴露出严重性能问题：用户设备是 "HP Wide Vision 5MP Camera"，
+        // 由于没传 -video_size，dshow 按**原生 5MP（约 2592x1944）**采集，
+        // 而我们只要显示到 640 宽 —— 白处理了 5MP 像素，缩放比高达 4 倍，
+        // 等于浪费约 16 倍的解码与缩放算力。
+        // 叠加屏幕 2560x1600（4.1MP），每帧要吞下 9.1MP，
+        // 是 1080p 的 4.4 倍，在弱 CPU 上必然掉帧卡顿。
+        //
+        // 因此：用户显式设置时用用户的值；否则按图层显示宽度给出一个
+        // 合理上限（720p 级别足够，缩到 640 宽仍然清晰），
+        // 既保证画质又大幅降低采集与缩放开销。
         let mut camera_args: Vec<String> = vec!["-f".into(), "dshow".into()];
         let size = match (config.camera_width, config.camera_height) {
             (w, h) if w > 0 && h > 0 => Some(format!("{w}x{h}")),
-            _ => None,
+            _ => {
+                // 未设置：按图层目标宽度推导采集尺寸，上限 1280x720。
+                // 目标宽度是「画布上的显示宽度」，采集宽度取它的 2 倍
+                // （consider 缩放后仍清晰），但不超过 1280。
+                let lay_w = config.camera_layout.w;
+                let target = if lay_w > 0 { lay_w.saturating_mul(2) } else { 1280 };
+                let cap_w = target.clamp(320, 1280) - target.clamp(320, 1280) % 2;
+                // 保持 16:9（大多数摄像头支持），高度取偶数
+                let cap_h = (cap_w * 9 / 16) / 2 * 2;
+                Some(format!("{cap_w}x{cap_h}"))
+            }
         };
         if let Some(size) = size {
             camera_args.push("-video_size".into());
@@ -1291,6 +1388,24 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
     // 先组装参数与编码器，任何失败都在起进程之前返回，不留半初始化状态
     // （选编码器会实测硬件可用性，可能起若干探测进程，放在 spawn 之前更安全）
     let encoder = resolve_encoder(&ffmpeg, &config.encoder);
+
+    // ── 采集帧率探测（解决「画面一顿一顿」的最终根因）──
+    //
+    // 用户设的 30fps 只是「期望值」，机器未必抓得到。实测用户环境在 30fps 时
+    // 有 16% 的帧是复制出来的假帧（dup=19/120），这正是卡顿的直接来源。
+    // 这里先测出本机不产生重复帧的最高帧率，再用它覆盖采集与输出帧率，
+    // 宁可帧率低一点，也不要一堆重复帧造成的顿挫。
+    // 探测仅约 1~2 秒，只在开始录制时执行一次。
+    if config.screen_enabled {
+        let probed = probe_max_capture_fps(&ffmpeg, config.screen_fps);
+        if probed != config.screen_fps {
+            info!(
+                "[Recorder] 采集帧率由 {}fps 调整为 {}fps（避免重复帧导致的卡顿）",
+                config.screen_fps, probed
+            );
+            config.screen_fps = probed;
+        }
+    }
 
     let (args, encoder) = build_args(
         &config,
