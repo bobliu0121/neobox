@@ -581,7 +581,13 @@ fn resolve_encoder(ffmpeg_path: &Path, requested: &str) -> String {
         }
         warn!("[Recorder] 指定编码器 {requested} 不可用，回退 libx264");
     }
-    for hw in ["h264_nvenc", "h264_qsv", "h264_amf"] {
+    // 依次尝试硬件编码。注意顺序：
+    // 1) h264_nvenc / h264_qsv / h264_amf 是独显/核显专用，最快；
+    // 2) **h264_mf** 是 Windows MediaFoundation，只要有可用 GPU（含 VMware 虚拟显卡、
+    //    核显、甚至部分软件实现）就能工作。实测其纯编码速度 6.32x，
+    //    而 libx264 在本机仅 0.98x（低于实时），因此 h264_mf 往往是
+    //    「低配 / 虚拟机」环境从「卡顿」变成「流畅」的关键。
+    for hw in ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf"] {
         if encoder_works(ffmpeg_path, hw) {
             info!("[Recorder] 使用硬件编码器 {hw}");
             return hw.to_string();
@@ -953,6 +959,14 @@ pub fn build_args(
         "h264_amf" => {
             args.extend([
                 "-quality".into(), "speed".into(),
+                "-pix_fmt".into(), "yuv420p".into(),
+            ]);
+        }
+        "h264_mf" => {
+            // MediaFoundation 编码器：只接受少量通用参数，
+            // 不能传 -preset / -profile / -tune（那是 x264/nvenc 的选项，传了会失败）。
+            // 实测纯编码 1080p30 达 6.32x，远快于 libx264 的 0.98x。
+            args.extend([
                 "-pix_fmt".into(), "yuv420p".into(),
             ]);
         }
@@ -1694,6 +1708,28 @@ mod tests {
             !args.iter().any(|a| a == "zerolatency"),
             "libx264 不应使用 zerolatency（浪费码率）: {args:?}"
         );
+    }
+
+    /// h264_mf 分支不得带 x264/nvenc 专用参数（会导致编码器初始化失败）。
+    ///
+    /// 背景：h264_mf 是低配/虚拟机环境把录制从「卡顿」救回「流畅」的关键 ——
+    /// 实测纯编码 1080p30 达 6.32x，而 libx264 仅 0.98x（低于实时），
+    /// 软编还把 3 核 CPU 占满、与 gdigrab 抢核心，
+    /// 导致 30fps 下约 23% 的帧是重复填充（画面一顿一顿）。
+    /// 换成 h264_mf 后实测 dup 归零。
+    #[test]
+    fn h264_mf_uses_only_safe_params() {
+        let mut config = RecorderConfig::default();
+        config.normalize(1920, 1080);
+        let out = PathBuf::from("out.mp4");
+        let (args, _) = build_args(&config, "h264_mf", &out, "", "", "").expect("ok");
+        for bad in ["-preset", "-tune", "-profile:v", "-rc", "-quality"] {
+            assert!(
+                !args.iter().any(|a| a == bad),
+                "h264_mf 不应接受 {bad} 参数: {args:?}"
+            );
+        }
+        assert!(args.iter().any(|a| a == "h264_mf"), "encoder applied");
     }
 
     /// 只有摄像头（不录屏幕）：摄像头输出直接作主画面
