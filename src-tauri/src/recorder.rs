@@ -314,6 +314,12 @@ pub struct RecorderStatus {
     pub output_path: String,
     /// 实际使用的编码器
     pub encoder: String,
+    /// ffmpeg 实时编码速度（1.0 = 刚好实时；<1 表示跟不上、会出现卡顿）
+    #[serde(default)]
+    pub speed: f64,
+    /// ffmpeg 报告的重复帧数（>0 说明抓屏供帧不足，画面会有顿挫）
+    #[serde(default)]
+    pub dup_frames: u64,
     /// 最近一次错误信息（前端可展示）
     pub last_error: String,
 }
@@ -326,6 +332,8 @@ impl Default for RecorderStatus {
             estimated_bytes: 0,
             output_path: String::new(),
             encoder: String::new(),
+            speed: 0.0,
+            dup_frames: 0,
             last_error: String::new(),
         }
     }
@@ -370,6 +378,11 @@ struct ActiveRecording {
     stderr_tail: Arc<Mutex<Vec<String>>>,
     /// 视频码率（kbps），用于估算文件大小
     bitrate_kbps: u32,
+    /// ffmpeg 实时编码速度（speed=xx.x x），由 stderr 进度行解析而来。
+    /// 低于 1.0 表示编码跟不上采集，画面会出现重复帧/卡顿。
+    live_speed: Arc<Mutex<f64>>,
+    /// ffmpeg 报告的重复帧数（dup=），用于判断抓屏是否供帧不足
+    live_dup: Arc<Mutex<u64>>,
 }
 
 static ACTIVE: Mutex<Option<ActiveRecording>> = Mutex::new(None);
@@ -571,7 +584,40 @@ fn encoder_works(ffmpeg_path: &Path, encoder: &str) -> bool {
     }
 }
 
+/// 实测某编码器在目标分辨率下能否跟上实时（speed >= 1.0）。
+///
+/// 早先只用 `encoder_works` 判断「能否初始化」，但那不足以决定录制是否流畅：
+/// 一个编码器可能初始化成功却慢于实时，结果就是抓屏被迫用重复帧补足、
+/// 画面一顿一顿。实测本机（3 核虚拟机）libx264 在 1080p30 只有 0.98x，
+/// 单看「能初始化」完全看不出问题。
+fn encoder_speed(ffmpeg_path: &Path, encoder: &str, w: u32, h: u32) -> f64 {
+    let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let src = format!("testsrc2=size={w}x{h}:rate=30");
+    let out = ffmpeg_cmd(ffmpeg_path)
+        .args([
+            "-hide_banner", "-y",
+            "-f", "lavfi", "-i", &src,
+            "-t", "2",
+            "-c:v", encoder,
+            "-b:v", "6000k",
+            "-pix_fmt", "yuv420p",
+            "-f", "null", null_out,
+        ])
+        .output();
+    let Ok(out) = out else { return 0.0 };
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    // ffmpeg 最后一行形如 "... speed=6.32x elapsed=0:00:02.03"
+    text.lines()
+        .filter_map(|l| parse_kv_f64(l, "speed="))
+        .next_back()
+        .unwrap_or(0.0)
+}
+
 /// 选择一个实际可用的编码器。
+///
+/// 策略：先按「能初始化」筛选候选，再用**实测速度**排序，选最快的那个。
+/// 这样在低配 / 虚拟机环境里能自动选到能跟上实时的编码器
+/// （例如 h264_mf 实测 6~7x，而 libx264 只有 ~1x）。
 /// auto 时优先硬件编码（省 CPU），失败则回退 libx264。
 fn resolve_encoder(ffmpeg_path: &Path, requested: &str) -> String {
     let requested = requested.trim();
@@ -587,14 +633,59 @@ fn resolve_encoder(ffmpeg_path: &Path, requested: &str) -> String {
     //    核显、甚至部分软件实现）就能工作。实测其纯编码速度 6.32x，
     //    而 libx264 在本机仅 0.98x（低于实时），因此 h264_mf 往往是
     //    「低配 / 虚拟机」环境从「卡顿」变成「流畅」的关键。
+    let mut best: Option<(String, f64)> = None;
     for hw in ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf"] {
-        if encoder_works(ffmpeg_path, hw) {
-            info!("[Recorder] 使用硬件编码器 {hw}");
-            return hw.to_string();
+        if !encoder_works(ffmpeg_path, hw) {
+            continue;
+        }
+        // 实测速度（1080p 基准），用于判断是否真的够实时
+        let sp = encoder_speed(ffmpeg_path, hw, 1920, 1080);
+        info!("[Recorder] 候选编码器 {hw} 实测 speed={sp:.2}x");
+        // 硬件编码器只要能用就优先（即使本次实测恰好略慢于实时，
+        // 也比软编占用 CPU 拖累抓屏更好），但仍在候选中取最快者
+        match &best {
+            Some((_, bs)) if *bs >= sp => {}
+            _ => best = Some((hw.to_string(), sp)),
         }
     }
-    info!("[Recorder] 使用软件编码器 libx264");
+    if let Some((enc, sp)) = best {
+        if sp < 1.0 {
+            warn!(
+                "[Recorder] 最快硬件编码器 {enc} 实测 speed={sp:.2}x（低于实时），录制可能仍有卡顿"
+            );
+        }
+        info!("[Recorder] 使用硬件编码器 {enc}（实测 speed={sp:.2}x）");
+        return enc;
+    }
+    // 完全没有硬件编码器可用：退回软编，但如实记录它可能跟不上
+    let sp = encoder_speed(ffmpeg_path, "libx264", 1920, 1080);
+    if sp < 1.0 {
+        warn!(
+            "[Recorder] 仅 libx264 可用且实测 speed={sp:.2}x（低于实时），\
+             本机 CPU 较弱，录制可能出现卡顿；可在设置中降低分辨率或帧率"
+        );
+    }
+    info!("[Recorder] 使用软件编码器 libx264（实测 speed={sp:.2}x）");
     "libx264".to_string()
+}
+
+/// 从形如 `... speed=0.927x ...` 的文本里取浮点值（去掉末尾的 x）
+fn parse_kv_f64(line: &str, key: &str) -> Option<f64> {
+    let idx = line.find(key)?;
+    let rest = &line[idx + key.len()..];
+    let token: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    token.parse::<f64>().ok()
+}
+
+/// 从形如 `... dup=14 ...` 的文本里取整数值
+fn parse_kv_u64(line: &str, key: &str) -> Option<u64> {
+    let idx = line.find(key)?;
+    let rest = &line[idx + key.len()..];
+    let token: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    token.parse::<u64>().ok()
 }
 
 // ────────────────────────────────────────────────────────────
@@ -724,6 +815,14 @@ pub fn build_args(
     let has_screen = config.screen_enabled;
     if has_screen {
         let fps = config.screen_fps.clamp(1, 120);
+        // 注意：这里**不限定抓取区域**（不加 -video_size/-offset）。
+        //
+        // 曾尝试「画布小于屏幕时只抓画布大小区域」以降低 GDI 开销
+        // （实测抓 1280x720 比全屏 2358x1298 的重复帧少很多）。
+        // 但这会**改变录制内容**：用户期望录的是整个屏幕再缩放到画布，
+        // 限定区域后只能录到屏幕左上角一块、再被 scale 放大，
+        // 画面内容缺失且变形 —— 比卡顿严重得多。
+        // 因此这里保持抓全屏，性能问题交由硬件编码器解决（见 resolve_encoder）。
         args.extend([
             "-f".into(), "gdigrab".into(),
             "-framerate".into(), fps.to_string(),
@@ -1205,10 +1304,17 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
     info!("[Recorder] 启动录制 encoder={encoder} output={}", output_path.display());
     info!("[Recorder] ffmpeg {}", args.join(" "));
 
+    // 追加 `-stats`：让 ffmpeg 周期性输出进度行（含 speed= / dup=），
+    // 由 stderr 消费线程解析成实时性能指标。
+    // 这是「卡顿」能被量化诊断的前提 —— 没有它就无法区分
+    // 「编码跟不上」与「抓屏供帧不足」，只能靠猜。
+    let mut spawn_args = args.clone();
+    spawn_args.push("-stats".into());
+
     // stderr 用管道接管：必须持续读走，否则缓冲区写满会让 ffmpeg 阻塞
     // （表现为「录到一半卡住」）。这里用后台线程持续消费并保留末尾若干行。
     let mut child = ffmpeg_cmd(&ffmpeg)
-        .args(&args)
+        .args(&spawn_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -1216,12 +1322,27 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
         .map_err(|e| format!("启动 ffmpeg 失败: {e}"))?;
 
     let stderr_tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let live_speed: Arc<Mutex<f64>> = Arc::new(Mutex::new(1.0));
+    let live_dup: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     if let Some(stderr) = child.stderr.take() {
         let tail = stderr_tail.clone();
+        let sp = live_speed.clone();
+        let dp = live_dup.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 let Ok(line) = line else { break };
+                // 解析 ffmpeg 进度行里的性能指标：
+                //   frame= 90 fps= 28 q=-1.0 Lsize=... speed=0.927x elapsed=...
+                // speed < 1.0 意味着编码/抓屏跟不上实时，画面上会表现为重复帧卡顿。
+                if line.contains("speed=") {
+                    if let Some(spd) = parse_kv_f64(&line, "speed=") {
+                        *sp.lock().unwrap_or_else(|e| e.into_inner()) = spd;
+                    }
+                    if let Some(d) = parse_kv_u64(&line, "dup=") {
+                        *dp.lock().unwrap_or_else(|e| e.into_inner()) = d;
+                    }
+                }
                 // 锁中毒也必须继续读！
                 //
                 // 这个线程是 stderr 管道**唯一的读者**：一旦它因为锁中毒而退出，
@@ -1251,6 +1372,8 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
             encoder: encoder.clone(),
             stderr_tail,
             bitrate_kbps: config.video_bitrate_kbps.clamp(500, 100_000),
+            live_speed,
+            live_dup,
         });
     }
     IS_RECORDING.store(true, Ordering::SeqCst);
@@ -1413,6 +1536,9 @@ pub async fn recorder_status() -> Result<RecorderStatus, String> {
             status.elapsed_sec = elapsed;
             status.output_path = active.output_path.to_string_lossy().into_owned();
             status.encoder = active.encoder.clone();
+            // 实时性能指标：让界面能直接看出「是否跟不上」（卡顿的量化依据）
+            status.speed = *active.live_speed.lock().unwrap_or_else(|e| e.into_inner());
+            status.dup_frames = *active.live_dup.lock().unwrap_or_else(|e| e.into_inner());
             // 体积优先取磁盘真实大小：mp4 在录制过程中会持续写入，
             // metadata 能反映实际进度。文件还不存在（刚启动）时才退回码率估算。
             let real_size = std::fs::metadata(&active.output_path)

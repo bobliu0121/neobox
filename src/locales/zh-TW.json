@@ -2889,6 +2889,9 @@
     "aspect": "畫面比例",
     "restoreDefaults": "恢復預設佈局",
     "customSize": "自訂",
-    "canvasSize": "畫布尺寸"
+    "canvasSize": "畫布尺寸",
+    "systemAudioMissing": "系統未啟用「立體聲混音」裝置。請在「音效設定 → 錄製 → 顯示已停用的裝置」中啟用它，否則無法錄製系統聲音。",
+    "speedHint": "編碼速度：1.00x 為剛好跟上即時，低於 1 會出現卡頓",
+    "dupHint": "重複影格數：大於 0 表示擷取供格不足，畫面會頓挫"
   }
 }

@@ -2759,6 +2759,9 @@
     "aspect": "画面比例",
     "restoreDefaults": "恢复默认布局",
     "customSize": "自定义",
-    "canvasSize": "画布尺寸"
+    "canvasSize": "画布尺寸",
+    "systemAudioMissing": "系统未启用「立体声混音」设备。请在「声音设置 → 录制 → 显示已禁用的设备」中启用它，否则无法录制系统声音。",
+    "speedHint": "编码速度：1.00x 为刚好跟上实时，低于 1 会出现卡顿",
+    "dupHint": "重复帧数：大于 0 说明抓屏供帧不足，画面会顿挫"
   }
 }

@@ -2949,6 +2949,9 @@
     "aspect": "Aspect ratio",
     "restoreDefaults": "Restore default layout",
     "customSize": "Custom",
-    "canvasSize": "Canvas size"
+    "canvasSize": "Canvas size",
+    "systemAudioMissing": "The \"Stereo Mix\" recording device is not enabled. Enable it in Sound settings → Recording → show disabled devices to record system audio.",
+    "speedHint": "Encode speed: 1.00x is real-time; below 1 causes stutter",
+    "dupHint": "Duplicated frames: above 0 means capture cannot keep up"
   }
 }

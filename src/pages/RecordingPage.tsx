@@ -95,6 +95,10 @@ interface RecorderStatus {
   estimated_bytes: number;
   output_path: string;
   encoder: string;
+  /** ffmpeg 实时编码速度（1.0 = 刚好实时；<1 表示跟不上） */
+  speed: number;
+  /** ffmpeg 报告的重复帧数（>0 说明抓屏供帧不足，画面会顿挫） */
+  dup_frames: number;
   last_error: string;
 }
 
@@ -260,6 +264,8 @@ export default function RecordingPage() {
     estimated_bytes: 0,
     output_path: "",
     encoder: "",
+    speed: 0,
+    dup_frames: 0,
     last_error: "",
   });
   const [files, setFiles] = useState<RecorderFile[]>([]);
@@ -301,6 +307,32 @@ export default function RecordingPage() {
 
   const cameras = useMemo(() => devices.filter((d) => d.kind === "video"), [devices]);
   const mics = useMemo(() => devices.filter((d) => d.kind === "audio"), [devices]);
+
+  /**
+   * 可用于「系统声音」的设备：只保留混音/环回类设备。
+   *
+   * 普通麦克风无法采集系统播放的声音 —— 必须由系统提供「立体声混音」
+   * （Stereo Mix，Realtek 常见）或类似虚拟环回设备才行。
+   * 早先系统声音的下拉直接复用了麦克风列表，用户选中后实际还是采麦克风，
+   * 于是「系统声音」永远录不到内容。这里按名称识别混音设备，
+   * 若系统未启用（列表为空），界面会明确提示开启方法。
+   */
+  const systemAudioDevices = useMemo(
+    () =>
+      mics.filter((d) => {
+        const n = d.name.toLowerCase();
+        return (
+          n.includes("stereo mix") ||
+          n.includes("立体声混音") ||
+          n.includes("what u hear") ||
+          n.includes("wave out mix") ||
+          n.includes("loopback") ||
+          n.includes("混音") ||
+          n.includes("monitor")
+        );
+      }),
+    [mics]
+  );
 
   const scrollbarSx = {
     "&::-webkit-scrollbar": { width: "6px" },
@@ -944,6 +976,21 @@ export default function RecordingPage() {
                       {status.encoder}
                     </Badge>
                   )}
+                  {status.speed > 0 && (
+                    <Badge
+                      fontSize="2xs"
+                      // speed < 1 表示编码跟不上采集，画面上就会出现重复帧/卡顿
+                      colorScheme={status.speed >= 0.98 ? "green" : status.speed >= 0.8 ? "yellow" : "red"}
+                      title={t("recording.speedHint")}
+                    >
+                      {status.speed.toFixed(2)}x
+                    </Badge>
+                  )}
+                  {status.dup_frames > 0 && (
+                    <Badge fontSize="2xs" colorScheme="orange" title={t("recording.dupHint")}>
+                      dup {status.dup_frames}
+                    </Badge>
+                  )}
                 </HStack>
                 <Button
                   w="full"
@@ -1178,12 +1225,25 @@ export default function RecordingPage() {
               borderColor={borderColor}
             >
               <option value="">{t("recording.noSystemAudio")}</option>
-              {mics.map((d) => (
+              {/* 系统声音只能由「立体声混音 / Stereo Mix / 环回」这类设备提供。
+                  早先这里直接复用麦克风列表，用户选了「系统声音」实际选的还是麦克风，
+                  结果系统声音永远采不到 —— 这是「无法录制系统声音」的直接原因。
+                  现在只列出真正的混音类设备；若系统未启用该设备，
+                  列表为空并给出明确提示（而不是让用户误选麦克风）。 */}
+              {systemAudioDevices.map((d) => (
                 <option key={`sys-${d.name}`} value={d.name}>
                   {d.name}
                 </option>
               ))}
             </Select>
+            {systemAudioDevices.length === 0 && (
+              <Alert status="info" borderRadius="md" mb={2} py={1.5} px={2}>
+                <AlertIcon boxSize={3.5} />
+                <AlertDescription fontSize="2xs" lineHeight="tall">
+                  {t("recording.systemAudioMissing")}
+                </AlertDescription>
+              </Alert>
+            )}
             <Text fontSize="xs" color={subTextColor} lineHeight="tall">
               {t("recording.systemAudioHint")}
             </Text>
