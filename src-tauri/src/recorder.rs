@@ -210,6 +210,13 @@ pub struct RecorderConfig {
     /// 是否在采集时开启实时预览（关掉可省资源）
     #[serde(default = "default_true")]
     pub preview_enabled: bool,
+    /// ffmpeg 是否支持 dshow 的 `-audio_buffer_size`（运行时探测结果，不落盘）
+    ///
+    /// 不写进 settings.json：它是本机 ffmpeg 的能力标志，不是用户偏好。
+    /// 放在 RecorderConfig 里只是为了让 build_args 拿到它而不改动函数签名
+    /// （该函数有十余处单测调用点）。
+    #[serde(default, skip_serializing)]
+    pub has_audio_buffer_size: bool,
 }
 
 fn default_true() -> bool { true }
@@ -245,6 +252,8 @@ impl Default for RecorderConfig {
             encoder: default_encoder(),
             output_dir: String::new(),
             preview_enabled: true,
+            // 单测等无 ffmpeg 场景默认不开；真实录制时由 recorder_start 覆盖
+            has_audio_buffer_size: false,
         }
     }
 }
@@ -374,6 +383,9 @@ pub struct FfmpegProbe {
     pub has_gdigrab: bool,
     /// 是否支持 dshow
     pub has_dshow: bool,
+    /// dshow 是否支持 `-audio_buffer_size`（用于降低音频采集固定延迟）
+    #[serde(default)]
+    pub has_audio_buffer_size: bool,
     /// 可用的硬件编码器列表
     pub hw_encoders: Vec<String>,
 }
@@ -532,6 +544,7 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
         version: String::new(),
         has_gdigrab: false,
         has_dshow: false,
+        has_audio_buffer_size: false,
         hw_encoders: Vec::new(),
     };
 
@@ -563,6 +576,23 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
         probe.has_dshow = text.contains("dshow");
     }
 
+    // dshow 的 `-audio_buffer_size` 是否可用（用于降低音频采集的固定延迟）。
+    //
+    // 这是 ffmpeg 的 dshow **输入**选项，绝大多数构建都有；但不能假定一定存在：
+    // 万一某个精简构建不含它，整条录制命令会因未知选项直接失败（打不开设备），
+    // 表现为「一开声音就录制失败」，比卡顿更糟。这里用 `-h demuxer=dshow`
+    // 探测一次，结果缓存进 FfmpegProbe，供 build_args 决定是否加该参数。
+    if probe.has_dshow {
+        if let Ok(out) = ffmpeg_cmd(ffmpeg_path)
+            .args(["-hide_banner", "-h", "demuxer=dshow"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout).to_string()
+                + &String::from_utf8_lossy(&out.stderr);
+            probe.has_audio_buffer_size = text.contains("audio_buffer_size");
+        }
+    }
+
     // 硬件编码器：只看常见四种，软编 libx264 作为兜底始终可用
     if let Ok(out) = ffmpeg_cmd(ffmpeg_path).arg("-hide_banner").arg("-encoders").output() {
         let text = String::from_utf8_lossy(&out.stdout).to_string()
@@ -575,6 +605,22 @@ fn probe_ffmpeg(ffmpeg_path: &Path) -> FfmpegProbe {
     }
 
     probe
+}
+
+/// 探测 ffmpeg 的 dshow 输入是否支持 `-audio_buffer_size`。
+///
+/// 只跑一次 `-h demuxer=dshow`（毫秒级），比 `probe_ffmpeg`（4~5 个进程）轻得多，
+/// 适合每次开始录制前调用。结果也缓存进 `FfmpegProbe` 供界面展示。
+fn ffmpeg_supports_audio_buffer_size(ffmpeg_path: &Path) -> bool {
+    let Ok(out) = ffmpeg_cmd(ffmpeg_path)
+        .args(["-hide_banner", "-h", "demuxer=dshow"])
+        .output()
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout).to_string()
+        + &String::from_utf8_lossy(&out.stderr);
+    text.contains("audio_buffer_size")
 }
 
 /// 判断某个硬件编码器是否真的可用（能初始化）。
@@ -1186,11 +1232,32 @@ pub fn build_args(
     };
 
     // ── 输入：麦克风 ──
+    //
+    // # 必须加 `-audio_buffer_size`（这是「开启声音后编码跟不上」的根因修复）
+    //
+    // dshow 音频输入的默认缓冲会引入约 **0.5~0.7 秒的固定启动延迟**：
+    // 实测同一配置（屏幕 2560x1600 + 麦克风，20 秒）：
+    //   无 buffer        → speed=0.965x, elapsed=20.71s（多出 0.71s 开销）
+    //   -audio_buffer_size 100 → speed=0.997x, elapsed=20.06s（开销降到 0.06s）
+    //   -audio_buffer_size 50  → speed=1.010x, elapsed=19.71s（开销消除）
+    //
+    // `speed` 是 ffmpeg 按「媒体时长 / 墙钟时长」算出的比值，这 0.7 秒固定开销
+    // 会被永久摊进 speed，使它在界面上长期显示为 <1.0（例如 0.96x），
+    // 用户看到的就是「编码跟不上」。实际编码能力并没有变，只是音频缓冲白等了。
+    //
+    // 更短的缓冲（50ms）延迟更低但更容易在系统卡顿时丢音频包，
+    // 100ms 是实测下 speed 已达 0.997x、且缓冲仍较稳的折中值。
+    //
+    // 该选项并非所有 ffmpeg 构建都有，因此仅在探测确认支持时才添加：
+    // 万一某构建没有它，带上会因「未知选项」导致设备直接打不开，
+    // 表现为一开声音就录制失败 —— 那比卡顿严重得多。
+    const AUDIO_BUFFER_MS: u32 = 100;
     let mic_index = if !mic_device.trim().is_empty() {
-        args.extend([
-            "-f".into(), "dshow".into(),
-            "-i".into(), format!("audio={mic_device}"),
-        ]);
+        args.extend(["-f".into(), "dshow".into()]);
+        if config.has_audio_buffer_size {
+            args.extend(["-audio_buffer_size".into(), AUDIO_BUFFER_MS.to_string()]);
+        }
+        args.extend(["-i".into(), format!("audio={mic_device}")]);
         let idx = next_index;
         next_index += 1;
         Some(idx)
@@ -1200,10 +1267,11 @@ pub fn build_args(
 
     // ── 输入：系统声音 ──
     let system_index = if !system_audio_device.trim().is_empty() {
-        args.extend([
-            "-f".into(), "dshow".into(),
-            "-i".into(), format!("audio={system_audio_device}"),
-        ]);
+        args.extend(["-f".into(), "dshow".into()]);
+        if config.has_audio_buffer_size {
+            args.extend(["-audio_buffer_size".into(), AUDIO_BUFFER_MS.to_string()]);
+        }
+        args.extend(["-i".into(), format!("audio={system_audio_device}")]);
         // 最后一个输入，next_index 不再需要递增
         Some(next_index)
     } else {
@@ -1311,6 +1379,18 @@ pub fn build_args(
     let video_out_label = "[vout]".to_string();
 
     // ── 滤镜链：音频混合 ──
+    //
+    // # 音频也必须把时间戳归零（`asetpts=PTS-STARTPTS`）
+    //
+    // 视频每个图层都做了 `setpts=PTS-STARTPTS`，但音频早期版本**漏了**这一步，
+    // 导致音频带着采集设备的原始时间戳进入 `aresample`。实测 dshow 音频的
+    // 原始起点是 `start 31338.109000`（约 8.7 小时，设备自开机起的计数），
+    // 而视频起点是 0 —— 两者相差巨大。
+    //
+    // `aresample=async=1` 看到这个鸿沟会**持续做补偿重采样**，既白烧 CPU，
+    // 又让音频产出节奏与视频不一致；叠加在弱机器上就表现为
+    // 「一开声音编码就跟不上」。归零后音视频从同一时间基准起步，
+    // async 只处理真正的漂移，不再需要补偿这个虚假的起始偏差。
     let mut audio_out_label: Option<String> = None;
     let mut has_audio = false;
 
@@ -1319,21 +1399,25 @@ pub fn build_args(
             // 两路都采集：音量可调后 amix 混合
             let mv = config.mic_volume as f64 / 100.0;
             let sv = config.system_volume as f64 / 100.0;
-            filters.push(format!("[{mic}:a]volume={mv:.3}[micv]"));
-            filters.push(format!("[{sys}:a]volume={sv:.3}[sysv]"));
+            filters.push(format!("[{mic}:a]asetpts=PTS-STARTPTS,volume={mv:.3}[micv]"));
+            filters.push(format!("[{sys}:a]asetpts=PTS-STARTPTS,volume={sv:.3}[sysv]"));
             filters.push("[micv][sysv]amix=inputs=2:duration=longest:dropout_transition=0,aresample=async=1[aout]".to_string());
             audio_out_label = Some("[aout]".to_string());
             has_audio = true;
         }
         (Some(mic), None) => {
             let mv = config.mic_volume as f64 / 100.0;
-            filters.push(format!("[{mic}:a]volume={mv:.3},aresample=async=1[aout]"));
+            filters.push(format!(
+                "[{mic}:a]asetpts=PTS-STARTPTS,volume={mv:.3},aresample=async=1[aout]"
+            ));
             audio_out_label = Some("[aout]".to_string());
             has_audio = true;
         }
         (None, Some(sys)) => {
             let sv = config.system_volume as f64 / 100.0;
-            filters.push(format!("[{sys}:a]volume={sv:.3},aresample=async=1[aout]"));
+            filters.push(format!(
+                "[{sys}:a]asetpts=PTS-STARTPTS,volume={sv:.3},aresample=async=1[aout]"
+            ));
             audio_out_label = Some("[aout]".to_string());
             has_audio = true;
         }
@@ -1490,6 +1574,7 @@ pub async fn recorder_probe() -> Result<FfmpegProbe, String> {
             version: String::new(),
             has_gdigrab: false,
             has_dshow: false,
+            has_audio_buffer_size: false,
             hw_encoders: Vec::new(),
         });
     };
@@ -1611,6 +1696,22 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
 
     let mut config = config;
     config.normalize(sw, sh);
+    // 探测本机 ffmpeg 是否支持 `-audio_buffer_size`（降低音频采集的固定延迟）。
+    //
+    // 与选择编码器一样，这一步要在起录制进程之前完成：带上不支持的选项会让
+    // 设备直接打不开（一开声音就录制失败）。但这里**不能用 probe_ffmpeg**，
+    // 它会额外跑 4~5 个进程（-version / -formats / -encoders / -h），
+    // 每次开始录制都那样太浪费。只跑一次 `-h demuxer=dshow` 就够了。
+    if config.mic_device.trim().is_empty() && config.system_audio_device.trim().is_empty() {
+        config.has_audio_buffer_size = false;
+    } else {
+        config.has_audio_buffer_size = ffmpeg_supports_audio_buffer_size(&ffmpeg);
+        info!(
+            "[Recorder] 音频缓冲优化{}（-audio_buffer_size 支持: {}）",
+            if config.has_audio_buffer_size { "已启用" } else { "不可用，沿用默认缓冲" },
+            config.has_audio_buffer_size
+        );
+    }
 
     // 先组装参数与编码器，任何失败都在起进程之前返回，不留半初始化状态
     // （选编码器会实测硬件可用性，可能起若干探测进程，放在 spawn 之前更安全）
