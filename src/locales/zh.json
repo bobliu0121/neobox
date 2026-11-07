@@ -69,7 +69,8 @@
     "mkaMuxer": "MKA 合成",
     "bilibiliDownload": "B 站下载",
     "corruptFile": "文件损坏",
-    "recording": "录制"
+    "recording": "录制",
+    "virtualCamera": "虚拟摄像头"
   },
   "customPage": {
     "title": "自定义页面",
@@ -747,7 +748,8 @@
     "videoConverterDesc": "视频转 GIF 动图、首帧图片，或提取音频",
     "mkaMuxerDesc": "音频 + 字幕 + 封面合成为 MKA 文件",
     "bilibiliDownloadDesc": "下载 B 站视频或音频（免登录，最高 480P）",
-    "corruptFileDesc": "对文件进行可控随机损坏，用于测试修复工具的容错能力"
+    "corruptFileDesc": "对文件进行可控随机损坏，用于测试修复工具的容错能力",
+    "virtualCameraDesc": "免装驱动，用动态测试图代替真实摄像头，用于录制测试与卡顿排查"
   },
   "contextMenu": {
     "title": "右键菜单 & 此电脑",
@@ -2762,6 +2764,39 @@
     "canvasSize": "画布尺寸",
     "systemAudioMissing": "系统未启用「立体声混音」设备。请在「声音设置 → 录制 → 显示已禁用的设备」中启用它，否则无法录制系统声音。",
     "speedHint": "编码速度：1.00x 为刚好跟上实时，低于 1 会出现卡顿",
-    "dupHint": "重复帧数：大于 0 说明抓屏供帧不足，画面会顿挫"
+    "dupHint": "重复帧数：大于 0 说明抓屏供帧不足，画面会顿挫",
+    "virtualBadge": "虚拟",
+    "captureResolution": "采集分辨率",
+    "captureAuto": "自动（推荐）",
+    "captureResolutionHint": "自动会按图层显示宽度推导采集尺寸（上限 1280x720），避免摄像头按原生 5MP 采集而白烧算力。若录制卡顿，可先降到 640x360 验证是否为采集瓶颈。"
+  },
+  "virtualCamera": {
+    "back": "返回",
+    "title": "虚拟摄像头",
+    "desc": "供录制功能测试使用的应用内虚拟摄像头。它不需要安装任何驱动，画面由 ffmpeg 动态合成测试图，走与真实摄像头完全相同的录制与合成链路。",
+    "noDriverBadge": "免驱动",
+    "deviceNameLabel": "设备名（固定）",
+    "deviceNameHint": "录制页摄像头下拉列表中显示的就是这个名称，它会排在列表最前面。",
+    "copy": "复制设备名",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "openRecording": "打开录制页面",
+    "openRecordingHint": "进入录制页后，在「摄像头」下拉框选择虚拟摄像头即可开始录像。",
+    "stepsTitle": "使用步骤",
+    "step1": "打开「录制」页面，确认屏幕或摄像头图层已启用。",
+    "step2Before": "在「摄像头」下拉框中选择",
+    "step2After": "（列表第一项，带「虚拟」标记）。",
+    "step3": "按需调整布局与位置，然后点击开始录制。",
+    "stepHint": "麦克风、系统声音、编码器等其它设置与使用真实摄像头时完全一致。",
+    "diagnoseTitle": "排查价值：A/B 对照定位卡顿瓶颈",
+    "diagnoseDesc": "当真实摄像头录制出现卡顿时，用虚拟摄像头录一次同样的场景做对照，即可快速判断瓶颈在哪一层：",
+    "caseACondition": "虚拟摄像头流畅，真实摄像头卡顿",
+    "caseAConclusion": "瓶颈在摄像头采集或驱动环节（USB 带宽、驱动、曝光/自动对焦等），与合成、编码管线无关。",
+    "caseBCondition": "两者都卡顿",
+    "caseBConclusion": "瓶颈在合成或编码管线（分辨率、码率、编码器负载），需要调整录制参数。",
+    "resolutionTitle": "模拟大分辨率采集",
+    "resolutionDesc": "虚拟摄像头的采集分辨率由录制页摄像头卡片中选择的分辨率决定，可选以下三档：",
+    "resolutionNote": "720p 接近常见摄像头的默认采集规格；2592x1944 用于模拟 5MP 摄像头。",
+    "resolutionTip": "要复现「高分辨率采集导致卡顿」，请切到 2592x1944 后录制。若此时虚拟摄像头也卡顿，说明瓶颈在合成或编码管线，而非摄像头本身。"
   }
 }

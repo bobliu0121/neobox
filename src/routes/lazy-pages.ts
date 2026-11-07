@@ -48,6 +48,7 @@ export const SpeedTestPage = lazy(() => import("@/pages/SpeedTestPage"));
 export const CustomPage = lazy(() => import("@/pages/CustomPage"));
 export const NvidiaRecordingPage = lazy(() => import("@/pages/NvidiaRecordingPage"));
 export const RecordingPage = lazy(() => import("@/pages/RecordingPage"));
+export const VirtualCameraPage = lazy(() => import("@/pages/VirtualCameraPage"));
 export const TimeSyncPage = lazy(() => import("@/pages/TimeSyncPage"));
 export const ScreenTestPage = lazy(() => import("@/pages/ScreenTestPage"));
 export const WallpaperPage = lazy(() => import("@/pages/WallpaperPage"));

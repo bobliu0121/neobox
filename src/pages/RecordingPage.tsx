@@ -56,6 +56,8 @@ interface CaptureDevice {
   name: string;
   kind: string;
   alt_name: string;
+  /** 是否为内置虚拟摄像头（后端标记，前端显示「虚拟」字样） */
+  is_virtual?: boolean;
 }
 
 /**
@@ -1120,6 +1122,7 @@ export default function RecordingPage() {
               {cameras.map((d) => (
                 <option key={d.name} value={d.name}>
                   {d.name}
+                  {d.is_virtual ? `（${t("recording.virtualBadge")}）` : ""}
                 </option>
               ))}
             </Select>
@@ -1137,6 +1140,37 @@ export default function RecordingPage() {
                     isDisabled={status.recording}
                   />
                 </OptionRow>
+
+                {/* 采集分辨率：默认「自动」，避免摄像头按原生高分辨率采集而白白浪费算力。
+                    虚拟摄像头这项还兼作「模拟大分辨率采集」的开关，用来复现
+                    「设备按 5MP 采集导致卡顿」的场景。 */}
+                <OptionRow label={t("recording.captureResolution")} textColor={textColor}>
+                  <Select
+                    size="xs"
+                    w="auto"
+                    value={`${config.camera_width}x${config.camera_height}`}
+                    onChange={(e) => {
+                      const [w, h] = e.target.value.split("x").map((v) => Number(v) || 0);
+                      setConfig((prev) => ({
+                        ...prev,
+                        camera_width: w,
+                        camera_height: h,
+                      }));
+                    }}
+                    isDisabled={status.recording}
+                    borderColor={borderColor}
+                  >
+                    <option value="0x0">{t("recording.captureAuto")}</option>
+                    <option value="640x360">640x360</option>
+                    <option value="1280x720">1280x720</option>
+                    <option value="1920x1080">1920x1080</option>
+                    <option value="2592x1944">2592x1944（5MP）</option>
+                  </Select>
+                </OptionRow>
+                <Text fontSize="2xs" color={subTextColor} mt={1} lineHeight="tall">
+                  {t("recording.captureResolutionHint")}
+                </Text>
+
                 <Text fontSize="2xs" color={subTextColor} mt={2} lineHeight="tall">
                   {t("recording.layoutHint")}
                 </Text>

@@ -41,6 +41,7 @@ import {
   CustomPage,
   NvidiaRecordingPage,
   RecordingPage,
+  VirtualCameraPage,
   TimeSyncPage,
   ScreenTestPage,
   WallpaperPage,
@@ -484,6 +485,12 @@ function App() {
                     path="/recording"
                     element={
                       <RecordingPage />
+                    }
+                  />
+                  <Route
+                    path="/virtual-camera"
+                    element={
+                      <VirtualCameraPage />
                     }
                   />
                   <Route

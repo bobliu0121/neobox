@@ -19,6 +19,7 @@ import {
   FlaskConical,
   DownloadCloud,
   Video,
+  Webcam,
   Boxes,
   Clock,
   ScanLine,
@@ -49,6 +50,7 @@ const LS_KEY = "neobox_builtin_tools_order_v2";
  * 用户仍可在页面上拖动自定义。
  */
 const defaultTools: ViewItem[] = [
+  { id: "virtual-camera", path: "/virtual-camera", icon: Webcam, titleKey: "sidebar.virtualCamera", descriptionKey: "builtinTools.virtualCameraDesc", color: "#14B8A6", beta: true },
   { id: "bilibili-download", path: "/bilibili-download", icon: DownloadCloud, titleKey: "sidebar.bilibiliDownload", descriptionKey: "builtinTools.bilibiliDownloadDesc", color: "#FB7299" },
   { id: "overlay-panel", path: "/overlay-panel", icon: Layout, titleKey: "sidebar.overlayPanel", descriptionKey: "builtinTools.overlayPanelDesc", color: "#9B59B6" },
   { id: "resolution-converter", path: "/resolution-converter", icon: Monitor, titleKey: "sidebar.resolutionConverter", descriptionKey: "builtinTools.resolutionConverterDesc", color: "#4A90E2" },

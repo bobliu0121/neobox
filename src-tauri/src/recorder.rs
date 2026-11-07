@@ -41,6 +41,17 @@ const GRACEFUL_STOP_TIMEOUT_MS: u64 = 8000;
 /// 录制文件扩展名
 const RECORDING_EXT: &str = "mp4";
 
+/// 内置虚拟摄像头的设备名（用于录制功能自测）。
+///
+/// 它不是一个真正的 DirectShow 设备，而是由 ffmpeg 的 lavfi `testsrc2` 动态测试图
+/// 合成的视频源。之所以做成「和设备一样从下拉里选」，是为了让它走**与真实摄像头
+/// 完全相同的录制与合成链路**（同样的 scale/overlay/fps/编码），这样才能真正用于
+/// 排查问题：
+///   - 虚拟摄像头流畅、真实摄像头卡顿 ⇒ 瓶颈在摄像头采集或驱动；
+///   - 两者都卡 ⇒ 瓶颈在合成或编码管线。
+/// 它也让没有摄像头的机器（如本项目的开发用虚拟机）能够验证摄像头录制路径。
+pub const VIRTUAL_CAMERA_NAME: &str = "NeoBox 虚拟摄像头";
+
 // ────────────────────────────────────────────────────────────
 //  数据结构
 // ────────────────────────────────────────────────────────────
@@ -55,6 +66,9 @@ pub struct CaptureDevice {
     /// dshow 的 alternative name（含 GUID，避免重名设备混淆）
     #[serde(default)]
     pub alt_name: String,
+    /// 是否为内置虚拟摄像头（前端据此显示「虚拟」标记并允许模拟大分辨率采集）
+    #[serde(default)]
+    pub is_virtual: bool,
 }
 
 /// 单个采集图层的布局（画布式：每个源都是一个可自由摆放的图层）
@@ -669,10 +683,22 @@ fn resolve_encoder(ffmpeg_path: &Path, requested: &str) -> String {
     "libx264".to_string()
 }
 
-/// 从形如 `... speed=0.927x ...` 的文本里取浮点值（去掉末尾的 x）
+/// 从形如 `... speed=0.927x ...` 的文本里取浮点值（去掉末尾的 x）。
+///
+/// # 必须跳过 `=` 后的空格（这曾是一个长期潜伏的 bug）
+///
+/// ffmpeg 的进度行是**右对齐并用空格填充**的，实测格式：
+///   `frame=  240 fps= 30 q=-0.0 Lsize=  ... speed= 1.04x elapsed=0:00:07.65`
+/// 注意 `frame=` 后有 3 个空格、`speed=` 后有 1 个空格。
+/// 早期实现直接对 `=` 之后的字符做 `take_while(is_ascii_digit)`，
+/// 第一个字符就是空格 → 立刻停止 → 空字符串 → `parse` 失败 →
+/// 所有 `frame` / `speed` 都被**静默读成默认值 0**。
+/// 后果：界面性能徽章永远显示 0、帧率探测日志里的数据全部是假的，
+/// 「卡顿」因此长期无法被量化定位。此处先 `trim_start` 再解析。
 fn parse_kv_f64(line: &str, key: &str) -> Option<f64> {
     let idx = line.find(key)?;
     let rest = &line[idx + key.len()..];
+    let rest = rest.trim_start();
     let token: String = rest
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -680,35 +706,62 @@ fn parse_kv_f64(line: &str, key: &str) -> Option<f64> {
     token.parse::<f64>().ok()
 }
 
-/// 从形如 `... dup=14 ...` 的文本里取整数值
+/// 从形如 `... dup=14 ...` 的文本里取整数值（同样需要跳过 `=` 后的填充空格）
 fn parse_kv_u64(line: &str, key: &str) -> Option<u64> {
     let idx = line.find(key)?;
     let rest = &line[idx + key.len()..];
+    let rest = rest.trim_start();
     let token: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     token.parse::<u64>().ok()
 }
 
-/// 探测 gdigrab 在当前机器上「不产生重复帧」的最高采集帧率。
+/// 探测某一路采集源在当前机器上能稳定达成的帧率。
 ///
-/// # 为什么必须探测（这是卡顿的最终根因）
+/// # 为什么必须探测（这是「画面一顿一顿」的根因）
 ///
-/// gdigrab 走 GDI 软件抓屏，开销与屏幕分辨率、系统调度强相关。
-/// 实测用户环境（屏幕 2560x1600、i7-1360P）在 4 秒采集内：
-///   framerate=20 → dup=0    （80 帧全是真实帧）
-///   framerate=22 → dup=0
-///   framerate=24 → dup=2
-///   framerate=26 → dup=10
-///   framerate=30 → dup=19   （16% 是复制上一帧的假帧）
+/// gdigrab 与 dshow 都是**实时采集**，能否跟上设定帧率取决于机器能力：
+/// gdigrab 走 GDI 软件抓屏，开销随屏幕分辨率与系统调度上升；dshow 摄像头
+/// 则受设备固件、USB 带宽、驱动实现影响。跟不上时的表现完全一样 ——
+/// 差额全部由 ffmpeg 用**上一帧重复填充**，播放时看起来就是顿挫。
 ///
-/// 这些重复帧就是「画面一顿一顿」的直接来源：设 30fps 但机器只抓得到 ~22fps，
-/// 差额全部由 ffmpeg 用上一帧填充，播放时看起来就是卡顿。
-/// 因此不能盲目用用户设的 30fps 去抓屏，必须先测出这台机器的真实上限。
+/// 实测用户环境（屏幕 2560x1600、i7-1360P）4 秒采集：
+///   framerate=20 → dup=0 ；22 → dup=0 ；24 → dup=2 ；26 → dup=10 ；30 → dup=19（16%）
 ///
-/// 探测方式：对候选帧率各采集 ~1 秒，选 dup 最少（且尽量高）的那个。
-/// 探测本身约需 1~2 秒，只在开始录制时执行一次。
-fn probe_max_capture_fps(ffmpeg_path: &Path, preferred: u32) -> u32 {
+/// # 判定方式必须按采集源类型区分（早期版本在这里出过漏洞）
+///
+/// 屏幕：我们**主动**设 `-framerate`，gdigrab 会严格按该帧率输出并用重复帧补足差额，
+/// 因此「输出帧数」恒等于设定值，真正的信号是 `dup` 占比。用 dup 判定。
+///
+/// 摄像头：`-framerate` 对 dshow 是「强制设备切帧率」，多数摄像头只支持特定帧率，
+/// 硬传会直接打不开设备，所以只能不传 —— 此时输出帧数就等于**设备真实产出速率**，
+/// 不存在重复帧填充，`dup` 恒为 0。因此必须改用「实测每秒出帧数 / 目标帧率」
+/// 来判定。若沿用 dup 判定，摄像头永远拿满分、探测形同虚设 ——
+/// 「只开摄像头时仍然卡顿」正是这条路径漏掉的原因。
+fn probe_max_capture_fps(
+    ffmpeg_path: &Path,
+    preferred: u32,
+    src: &CaptureProbeSrc,
+    label: &str,
+) -> u32 {
     let preferred = preferred.clamp(1, 120);
-    // 候选：从接近用户设定的值往下退，2 的倍数便于对齐
+
+    match src {
+        // 摄像头无法控制帧率，改为直接测「设备实际能出多少帧」
+        CaptureProbeSrc::DshowCamera { device, width, height } => {
+            probe_dshow_camera_fps(ffmpeg_path, preferred, device, *width, *height, label)
+        }
+        // 虚拟摄像头是我们自己用 lavfi 生成的，帧率完全可控，天然能达成；
+        // 但仍实测一次，用于验证 `-re` 实时节流确实生效（否则时间戳会脱节）。
+        CaptureProbeSrc::VirtualCamera { width, height } => {
+            measure_virtual_camera_fps(ffmpeg_path, preferred, *width, *height, label);
+            preferred
+        }
+        CaptureProbeSrc::Screen => probe_screen_fps(ffmpeg_path, preferred, label),
+    }
+}
+
+/// 屏幕帧率探测：设 `-framerate`，用 `dup` 占比判定。
+fn probe_screen_fps(ffmpeg_path: &Path, preferred: u32, label: &str) -> u32 {
     let mut candidates: Vec<u32> = Vec::new();
     for f in [preferred, 25, 22, 20, 15] {
         if f <= preferred && !candidates.contains(&f) {
@@ -721,8 +774,7 @@ fn probe_max_capture_fps(ffmpeg_path: &Path, preferred: u32) -> u32 {
 
     let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
     for fps in &candidates {
-        // 采集 ~1 秒（帧数 = fps），统计 dup
-        let secs = 1;
+        let secs = 1u32;
         let out = ffmpeg_cmd(ffmpeg_path)
             .args([
                 "-hide_banner", "-y", "-stats",
@@ -735,7 +787,6 @@ fn probe_max_capture_fps(ffmpeg_path: &Path, preferred: u32) -> u32 {
             .output();
         let Ok(out) = out else { continue };
         let text = String::from_utf8_lossy(&out.stderr).to_string();
-        // 取最后一行的 dup 统计
         let dup = text
             .lines()
             .filter_map(|l| parse_kv_u64(l, "dup="))
@@ -747,21 +798,148 @@ fn probe_max_capture_fps(ffmpeg_path: &Path, preferred: u32) -> u32 {
             .next_back()
             .unwrap_or(0);
         let expected = (*fps * secs) as u64;
-        // 判定：无明显重复帧（dup <= 总帧的 3%）视为该帧率可稳定达成
         let dup_ratio = if frames > 0 { dup as f64 / frames as f64 } else { 1.0 };
         info!(
-            "[Recorder] 采集帧率探测 fps={fps} frames={frames}/{expected} dup={dup} ({:.1}%)",
+            "[Recorder] {label}采集帧率探测 fps={fps} frames={frames}/{expected} dup={dup} ({:.1}%)",
             dup_ratio * 100.0
         );
         if dup_ratio <= 0.03 {
-            info!("[Recorder] 采集帧率确定为 {fps}fps（dup 可忽略）");
+            info!("[Recorder] {label}采集帧率确定为 {fps}fps（dup 可忽略）");
             return *fps;
         }
     }
-    // 全部候选都有明显重复帧：取最低档（已是列表末尾）
     let fallback = *candidates.last().unwrap_or(&15);
-    warn!("[Recorder] 所有候选帧率均有重复帧，降级到 {fallback}fps");
+    warn!("[Recorder] {label}所有候选帧率均有重复帧，降级到 {fallback}fps");
     fallback
+}
+
+/// 真实摄像头（dshow）帧率探测：测「设备实际每秒出帧数」。
+///
+/// 采样 3 秒（含设备打开与首帧预热开销），取实测帧数/采样时长，
+/// 再与用户期望帧率比较：
+///   - 实测 ≥ 期望 → 设备跟得上，保持期望帧率；
+///   - 实测 <  期望 → 按实测值向下取到标准帧率，避免用重复帧硬凑。
+fn probe_dshow_camera_fps(
+    ffmpeg_path: &Path,
+    preferred: u32,
+    device: &str,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> u32 {
+    let secs = 3u32;
+    let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut cmd = ffmpeg_cmd(ffmpeg_path);
+    cmd.args(["-hide_banner", "-y", "-stats", "-f", "dshow"]);
+    if width > 0 && height > 0 {
+        cmd.args(["-video_size", &format!("{width}x{height}")]);
+    }
+    cmd.args([
+        "-i", &format!("video={device}"),
+        "-t", &secs.to_string(),
+        "-f", "rawvideo", null_out,
+    ]);
+
+    let started = std::time::Instant::now();
+    let out = cmd.output();
+    let Ok(out) = out else {
+        warn!("[Recorder] {label}帧率探测无法执行（ffmpeg 启动失败），沿用 {preferred}fps");
+        return preferred;
+    };
+    let wall_secs = started.elapsed().as_secs_f64().max(0.001);
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    let frames = text
+        .lines()
+        .filter_map(|l| parse_kv_u64(l, "frame="))
+        .next_back()
+        .unwrap_or(0);
+
+    if frames == 0 {
+        // 设备打不开或没出片：不能据此降帧率（可能是被占用），保留用户设置
+        warn!(
+            "[Recorder] {label}帧率探测未采集到任何帧（设备可能被占用），沿用 {preferred}fps。\
+             stderr 尾部: {}",
+            text.lines().rev().take(3).collect::<Vec<_>>().join(" | ")
+        );
+        return preferred;
+    }
+
+    // 用「实际采集窗口」估算设备出帧速率：`-t` 限制的是媒体时长，
+    // 墙钟时长会额外包含设备初始化开销，所以按 frames / secs 更贴近真实产出能力。
+    let measured = frames as f64 / secs as f64;
+    info!(
+        "[Recorder] {label}帧率探测 实测 {frames} 帧 / {secs} 秒 = {measured:.1}fps\
+         （墙钟耗时 {wall_secs:.2}s，期望 {preferred}fps）"
+    );
+
+    if measured + 0.5 >= preferred as f64 {
+        info!("[Recorder] {label}设备可达 {preferred}fps，保持设置");
+        return preferred;
+    }
+
+    // 向下取到不低于实测值的标准帧率，且不超过期望值
+    const STANDARD: [u32; 6] = [30, 25, 20, 15, 10, 5];
+    let chosen = STANDARD
+        .iter()
+        .copied()
+        .find(|&f| f <= preferred && (f as f64) <= measured + 0.5)
+        .unwrap_or(5);
+    warn!(
+        "[Recorder] {label}实测仅 {measured:.1}fps（期望 {preferred}fps），\
+         输出帧率降为 {chosen}fps（避免用重复帧硬凑造成卡顿）"
+    );
+    chosen
+}
+
+/// 虚拟摄像头帧率校验：确认 `-re` 节流生效（输出时长应接近墙钟耗时）。
+fn measure_virtual_camera_fps(
+    ffmpeg_path: &Path,
+    fps: u32,
+    width: u32,
+    height: u32,
+    label: &str,
+) {
+    let secs = 2u32;
+    let null_out = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let started = std::time::Instant::now();
+    let out = ffmpeg_cmd(ffmpeg_path)
+        .args([
+            "-hide_banner", "-y", "-stats",
+            "-f", "lavfi",
+            "-re",
+            "-i", &format!("testsrc2=size={width}x{height}:rate={fps}"),
+            "-t", &secs.to_string(),
+            "-f", "rawvideo", null_out,
+        ])
+        .output();
+    let wall = started.elapsed().as_secs_f64();
+    let Ok(out) = out else { return };
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    let frames = text
+        .lines()
+        .filter_map(|l| parse_kv_u64(l, "frame="))
+        .next_back()
+        .unwrap_or(0);
+    info!(
+        "[Recorder] {label}自检 {frames} 帧 / {secs} 秒（期望 {}）墙钟 {wall:.2}s {}",
+        fps * secs,
+        // 若墙钟远小于媒体时长，说明 -re 没生效，时间戳会与真实时间脱节
+        if wall + 1.0 < secs as f64 {
+            "⚠ -re 可能未生效（出帧过快）"
+        } else {
+            "实时节流正常"
+        }
+    );
+}
+
+/// 帧率探测用的采集源描述
+enum CaptureProbeSrc {
+    /// 屏幕（gdigrab）
+    Screen,
+    /// 真实摄像头（dshow）
+    DshowCamera { device: String, width: u32, height: u32 },
+    /// 内置虚拟摄像头（lavfi testsrc2）
+    VirtualCamera { width: u32, height: u32 },
 }
 
 // ────────────────────────────────────────────────────────────
@@ -850,8 +1028,24 @@ pub fn enumerate_devices(ffmpeg_path: &Path) -> Vec<CaptureDevice> {
             name,
             kind: kind.to_string(),
             alt_name: String::new(),
+            is_virtual: false,
         });
     }
+
+    // 内置虚拟摄像头**始终**出现在摄像头列表里（哪怕本机没有任何真实摄像头）。
+    //
+    // 它是录制功能的自测入口，也是一条稳定的排查基准：真实摄像头录出来卡顿时，
+    // 用它可以对照出瓶颈究竟在「采集/驱动」还是在「合成/编码」。
+    // 插在最前面，便于用户和排查时立即看到。
+    devices.insert(
+        0,
+        CaptureDevice {
+            name: VIRTUAL_CAMERA_NAME.to_string(),
+            kind: "video".to_string(),
+            alt_name: String::new(),
+            is_virtual: true,
+        },
+    );
 
     devices
 }
@@ -872,6 +1066,28 @@ fn pip_xy(position: &str, margin: u32) -> (String, String) {
         // 默认右下角
         _ => (format!("W-w-{m}"), format!("H-h-{m}")),
     }
+}
+
+/// 推导摄像头采集尺寸（录制与帧率探测**必须**共用，否则探测结果没有意义）。
+///
+/// 规则：用户显式设置则用用户值；否则按图层显示宽度推导，上限 1280x720。
+/// 结果强制为偶数（yuv420p 要求宽高是 2 的倍数）。
+fn camera_capture_size(config: &RecorderConfig) -> (u32, u32) {
+    let (w, h) = match (config.camera_width, config.camera_height) {
+        (w, h) if w > 0 && h > 0 => (w, h),
+        _ => {
+            // 未设置：按图层目标宽度推导采集尺寸，上限 1280x720。
+            // 目标宽度是「画布上的显示宽度」，采集宽度取它的 2 倍
+            // （考虑缩放后仍清晰），但不超过 1280。
+            let lay_w = config.camera_layout.w;
+            let target = if lay_w > 0 { lay_w.saturating_mul(2) } else { 1280 };
+            let cap_w = target.clamp(320, 1280) as u32;
+            // 保持 16:9（大多数摄像头支持）
+            (cap_w, cap_w * 9 / 16)
+        }
+    };
+    // 至少 2x2，且为偶数
+    ((w.max(2) / 2 * 2), (h.max(2) / 2 * 2))
 }
 
 /// 组装录制用的 ffmpeg 参数（不含可执行文件本身）。
@@ -915,6 +1131,7 @@ pub fn build_args(
     }
 
     let has_camera = !camera_device.trim().is_empty();
+    let is_virtual_camera = camera_device.trim() == VIRTUAL_CAMERA_NAME;
     let camera_index = if has_camera {
         // ── 摄像头采集分辨率：必须限定，不能交给设备默认值 ──
         //
@@ -928,27 +1145,37 @@ pub fn build_args(
         // 因此：用户显式设置时用用户的值；否则按图层显示宽度给出一个
         // 合理上限（720p 级别足够，缩到 640 宽仍然清晰），
         // 既保证画质又大幅降低采集与缩放开销。
-        let mut camera_args: Vec<String> = vec!["-f".into(), "dshow".into()];
-        let size = match (config.camera_width, config.camera_height) {
-            (w, h) if w > 0 && h > 0 => Some(format!("{w}x{h}")),
-            _ => {
-                // 未设置：按图层目标宽度推导采集尺寸，上限 1280x720。
-                // 目标宽度是「画布上的显示宽度」，采集宽度取它的 2 倍
-                // （consider 缩放后仍清晰），但不超过 1280。
-                let lay_w = config.camera_layout.w;
-                let target = if lay_w > 0 { lay_w.saturating_mul(2) } else { 1280 };
-                let cap_w = target.clamp(320, 1280) - target.clamp(320, 1280) % 2;
-                // 保持 16:9（大多数摄像头支持），高度取偶数
-                let cap_h = (cap_w * 9 / 16) / 2 * 2;
-                Some(format!("{cap_w}x{cap_h}"))
-            }
-        };
-        if let Some(size) = size {
+        // 尺寸推导与帧率探测共用 camera_capture_size，避免两处口径不一致。
+        let (cap_w, cap_h) = camera_capture_size(config);
+
+        let mut camera_args: Vec<String>;
+        if is_virtual_camera {
+            // ── 内置虚拟摄像头：lavfi testsrc2 动态测试图 ──
+            //
+            // 不用 dshow：这台开发机上没有任何视频采集设备，正是虚拟摄像头要解决的
+            // 场景；而且它必须能**故意模拟大分辨率采集**（如 2592x1944 模拟 5MP 摄像头），
+            // 用来复现「设备按高分辨率采集导致卡顿」这一类问题。
+            //
+            // 与真实摄像头的关键差异：lavfi 是**非实时**源，产出速度只受 CPU 限制，
+            // 因此必须加 `-re` 让它按实时节奏出帧，否则它会瞬间灌满几十秒的帧，
+            // 让时间戳与墙上时间完全脱节（录 5 秒可能得到 5 分钟的素材）。
+            // dshow / gdigrab 本身就是实时源，绝不能加 `-re`。
+            camera_args = vec![
+                "-f".into(), "lavfi".into(),
+                "-re".into(),
+                "-i".into(),
+                format!(
+                    "testsrc2=size={cap_w}x{cap_h}:rate={}",
+                    config.screen_fps.clamp(1, 120)
+                ),
+            ];
+        } else {
+            camera_args = vec!["-f".into(), "dshow".into()];
             camera_args.push("-video_size".into());
-            camera_args.push(size);
+            camera_args.push(format!("{cap_w}x{cap_h}"));
+            camera_args.push("-i".into());
+            camera_args.push(format!("video={camera_device}"));
         }
-        camera_args.push("-i".into());
-        camera_args.push(format!("video={camera_device}"));
         let idx = next_index;
         next_index += 1;
         args.extend(camera_args);
@@ -1391,13 +1618,57 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
 
     // ── 采集帧率探测（解决「画面一顿一顿」的最终根因）──
     //
-    // 用户设的 30fps 只是「期望值」，机器未必抓得到。实测用户环境在 30fps 时
+    // 用户设的 30fps 只是「期望值」，设备未必跟得上。实测用户环境屏幕在 30fps 时
     // 有 16% 的帧是复制出来的假帧（dup=19/120），这正是卡顿的直接来源。
     // 这里先测出本机不产生重复帧的最高帧率，再用它覆盖采集与输出帧率，
     // 宁可帧率低一点，也不要一堆重复帧造成的顿挫。
-    // 探测仅约 1~2 秒，只在开始录制时执行一次。
+    //
+    // # 摄像头也必须探测（早期版本的漏洞）
+    //
+    // 最初只对 `screen_enabled` 做探测，导致「只开摄像头」录制时完全没有探测、
+    // 仍按 30fps 输出，摄像头供帧不足的部分全由重复帧补齐 —— 用户反馈的
+    // 「开摄像头就卡」正落在这条路径上。现在屏幕与摄像头分别探测，取两者
+    // **较小值**作为最终帧率：两路画面要在同一画布上合成并统一 `fps=` 重采样，
+    // 若按较高的那路设帧率，较低的那路必然产生重复帧。
+    let mut probed_fps: Option<u32> = None;
+    let is_virtual_camera = config.camera_device.trim() == VIRTUAL_CAMERA_NAME;
+
     if config.screen_enabled {
-        let probed = probe_max_capture_fps(&ffmpeg, config.screen_fps);
+        let probed = probe_max_capture_fps(
+            &ffmpeg,
+            config.screen_fps,
+            &CaptureProbeSrc::Screen,
+            "屏幕",
+        );
+        info!("[Recorder] 屏幕采集帧率探测结果 {probed}fps（原始设置 {}fps）", config.screen_fps);
+        probed_fps = Some(probed);
+    }
+
+    if !config.camera_device.trim().is_empty() {
+        // 摄像头探测的采集尺寸必须与实际录制时一致，否则测出来的上限没有意义
+        let (cap_w, cap_h) = camera_capture_size(&config);
+        let src = if is_virtual_camera {
+            CaptureProbeSrc::VirtualCamera { width: cap_w, height: cap_h }
+        } else {
+            CaptureProbeSrc::DshowCamera {
+                device: config.camera_device.trim().to_string(),
+                width: cap_w,
+                height: cap_h,
+            }
+        };
+        let probed = probe_max_capture_fps(&ffmpeg, config.screen_fps, &src, "摄像头");
+        info!(
+            "[Recorder] 摄像头采集帧率探测结果 {probed}fps（采集尺寸 {cap_w}x{cap_h}，原始设置 {}fps）",
+            config.screen_fps
+        );
+        probed_fps = Some(match probed_fps {
+            // 两路合并：取较小值，避免帧率高于某一路的采集能力而制造重复帧
+            Some(prev) => prev.min(probed),
+            None => probed,
+        });
+    }
+
+    if let Some(probed) = probed_fps {
         if probed != config.screen_fps {
             info!(
                 "[Recorder] 采集帧率由 {}fps 调整为 {}fps（避免重复帧导致的卡顿）",
@@ -1445,6 +1716,19 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
         let dp = live_dup.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
+            // ── 周期性把实测指标写进日志 ──
+            //
+            // # 为什么必须落日志（这是排查「还是卡顿」时最大的证据缺口）
+            //
+            // 早期版本只在界面显示 speed / dup，**从不写日志**。结果用户回报
+            // 「还是卡顿」时，日志里只有命令行、没有任何帧率/重复帧实测数据，
+            // 「编码跟不上」和「采集供帧不足」这两种完全不同的病因无法区分，
+            // 只能反复猜测与试错。现在每约 3 秒记录一行实测指标，排查时
+            // 只要一行就能定性：
+            //   speed >= 1.0 且 dup 很小  → 采集与编码都正常，卡顿另有原因
+            //   speed >= 1.0 但 dup 很大  → 采集侧供帧不足（帧率设太高）
+            //   speed <  1.0              → 编码跟不上实时
+            let mut last_report = std::time::Instant::now();
             for line in reader.lines() {
                 let Ok(line) = line else { break };
                 // 解析 ffmpeg 进度行里的性能指标：
@@ -1456,6 +1740,22 @@ pub async fn recorder_start(app: AppHandle, config: RecorderConfig) -> Result<St
                     }
                     if let Some(d) = parse_kv_u64(&line, "dup=") {
                         *dp.lock().unwrap_or_else(|e| e.into_inner()) = d;
+                    }
+                    if last_report.elapsed() >= std::time::Duration::from_secs(3) {
+                        last_report = std::time::Instant::now();
+                        let speed = *sp.lock().unwrap_or_else(|e| e.into_inner());
+                        let dup = *dp.lock().unwrap_or_else(|e| e.into_inner());
+                        let frames = parse_kv_u64(&line, "frame=").unwrap_or(0);
+                        info!(
+                            "[Recorder] 实时指标 frame={frames} speed={speed:.2}x dup={dup} {}",
+                            if speed < 1.0 {
+                                "（编码跟不上实时，会有卡顿）"
+                            } else if dup > 0 {
+                                "（采集供帧不足，出现重复帧）"
+                            } else {
+                                ""
+                            }
+                        );
                     }
                 }
                 // 锁中毒也必须继续读！

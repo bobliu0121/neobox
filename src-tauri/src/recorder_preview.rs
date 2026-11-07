@@ -176,10 +176,39 @@ fn build_camera_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
     // 预览帧率只作用于**输出**（fps 滤镜），不影响采集：设备按自己的默认帧率出图
     let preview_fps = (p.screen_fps / 3).clamp(2, 12);
     let filter = format!("[0:v]fps={preview_fps},scale={tw}:-2,format=yuv420p[v]");
-    let args: Vec<String> = vec![
+
+    // 内置虚拟摄像头：用 lavfi testsrc2 合成测试图，与录制路径保持同一源。
+    // 必须加 `-re`：lavfi 是非实时源，不加会以 CPU 极限速度出帧，
+    // 预览端表现为花屏或瞬间堆积；真实 dshow 设备本身就是实时源，不能加。
+    let (input_args, is_virtual): (Vec<String>, bool) = if p.camera_device.trim()
+        == crate::recorder::VIRTUAL_CAMERA_NAME
+    {
+        (
+            vec![
+                "-f".into(), "lavfi".into(),
+                "-re".into(),
+                "-i".into(),
+                format!(
+                    "testsrc2=size={}x{}:rate={}",
+                    1280,
+                    720,
+                    p.screen_fps.clamp(1, 120)
+                ),
+            ],
+            true,
+        )
+    } else {
+        (
+            vec!["-f".into(), "dshow".into(), "-i".into(), format!("video={}", p.camera_device)],
+            false,
+        )
+    };
+
+    let mut args: Vec<String> = vec![
         "-hide_banner".into(), "-loglevel".into(), "error".into(),
-        "-f".into(), "dshow".into(),
-        "-i".into(), format!("video={}", p.camera_device),
+    ];
+    args.extend(input_args);
+    args.extend([
         "-filter_complex".into(), filter,
         "-map".into(), "[v]".into(),
         "-c:v".into(), "mjpeg".into(),
@@ -187,13 +216,19 @@ fn build_camera_stream(ffmpeg_path: &Path, p: &PreviewParams) -> Result<Child, S
         "-f".into(), "mpjpeg".into(),
         "-boundary_tag".into(), "ffmpeg".into(),
         "pipe:1".into(),
-    ];
+    ]);
     let mut cmd = ffmpeg_cmd(ffmpeg_path);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    cmd.spawn().map_err(|e| format!("启动摄像头预览失败: {e}"))
+    cmd.spawn().map_err(|e| {
+        if is_virtual {
+            format!("启动虚拟摄像头预览失败: {e}")
+        } else {
+            format!("启动摄像头预览失败: {e}")
+        }
+    })
 }
 
 /// 构造预览进程后，接管它的 stderr 并启动后台消费线程。

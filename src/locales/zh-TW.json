@@ -69,7 +69,8 @@
     "mkaMuxer": "MKA 合成",
     "bilibiliDownload": "B 站下載",
     "corruptFile": "檔案損毀",
-    "recording": "錄製"
+    "recording": "錄製",
+    "virtualCamera": "虛擬攝影機"
   },
   "customPage": {
     "title": "自訂頁面",
@@ -885,7 +886,8 @@
     "videoConverterDesc": "影片轉 GIF 動圖、首幀圖片，或擷取音訊",
     "mkaMuxerDesc": "音訊 + 字幕 + 封面合成為 MKA 檔案",
     "bilibiliDownloadDesc": "下載 B 站影片或音訊（免登入，最高 480P）",
-    "corruptFileDesc": "對檔案進行可控隨機損毀，用於測試修復工具的容錯能力"
+    "corruptFileDesc": "對檔案進行可控隨機損毀，用於測試修復工具的容錯能力",
+    "virtualCameraDesc": "免裝驅動，用動態測試圖代替真實攝影機，用於錄製測試與卡頓排查"
   },
   "timeSync": {
     "title": "時間校正",
@@ -2892,6 +2894,39 @@
     "canvasSize": "畫布尺寸",
     "systemAudioMissing": "系統未啟用「立體聲混音」裝置。請在「音效設定 → 錄製 → 顯示已停用的裝置」中啟用它，否則無法錄製系統聲音。",
     "speedHint": "編碼速度：1.00x 為剛好跟上即時，低於 1 會出現卡頓",
-    "dupHint": "重複影格數：大於 0 表示擷取供格不足，畫面會頓挫"
+    "dupHint": "重複影格數：大於 0 表示擷取供格不足，畫面會頓挫",
+    "virtualBadge": "虛擬",
+    "captureResolution": "擷取解析度",
+    "captureAuto": "自動（建議）",
+    "captureResolutionHint": "自動會依圖層顯示寬度推導擷取尺寸（上限 1280x720），避免攝影機以原生 5MP 擷取而浪費算力。若錄製卡頓，可先降到 640x360 驗證是否為擷取瓶頸。"
+  },
+  "virtualCamera": {
+    "back": "返回",
+    "title": "虛擬攝影機",
+    "desc": "供錄製功能測試使用的應用內虛擬攝影機。它不需要安裝任何驅動，畫面由 ffmpeg 動態合成測試圖，走與真實攝影機完全相同的錄製與合成鏈路。",
+    "noDriverBadge": "免驅動",
+    "deviceNameLabel": "裝置名稱（固定）",
+    "deviceNameHint": "錄製頁攝影機下拉選單中顯示的就是這個名稱，它會排在清單最前面。",
+    "copy": "複製裝置名稱",
+    "copied": "已複製",
+    "copyFailed": "複製失敗",
+    "openRecording": "開啟錄製頁面",
+    "openRecordingHint": "進入錄製頁後，在「攝影機」下拉選單選擇虛擬攝影機即可開始錄影。",
+    "stepsTitle": "使用步驟",
+    "step1": "開啟「錄製」頁面，確認螢幕或攝影機圖層已啟用。",
+    "step2Before": "在「攝影機」下拉選單中選擇",
+    "step2After": "（清單第一項，帶「虛擬」標記）。",
+    "step3": "依需求調整版面與位置，然後點擊開始錄製。",
+    "stepHint": "麥克風、系統音效、編碼器等其它設定與使用真實攝影機時完全一致。",
+    "diagnoseTitle": "排查價值：A/B 對照定位卡頓瓶頸",
+    "diagnoseDesc": "當真實攝影機錄製出現卡頓時，用虛擬攝影機錄一次同樣的場景做對照，即可快速判斷瓶頸在哪一層：",
+    "caseACondition": "虛擬攝影機流暢，真實攝影機卡頓",
+    "caseAConclusion": "瓶頸在攝影機擷取或驅動環節（USB 頻寬、驅動、曝光/自動對焦等），與合成、編碼管線無關。",
+    "caseBCondition": "兩者都卡頓",
+    "caseBConclusion": "瓶頸在合成或編碼管線（解析度、位元率、編碼器負載），需要調整錄製參數。",
+    "resolutionTitle": "模擬大解析度擷取",
+    "resolutionDesc": "虛擬攝影機的擷取解析度由錄製頁攝影機卡片中選擇的解析度決定，可選以下三檔：",
+    "resolutionNote": "720p 接近常見攝影機的預設擷取規格；2592x1944 用於模擬 5MP 攝影機。",
+    "resolutionTip": "要重現「高解析度擷取導致卡頓」，請切到 2592x1944 後錄製。若此時虛擬攝影機也卡頓，說明瓶頸在合成或編碼管線，而非攝影機本身。"
   }
 }
