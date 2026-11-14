@@ -2651,7 +2651,7 @@ function AboutSettings() {
       } catch (e) {
         // 拿不到就回退到包版本，至少不会显示空白
         console.error("读取应用版本失败:", e);
-        if (!cancelled) setCurrentVersion("1.3.2");
+        if (!cancelled) setCurrentVersion("1.4.0");
       }
     })();
     return () => {

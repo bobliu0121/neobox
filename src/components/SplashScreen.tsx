@@ -1,7 +1,7 @@
 import { useAppStartup } from "@/contexts/app-startup-context";
 import { useThemeColor } from "@/contexts/theme-color-context";
 import { Box } from "@chakra-ui/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { store } from "@/lib/store";
 
 /** 视频启动动画资源（public/splash/startup.mp4，H.264 + AAC，960x720，6.08s） */
@@ -61,6 +61,14 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
   const [videoFailed, setVideoFailed] = useState(false);
   // 是否已开始淡出
   const [fading, setFading] = useState(false);
+  /**
+   * 用户是否已点击画面跳过视频动画。
+   *
+   * 点击后：立即停掉视频、回到「原始 LOGO 加载动画」，并且**不再等待视频播完**
+   * （见下方消失判定）。这是用户明确要求的行为：动画播太久（6 秒）会让人等得烦，
+   * 点一下就应该回到熟悉的 LOGO + 进度条画面。
+   */
+  const [videoSkipped, setVideoSkipped] = useState(false);
   // 防止 onFinish 重复调用
   const finishedRef = useRef(false);
   // 视频最多等待时长（兜底）：超过这个时间仍未就绪，视为不可用，
@@ -79,12 +87,13 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
   });
 
   /**
-   * 消失判定：启动完成 **且** 视频播完才淡出。
+   * 消失判定：启动完成 **且**（视频播完 或 用户已点击跳过 或 视频不可用）才淡出。
    *
-   * 三种情况的处理：
-   * - 视频正常：等 `videoEnded`（播完）才淡出，即使启动早已完成 → 动画完整
+   * 四种情况的处理：
+   * - 视频正常播放：等 `videoEnded`（播完）才淡出，即使启动早已完成 → 动画完整
+   * - **用户点击跳过**（`videoSkipped`）：不再等视频播完，启动完成即可淡出
    * - 视频确定不可用（`videoFailed`）：只等启动完成，立即淡出，不空等
-   * - 视频还在加载（既未 ready 也未 failed）：**继续等**，不能提前淡出
+   * - 视频还在加载（既未 ready 也未 failed 且未跳过）：**继续等**，不能提前淡出
    *
    * 之前的写法 `videoEnded || !videoReady` 是错的：视频尚在加载时 `!videoReady`
    * 为 true，会在启动完成的瞬间就淡出，正好破坏了「启动快也要等视频播完」的需求。
@@ -93,13 +102,14 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
     if (finishedRef.current) return;
     if (!startupReady) return;
 
-    const canFinish = videoEnded || videoFailed;
+    const canFinish = videoEnded || videoFailed || videoSkipped;
     if (!canFinish) return;
 
     finishedRef.current = true;
     setFading(true);
     console.info(
-      `[Splash] 淡出开始 (startupReady=${startupReady} videoEnded=${videoEnded} videoFailed=${videoFailed})`,
+      `[Splash] 淡出开始 (startupReady=${startupReady} videoEnded=${videoEnded} ` +
+        `videoFailed=${videoFailed} videoSkipped=${videoSkipped})`,
     );
     // 与 CSS opacity 过渡时长保持一致（400ms），结束后通知父级卸载
     const timer = window.setTimeout(() => {
@@ -107,7 +117,7 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
       onFinish();
     }, 420);
     return () => window.clearTimeout(timer);
-  }, [startupReady, videoEnded, videoFailed, onFinish]);
+  }, [startupReady, videoEnded, videoFailed, videoSkipped, onFinish]);
 
   /**
    * 视频兜底超时：超过 VIDEO_GUARD_MS 仍未就绪，按「不可用」处理。
@@ -184,6 +194,36 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
     void tryPlay();
   }, []);
 
+  /**
+   * 点击画面：跳过视频动画，回到「原始 LOGO 加载动画」。
+   *
+   * 行为约定（用户明确要求）：
+   * 1. 立即暂停并隐藏视频 → 露出底层的静态 LOGO + 呼吸动画 + 进度条，
+   *    也就是视频加入之前的那套启动画面；
+   * 2. **不再等待视频播完**：`videoSkipped` 参与淡出判定，程序一启动完成就淡出，
+   *    不必熬满 6 秒；
+   * 3. 点击只生效一次，淡出中或已结束后不再响应。
+   *
+   * 注意：即使程序还没启动完，点击也是安全的 —— 画面会停在 LOGO + 进度条上继续
+   * 等启动完成，这正是「回到原始加载动画」的语义。
+   */
+  const handleSkip = useCallback(() => {
+    if (finishedRef.current || fading) return;
+    setVideoSkipped(true);
+    const v = videoRef.current;
+    if (v) {
+      try {
+        v.pause();
+        // 清空源，确保视频层不再显示任何一帧（回到纯 LOGO 画面）
+        v.removeAttribute("src");
+        v.load();
+      } catch {
+        /* ignore */
+      }
+    }
+    console.info("[Splash] 用户点击跳过视频动画 -> 回到 LOGO 加载画面");
+  }, [fading]);
+
   return (
     <Box
       w="100vw"
@@ -195,13 +235,28 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
       zIndex="9999"
       overflow="hidden"
       bg="#000"
-      data-tauri-drag-region
-      // 淡出由 fading 控制（启动完成 && 视频播完之后才开始），
+      // 淡出由 fading 控制（启动完成 &&（视频播完 或 已点击跳过）之后才开始），
       // 不再用 startupProgress>=100 —— 那样「秒开」时视频会被瞬间切断
       opacity={fading ? 0 : 1}
       transition="opacity 0.4s ease-out"
       willChange="opacity"
     >
+      {/* ── 点击跳过层 ──────────────────────────────────────────────
+          必须是一个**独立的、不带 data-tauri-drag-region** 的全屏层：
+          带 drag-region 的元素会被 Tauri 接管 mousedown 去拖动窗口，
+          浏览器不会再派发 click —— 那样点击跳过就永远不会触发。
+
+          代价是启动画面期间不能再拖动窗口（只持续几秒），
+          这是「点击跳过」这个需求必然要换来的取舍。 */}
+      <Box
+        position="absolute"
+        inset={0}
+        zIndex={20}
+        cursor="pointer"
+        onClick={handleSkip}
+        role="button"
+        aria-label="跳过启动动画"
+      />
       {/* ── 全屏视频层 ───────────────────────────────────────────────
           视频就绪后淡入覆盖静态 LOGO；播完停在最后一帧（不暂停隐藏）。 */}
       <video
@@ -229,22 +284,22 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
           height: "100%",
           objectFit: "cover",
           pointerEvents: "none",
-          // 未就绪时透明，让静态 LOGO 兜底可见
-          opacity: videoReady ? 1 : 0,
+          // 未就绪或已被点击跳过时透明，让静态 LOGO 显示出来
+          opacity: videoReady && !videoSkipped ? 1 : 0,
           transition: "opacity 0.35s ease-out",
         }}
       />
 
       {/* ── 静态 LOGO 兜底层 ─────────────────────────────────────────
-          仅在视频未就绪（加载中/解码失败/自动播放被拦）时显示。 */}
-      {!videoReady && (
+          视频未就绪（加载中/解码失败/自动播放被拦）时显示；
+          用户点击跳过后也回到这一层，即「原始 LOGO 加载动画」。 */}
+      {(!videoReady || videoSkipped) && (
         <Box
           position="absolute"
           inset={0}
           display="flex"
           alignItems="center"
           justifyContent="center"
-          data-tauri-drag-region
         >
           <Box
             as="img"
@@ -290,9 +345,9 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
             boxShadow={`0 0 8px ${primaryColor}`}
           />
         </Box>
-        {/* 视频播完后显示当前百分比（此时动画已结束，用户需要知道还在等什么）。
-            淡出期间不再显示，避免和「正在消失」的画面打架。 */}
-        {videoEnded && !fading && (
+        {/* 视频播完 / 用户点击跳过后显示当前百分比（此时已没有动画可看，
+            用户需要知道还在等什么）。淡出期间不再显示，避免与「正在消失」的画面打架。 */}
+        {(videoEnded || videoSkipped) && !fading && (
           <Box
             textAlign="center"
             mt={2}
@@ -304,6 +359,29 @@ export function SplashScreen({ startupReady, onFinish }: SplashScreenProps) {
           </Box>
         )}
       </Box>
+
+      {/* ── 「点击跳过动画」提示 ──────────────────────────────────────
+          视频播放中才显示；点击后视频收掉、回到 LOGO 加载画面。 */}
+      {videoReady && !videoEnded && !videoSkipped && !fading && (
+        <Box
+          position="absolute"
+          right="24px"
+          bottom="20px"
+          zIndex={25}
+          pointerEvents="none"
+          px={3}
+          py={1.5}
+          borderRadius="full"
+          bg="rgba(0,0,0,0.45)"
+          border="1px solid rgba(255,255,255,0.18)"
+          fontSize="11px"
+          color="rgba(255,255,255,0.75)"
+          letterSpacing="0.05em"
+          backdropFilter="blur(6px)"
+        >
+          点击画面跳过动画
+        </Box>
+      )}
 
       {/* 呼吸动画 keyframes（静态 LOGO 兜底时使用） */}
       <style>{`

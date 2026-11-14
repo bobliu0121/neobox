@@ -383,7 +383,7 @@ export function Sidebar() {
     { path: "/builtin-tools", icon: Package, ariaLabel: t("sidebar.builtinTools") },
     { path: "/wallpaper", icon: Images, ariaLabel: t("sidebar.wallpaper") },
     { path: "/music", icon: Music, ariaLabel: t("sidebar.music") },
-    { path: "/recording", icon: Video, ariaLabel: t("sidebar.recording") },
+    { path: "/recording", icon: Video, ariaLabel: t("sidebar.recording"), beta: true },
     { path: "/search", icon: Search, ariaLabel: t("sidebar.search") },
     { path: "/hardware", icon: Cpu, ariaLabel: t("sidebar.hardware") },
     { path: "/optimization", icon: TrendingUp, ariaLabel: t("sidebar.optimization") },

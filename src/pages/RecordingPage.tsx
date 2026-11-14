@@ -905,6 +905,10 @@ export default function RecordingPage() {
           <Heading size="lg" color={adaptiveTitle.text} textShadow={adaptiveTitle.shadow}>
             {t("recording.title")}
           </Heading>
+          {/* BETA 标记：录制功能仍在校准（采集帧率/音频等），与侧边栏角标保持一致 */}
+          <Badge colorScheme="purple" fontSize="2xs" px={1.5} py={0.5} borderRadius="md" textTransform="uppercase">
+            Beta
+          </Badge>
           {status.recording && (
             <Badge colorScheme="red" fontSize="xs" px={2} py={1} borderRadius="md">
               <HStack spacing={1}>
