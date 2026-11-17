@@ -57,7 +57,7 @@
 
 1. 注册插件（single-instance、shell、fs、store、os、global-shortcut、opener、clipboard、dialog）。
 2. `setup` 中初始化日志、托盘、传感器子进程、音乐代理、窗口位置等。
-3. `invoke_handler(tauri::generate_handler![...])` 注册 400+ 个命令。
+3. `invoke_handler(tauri::generate_handler![...])` 注册 460+ 个命令（当前 462 个）。
 4. `app.run` 中处理退出清理。
 
 业务模块按领域拆分，典型职责：
@@ -112,5 +112,3 @@
 ## 7. 已知技术债
 
 - 部分历史页面文件较大（数千行），组件拆分优先级低于行为回归风险，暂不做大规模重写。
-- `src/locales/*.json` 仍包含已删除模块的少量文案，后续可按页面逐步收敛。
-- `installer/` 与 `uninstaller/` 是独立 Tauri 项目，依赖版本与主项目未完全统一。

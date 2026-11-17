@@ -24,7 +24,7 @@
   <img src="https://img.shields.io/badge/i18n-zh%20%2F%20zh--TW%20%2F%20en-4B8BD6?style=flat-square" alt="i18n">
 </p>
 
-> 当前版本：**v1.3.2** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
+> 当前版本：**v1.4.0** · 作者：**Bobliu** · 基于 [NexBox](https://github.com/MuLiuSaMa/NexBox) 定制维护
 
 NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所有功能均在本地运行，把常用的系统监控、维护和桌面增强能力整合到一个轻量界面里，不依赖云端账号。
 
@@ -86,7 +86,7 @@ NeoBox 是一个基于 **Tauri 2 + React 19** 的 Windows 桌面工具箱。所�
 
 ## 技术栈
 
-- Tauri 2（Rust 后端，400+ IPC 命令）
+- Tauri 2（Rust 后端，460+ IPC 命令）
 - React 19 + Chakra UI + Vite 6
 - TypeScript
 - C# / .NET Framework 4.8（`monitor/` 硬件传感器辅助进程）
@@ -102,9 +102,6 @@ src-tauri/           Tauri / Rust 后端与随包资源
   resources/         运行时资源（驱动工具、词典等）
 monitor/             C# 传感器监视器（NeoBoxMonitor.exe）
 public/              前端静态资源（字体、图标、头像、预览图）
-installer/           安装程序（独立 Tauri 子项目）
-uninstaller/         卸载程序（独立 Tauri 子项目）
-msix/                MSIX 打包与侧载脚本
 docs/                构建、架构与功能说明
 scripts/             本地开发 / 发布辅助脚本
 ```
@@ -137,7 +134,7 @@ npm run build:portable
 
 ## 更新
 
-应用启动后会检查 [GitHub Releases](https://github.com/bobliu0121/neobox/releases) 中的最新版本（Gitee 镜像见 [Gitee Releases](https://gitee.com/bobliu0121/neobox/releases)）。当前正式版以便携压缩包发布，检测到新版本时会提示并打开 Release 页面；后续若提供安装包资产，应用内更新会直接下载并引导安装。
+应用启动后会检查 [GitHub Releases](https://github.com/bobliu0121/neobox/releases) 中的最新版本（Gitee 镜像见 [Gitee Releases](https://gitee.com/bobliu0121/neobox/releases)）。当前正式版以便携压缩包发布，检测到新版本时会提示并打开 Release 页面。
 
 ## 文档
 

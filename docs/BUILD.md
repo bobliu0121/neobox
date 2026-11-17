@@ -1,16 +1,15 @@
 # 构建与打包
 
-本文档描述 NeoBox 主程序、传感器监视器和安装/卸载程序的本地构建流程。命令默认在仓库根目录执行。
+本文档描述 NeoBox 主程序与传感器监视器的本地构建流程。命令默认在仓库根目录执行。
 
 ## 1. 环境要求
 
 | 组件 | 版本 | 用途 |
 | --- | --- | --- |
 | Node.js | 22+（含 npm） | 前端构建、Tauri CLI |
-| Rust | 1.77.2+ | 主程序、安装器、卸载器 |
+| Rust | 1.77.2+ | 主程序 |
 | .NET SDK | 8+ | 构建 `monitor/NeoBoxMonitor.csproj`（net48） |
 | WebView2 Runtime | Windows 10/11 自带或单独安装 | 运行 Tauri 窗口 |
-| Windows SDK | 可选 | 仅 MSIX 打包需要 `makeappx` / `signtool` |
 
 `monitor/` 的目标框架是 .NET Framework 4.8。若 `dotnet build` 报缺少 targeting pack，请安装 .NET Framework 4.8 Developer Pack，或安装 Visual Studio Build Tools 的“.NET Framework 4.8 SDK”组件。
 
@@ -100,25 +99,7 @@ artifacts/NeoBox-<version>-portable/
 
 可用参数：`-SkipFrontend`、`-SkipMonitor`、`-OutputRoot <目录>`。
 
-## 6. 安装程序 / 卸载程序 / MSIX
-
-安装程序与卸载程序是独立的 Tauri 子项目：
-
-```powershell
-# 安装程序（先构建主程序）
-installer\build-installer.ps1
-
-# 生成安装器 payload（主程序 + 资源 + 卸载器）
-installer\pack-payload.ps1
-
-# MSIX（需要 Windows SDK；先执行 pack-payload）
-msix\build-msix.ps1
-msix\install-msix.ps1
-```
-
-所有脚本均以 `$PSScriptRoot` 推导仓库根目录，不再依赖固定的 `D:\NeoBox` 路径。
-
-## 7. 常见问题
+## 6. 常见问题
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
@@ -126,10 +107,9 @@ msix\install-msix.ps1
 | 启动提示缺少 `WebView2Loader.dll` | 未把根目录 DLL 放到 exe 同目录 |
 | `ring` 构建失败、`ar` 找不到 `.o` | `CARGO_HOME` 含非 ASCII 路径，改用 ASCII 目录或 MSVC |
 | 无硬件温度/风扇数据 | 未构建或未放置 `NeoBoxMonitor.exe`，检查第 3 节目的查找路径 |
-| MSIX 打包报缺少 makeappx | 安装 Windows SDK，或传入可用的 SDK bin 路径 |
 | 前端 lint 失败 | 先 `npm ci`，确保使用仓库内的 ESLint 9 + typescript-eslint 配置 |
 
-## 8. CI
+## 7. CI
 
 `.github/workflows/ci.yml` 包含两个作业：
 

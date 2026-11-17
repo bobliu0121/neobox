@@ -126,12 +126,12 @@ fn ensure_elevation() {
 /// 包 AUMID = PackageFamilyName!ApplicationId（如 MuLiuSaMa.NeoBox_rkw8a3fpq7zcw!NeoBox）。
 /// PackageFamilyName 从包安装目录名解析（格式固定：<FamilyName>_<Version>_<Arch>__<Hash>，
 /// MSIX Identity Name 不允许下划线，故取首尾段拼接即可；哈希固定 13 字符无下划线）。
-/// ApplicationId 必须与 msix/AppxManifest.xml 的 <Application Id> 完全一致。
+/// ApplicationId 必须与 MSIX 包清单中的 <Application Id> 完全一致。
 #[cfg(windows)]
 fn set_packaged_aumid() {
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 
-    const APP_ID: &str = "NeoBox"; // msix/build-msix.ps1 生成的 <Application Id="NeoBox">
+    const APP_ID: &str = "NeoBox"; // MSIX 包清单中的 <Application Id="NeoBox">
 
     let exe = match std::env::current_exe() {
         Ok(p) => p,

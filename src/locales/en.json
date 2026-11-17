@@ -2,7 +2,7 @@
   "common": {
     "appName": "NeoBox",
     "appFullName": "New Horizon Box",
-    "description": "Cross-platform performance monitoring (Tauri + Next.js + Sensor Service)",
+    "description": "Windows desktop toolbox (Tauri + React + Sensor Service)",
     "close": "Close",
     "cancel": "Cancel",
     "add": "Add",
@@ -11,28 +11,6 @@
   "view": {
     "grid": "Grid View",
     "list": "List View"
-  },
-  "onboarding": {
-    "title": "Welcome to NeoBox",
-    "subtitle": "Let's get started",
-    "step": "Step",
-    "steps": {
-      "language": {
-        "title": "Choose your language",
-        "description": "Select your preferred language"
-      },
-      "theme": {
-        "title": "Choose your theme",
-        "description": "Select your preferred interface theme",
-        "light": "Light",
-        "dark": "Dark"
-      },
-      "complete": {
-        "title": "All set!",
-        "description": "You've completed all the setup. Start using NeoBox now!",
-        "button": "Get Started"
-      }
-    }
   },
   "sidebar": {
     "home": "Home",
@@ -824,27 +802,6 @@
     "copyFailed": "Copy failed",
     "noData": "No hardware info available"
   },
-  "floatingNav": {
-    "title": "Floating Navigation Box",
-    "enable": "Enable Floating Box",
-    "settings": "Settings",
-    "displayText": "Display Text",
-    "width": "Width",
-    "height": "Height",
-    "opacity": "Opacity",
-    "applySettings": "Apply Settings",
-    "preview": "Preview",
-    "previewNote": "Preview effect (actual floating box is at the top center of the monitor)",
-    "enabled": "Floating navigation enabled",
-    "disabled": "Floating navigation disabled",
-    "settingsApplied": "Settings applied",
-    "error": "Operation failed",
-    "tip": "The floating navigation box will be displayed at the top center of the monitor, always staying on top of all windows. You can adjust the opacity to control its impact on other applications.",
-    "displayContent": "Display Content",
-    "cpuUsage": "CPU Usage",
-    "gpuTemp": "GPU Temperature",
-    "gpuUsage": "GPU Usage"
-  },
   "hardwareReport": {
     "export": "Export Report",
     "selectPath": "Select Export Location",
@@ -898,22 +855,6 @@
     "resetPosition": "Reset Position",
     "positionReset": "Position restored to default",
     "positionResetFailed": "Failed to reset position"
-  },
-  "musicPlayer": {
-    "title": "Shushu Music",
-    "play": "Play",
-    "pause": "Pause",
-    "previous": "Previous",
-    "next": "Next",
-    "modeList": "List Loop",
-    "modeShuffle": "Shuffle",
-    "modeOne": "Repeat One",
-    "mute": "Mute",
-    "unmute": "Unmute",
-    "playlist": "Playlist",
-    "noTrack": "No track selected",
-    "empty": "No music files, please put MP3 files in",
-    "minimize": "Minimize"
   },
   "builtinTools": {
     "title": "Built-in Tools",
@@ -2065,17 +2006,6 @@
     },
     "checking": "Checking status..."
   },
-  "gpuDriverRestart": {
-    "pageTitle": "Restart Graphics Driver",
-    "pageDesc": "Disable all graphics drivers then re-enable automatically (more thorough than Win+Ctrl+Shift+B, requires administrator)",
-    "detailDesc": "Clicking the button will disable all display adapters on the system and automatically re-enable them after a few seconds, achieving a complete unload and reload of the graphics driver. The screen will briefly go black and return to normal within seconds. Administrator privileges are required.",
-    "restartBtn": "Restart Graphics Driver",
-    "success": "Graphics driver disabled and re-enabled, screen may briefly go black",
-    "error": "Failed to restart graphics driver",
-    "waiting": "Disabling and re-enabling graphics driver, please wait...",
-    "warningTitle": "Note",
-    "warningDesc": "This operation will disable all graphics drivers first, then automatically re-enable them. The screen will briefly go black for a few seconds. Make sure no important tasks (such as gaming or file editing) are in progress. If re-enabling fails, you may need to restart the computer to restore the display. Suitable for display anomalies, artifacts, stuttering, and applying GPU renames. Windows only. Administrator privileges required."
-  },
   "shaderCache": {
     "title": "Shader Cache Cleanup",
     "vendorTitle": "GPU Vendor",
@@ -2195,61 +2125,6 @@
     "defragStarted": "Defragmentation started in the background, you can keep using your PC",
     "optimizeDone": "Optimization (TRIM) complete",
     "optimizeFailed": "Disk optimization failed"
-  },
-  "screenRecord": {
-    "title": "Screen Recording",
-    "description": "Hardware-accelerated screen recording with high frame rate capture",
-    "loading": "Loading...",
-    "previewWaiting": "Waiting for recording to start...",
-    "recording": "Recording",
-    "idle": "Idle",
-    "openPreview": "Open Preview Window",
-    "closePreview": "Close Preview",
-    "settings": {
-      "title": "Recording Settings",
-      "source": "Capture Source",
-      "display": "Display",
-      "window": "Window",
-      "windowSrc": "App Window",
-      "fps": "Frame Rate",
-      "resolution": "Resolution",
-      "original": "Original",
-      "bitrate": "Bitrate",
-      "codec": "Encoder",
-      "container": "Format",
-      "captureCursor": "Capture Cursor",
-      "savePath": "Save Path",
-      "selectPath": "Select Save Location"
-    },
-    "controls": {
-      "start": "Start Recording",
-      "stop": "Stop Recording",
-      "recording": "Recording",
-      "paused": "Paused"
-    },
-    "stats": {
-      "title": "Recording Stats",
-      "lastRecording": "Last Recording",
-      "elapsed": "Elapsed Time",
-      "targetFps": "Target FPS",
-      "captureFps": "Capture FPS",
-      "outputFps": "Output FPS",
-      "droppedFrames": "Dropped Frames",
-      "totalFrames": "Total Frames",
-      "fileSize": "File Size",
-      "currentBitrate": "Current Bitrate"
-    },
-    "warnings": {
-      "refreshRateLow": "Display refresh rate ({{hz}}Hz) is lower than target FPS ({{fps}}fps). Frame duplication will be used.",
-      "noDisplayFound": "No captureable display found",
-      "savePathRequired": "Please select a save path first",
-      "encodingError": "Encoding error: {{message}}"
-    },
-    "messages": {
-      "recordingStarted": "Recording started",
-      "recordingStopped": "Recording stopped, file saved to: {{path}}",
-      "recordingError": "Recording error: {{message}}"
-    }
   },
   "audioEq": {
     "title": "EQ Tuner",
@@ -2522,7 +2397,6 @@
     "andMore": "and {{n}} more",
     "scanning": "Scanning recordings..."
   },
-  "filterDisabledDegraded": "Filter disabled (degraded clear: original calibration may not be restored)",
   "imageConverter": {
     "title": "Image Converter",
     "selectInput": "Select Image",

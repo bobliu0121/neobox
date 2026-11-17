@@ -2,7 +2,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [BUILD.md](BUILD.md) | 环境要求、前端/监视器/Rust 构建、便携版、安装器与 MSIX、常见构建问题 |
+| [BUILD.md](BUILD.md) | 环境要求、前端/监视器/Rust 构建、便携版、常见构建问题 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 前端/后端分层、多窗口、命令注册、资源解析、代码约定 |
 | [disk-health-smart.md](disk-health-smart.md) | 磁盘健康（SMART）实现方案 |
 | [memory-clean.md](memory-clean.md) | 内存清理功能说明 |

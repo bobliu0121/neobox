@@ -2,7 +2,7 @@
   "common": {
     "appName": "NeoBox",
     "appFullName": "NeoBox",
-    "description": "跨平台性能監控（Tauri + Next.js + 傳感器服務）",
+    "description": "Windows 桌面工具箱（Tauri + React + 傳感器服務）",
     "close": "關閉",
     "success": "操作成功",
     "cancel": "取消",
@@ -11,28 +11,6 @@
   "view": {
     "grid": "網格視圖",
     "list": "列表視圖"
-  },
-  "onboarding": {
-    "title": "歡迎使用 NeoBox",
-    "subtitle": "讓我們一起開始",
-    "step": "步驟",
-    "steps": {
-      "language": {
-        "title": "選擇您的語言",
-        "description": "請選擇您偏好的語言"
-      },
-      "theme": {
-        "title": "選擇您的主題",
-        "description": "選擇您喜歡的介面主題",
-        "light": "淺色",
-        "dark": "深色"
-      },
-      "complete": {
-        "title": "一切就緒！",
-        "description": "您已經完成了所有設定，現在開始使用 NeoBox 吧！",
-        "button": "開始使用"
-      }
-    }
   },
   "sidebar": {
     "home": "首頁",
@@ -764,27 +742,6 @@
     "version": "版本",
     "noDetail": "暫無詳細資訊"
   },
-  "floatingNav": {
-    "title": "懸浮導航框",
-    "enable": "啟用懸浮框",
-    "settings": "設定",
-    "displayText": "顯示文字",
-    "width": "寬度",
-    "height": "高度",
-    "opacity": "透明度",
-    "applySettings": "套用設定",
-    "preview": "預覽",
-    "previewNote": "預覽效果（實際懸浮框位於顯示器頂部中央）",
-    "enabled": "懸浮導航已啟用",
-    "disabled": "懸浮導航已關閉",
-    "settingsApplied": "設定已套用",
-    "error": "操作失敗",
-    "tip": "懸浮導航框會在顯示器頂部中央顯示，始終保持在所有視窗最上層。可以透過調整透明度來控制其對其他應用的影響程度。",
-    "displayContent": "顯示內容",
-    "cpuUsage": "CPU佔用",
-    "gpuTemp": "GPU溫度",
-    "gpuUsage": "GPU佔用"
-  },
   "hardwareReport": {
     "export": "匯出報告",
     "selectPath": "選擇匯出位置",
@@ -838,22 +795,6 @@
     "resetPosition": "恢復預設",
     "positionReset": "位置已恢復預設",
     "positionResetFailed": "重置位置失敗"
-  },
-  "musicPlayer": {
-    "title": "鼠鼠音樂",
-    "play": "播放",
-    "pause": "暫停",
-    "previous": "上一首",
-    "next": "下一首",
-    "modeList": "列表循環",
-    "modeShuffle": "隨機播放",
-    "modeOne": "單曲循環",
-    "mute": "靜音",
-    "unmute": "取消靜音",
-    "playlist": "播放列表",
-    "noTrack": "未選擇歌曲",
-    "empty": "暫無音樂檔案，請將 MP3 檔案放入",
-    "minimize": "最小化"
   },
   "builtinTools": {
     "title": "內建工具",
@@ -1293,17 +1234,6 @@
       "optimization": "優化"
     }
   },
-  "gpuDriverRestart": {
-    "pageTitle": "重啟顯示卡驅動",
-    "pageDesc": "停用全部顯示卡驅動後自動重新啟用（比 Win+Ctrl+Shift+B 更徹底，需管理員權限）",
-    "detailDesc": "點擊按鈕將停用系統全部顯示介面卡，等待數秒後自動重新啟用，實現顯示卡驅動的完整卸載與重載。螢幕會短暫黑屏，數秒後恢復正常。此功能需要管理員權限。",
-    "restartBtn": "重啟顯示卡驅動",
-    "success": "顯示卡驅動已停用並重新啟用，螢幕可能短暫黑屏",
-    "error": "重啟顯示卡驅動失敗",
-    "waiting": "正在停用並重新啟用顯示卡驅動，請稍候...",
-    "warningTitle": "請注意",
-    "warningDesc": "此操作會先停用全部顯示卡驅動，再自動重新啟用。過程中螢幕會短暫黑屏數秒，請先確認沒有正在進行的重要操作（如遊戲、檔案編輯等）。若重新啟用失敗，可能需要重新開機恢復顯示。此功能適用於顯示卡顯示異常、花屏、卡頓及顯示卡改名後生效等情形，僅限 Windows 系統使用，且需要管理員權限。"
-  },
   "closeDialog": {
     "title": "關閉確認",
     "message": "您希望如何關閉應用？",
@@ -1366,61 +1296,6 @@
     "defragStarted": "已在背景開始碎片整理，可繼續正常使用電腦",
     "optimizeDone": "最佳化(TRIM)完成",
     "optimizeFailed": "磁碟整理失敗"
-  },
-  "screenRecord": {
-    "title": "螢幕錄製",
-    "description": "硬體加速螢幕錄製，支援高幀率擷取",
-    "loading": "載入中...",
-    "previewWaiting": "等待錄製開始...",
-    "recording": "錄製中",
-    "idle": "待機",
-    "openPreview": "開啟預覽視窗",
-    "closePreview": "關閉預覽",
-    "settings": {
-      "title": "錄製設定",
-      "source": "擷取來源",
-      "display": "顯示器",
-      "window": "視窗",
-      "windowSrc": "應用視窗",
-      "fps": "幀率",
-      "resolution": "解析度",
-      "original": "原始",
-      "bitrate": "位元率",
-      "codec": "編碼器",
-      "container": "格式",
-      "captureCursor": "擷取游標",
-      "savePath": "儲存路徑",
-      "selectPath": "選擇儲存位置"
-    },
-    "controls": {
-      "start": "開始錄製",
-      "stop": "停止錄製",
-      "recording": "錄製中",
-      "paused": "已暫停"
-    },
-    "stats": {
-      "title": "錄製統計",
-      "lastRecording": "上次錄製",
-      "elapsed": "已錄製時長",
-      "targetFps": "目標幀率",
-      "captureFps": "擷取幀率",
-      "outputFps": "輸出幀率",
-      "droppedFrames": "丟幀數",
-      "totalFrames": "總幀數",
-      "fileSize": "檔案大小",
-      "currentBitrate": "目前位元率"
-    },
-    "warnings": {
-      "refreshRateLow": "顯示器更新率 ({{hz}}Hz) 低於目標幀率 ({{fps}}fps)，將透過補幀達到目標幀率",
-      "noDisplayFound": "未找到可擷取的顯示器",
-      "savePathRequired": "請先選擇儲存路徑",
-      "encodingError": "編碼錯誤: {{message}}"
-    },
-    "messages": {
-      "recordingStarted": "錄製已開始",
-      "recordingStopped": "錄製已停止，檔案已儲存到: {{path}}",
-      "recordingError": "錄製出錯: {{message}}"
-    }
   },
   "audioEq": {
     "title": "EQ 調音",
@@ -1606,7 +1481,6 @@
     "andMore": "等 {{n}} 個",
     "scanning": "正在掃描錄製影片..."
   },
-  "filterDisabledDegraded": "濾鏡已關閉（降級清除：未能恢復原有色彩校正）",
   "imageConverter": {
     "title": "圖片轉換",
     "selectInput": "選擇圖片",

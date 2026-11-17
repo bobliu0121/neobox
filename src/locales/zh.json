@@ -2,7 +2,7 @@
   "common": {
     "appName": "NeoBox",
     "appFullName": "NeoBox",
-    "description": "跨平台性能监控（Tauri + Next.js + 传感器服务）",
+    "description": "Windows 桌面工具箱（Tauri + React + 传感器服务）",
     "close": "关闭",
     "cancel": "取消",
     "add": "添加",
@@ -11,28 +11,6 @@
   "view": {
     "grid": "网格视图",
     "list": "列表视图"
-  },
-  "onboarding": {
-    "title": "欢迎使用 NeoBox",
-    "subtitle": "让我们一起开始",
-    "step": "步骤",
-    "steps": {
-      "language": {
-        "title": "选择您的语言",
-        "description": "请选择您偏好的语言"
-      },
-      "theme": {
-        "title": "选择您的主题",
-        "description": "选择您喜欢的界面主题",
-        "light": "浅色",
-        "dark": "深色"
-      },
-      "complete": {
-        "title": "一切就绪！",
-        "description": "您已经完成了所有设置，现在开始使用 NeoBox 吧！",
-        "button": "开始使用"
-      }
-    }
   },
   "sidebar": {
     "home": "主页",
@@ -626,27 +604,6 @@
     "copyFailed": "复制失败",
     "noData": "暂无硬件信息"
   },
-  "floatingNav": {
-    "title": "悬浮导航框",
-    "enable": "启用悬浮框",
-    "settings": "设置",
-    "displayText": "显示文本",
-    "width": "宽度",
-    "height": "高度",
-    "opacity": "透明度",
-    "applySettings": "应用设置",
-    "preview": "预览",
-    "previewNote": "预览效果（实际悬浮框位于显示器顶部中央）",
-    "enabled": "悬浮导航已启用",
-    "disabled": "悬浮导航已关闭",
-    "settingsApplied": "设置已应用",
-    "error": "操作失败",
-    "tip": "悬浮导航框会在显示器顶部中央显示，始终保持在所有窗口最上层。可以通过调整透明度来控制其对其他应用的影响程度。",
-    "displayContent": "显示内容",
-    "cpuUsage": "CPU占用",
-    "gpuTemp": "GPU温度",
-    "gpuUsage": "GPU占用"
-  },
   "hardwareReport": {
     "export": "导出报告",
     "selectPath": "选择导出位置",
@@ -700,22 +657,6 @@
     "resetPosition": "恢复默认",
     "positionReset": "位置已恢复默认",
     "positionResetFailed": "重置位置失败"
-  },
-  "musicPlayer": {
-    "title": "鼠鼠音乐",
-    "play": "播放",
-    "pause": "暂停",
-    "previous": "上一首",
-    "next": "下一首",
-    "modeList": "列表循环",
-    "modeShuffle": "随机播放",
-    "modeOne": "单曲循环",
-    "mute": "静音",
-    "unmute": "取消静音",
-    "playlist": "播放列表",
-    "noTrack": "未选择歌曲",
-    "empty": "暂无音乐文件，请将 MP3 文件放入",
-    "minimize": "最小化"
   },
   "builtinTools": {
     "title": "内置工具",
@@ -1891,17 +1832,6 @@
     },
     "checking": "正在检查状态..."
   },
-  "gpuDriverRestart": {
-    "pageTitle": "重启显卡驱动",
-    "pageDesc": "禁用全部显卡驱动后自动重新启用（比 Win+Ctrl+Shift+B 更彻底，需管理员权限）",
-    "detailDesc": "点击按钮将禁用系统全部显示适配器，等待数秒后自动重新启用，实现显卡驱动的完整卸载与重载。屏幕会短暂黑屏，数秒后恢复正常。此功能需要管理员权限。",
-    "restartBtn": "重启显卡驱动",
-    "success": "显卡驱动已禁用并重新启用，屏幕可能短暂黑屏",
-    "error": "重启显卡驱动失败",
-    "waiting": "正在禁用并重新启用显卡驱动，请稍候...",
-    "warningTitle": "请注意",
-    "warningDesc": "此操作会先禁用全部显卡驱动，再自动重新启用。过程中屏幕会短暂黑屏数秒，请先确认没有正在进行的重要操作（如文件编辑等）。若重新启用失败，可能需要重启电脑恢复显示。此功能适用于显卡显示异常、花屏、卡顿及显卡改名后生效等情形，仅限 Windows 系统使用，且需要管理员权限。"
-  },
   "networkOptimize": {
     "pageTitle": "网络优化",
     "pageDesc": "优化网络参数，配置 DNS 提升解析速度",
@@ -2283,61 +2213,6 @@
     "optimizeDone": "优化(TRIM)完成",
     "optimizeFailed": "磁盘整理失败"
   },
-  "screenRecord": {
-    "title": "屏幕录制",
-    "description": "硬件加速屏幕录制，支持高帧率捕获",
-    "loading": "加载中...",
-    "previewWaiting": "等待录制开始...",
-    "recording": "录制中",
-    "idle": "待机",
-    "openPreview": "打开预览窗口",
-    "closePreview": "关闭预览",
-    "settings": {
-      "title": "录制设置",
-      "source": "采集源",
-      "display": "显示器",
-      "window": "窗口",
-      "windowSrc": "应用窗口",
-      "fps": "帧率",
-      "resolution": "分辨率",
-      "original": "原始",
-      "bitrate": "码率",
-      "codec": "编码器",
-      "container": "格式",
-      "captureCursor": "采集光标",
-      "savePath": "保存路径",
-      "selectPath": "选择保存位置"
-    },
-    "controls": {
-      "start": "开始录制",
-      "stop": "停止录制",
-      "recording": "录制中",
-      "paused": "已暂停"
-    },
-    "stats": {
-      "title": "录制统计",
-      "lastRecording": "上次录制",
-      "elapsed": "已录制时长",
-      "targetFps": "目标帧率",
-      "captureFps": "采集帧率",
-      "outputFps": "输出帧率",
-      "droppedFrames": "丢帧数",
-      "totalFrames": "总帧数",
-      "fileSize": "文件大小",
-      "currentBitrate": "当前码率"
-    },
-    "warnings": {
-      "refreshRateLow": "显示器刷新率 ({{hz}}Hz) 低于目标帧率 ({{fps}}fps)，将通过补帧达到目标帧率",
-      "noDisplayFound": "未找到可采集的显示器",
-      "savePathRequired": "请先选择保存路径",
-      "encodingError": "编码错误: {{message}}"
-    },
-    "messages": {
-      "recordingStarted": "录制已开始",
-      "recordingStopped": "录制已停止，文件已保存到: {{path}}",
-      "recordingError": "录制出错: {{message}}"
-    }
-  },
   "audioEq": {
     "title": "EQ 调音",
     "virtualSoundCard": "虚拟声卡",
@@ -2469,7 +2344,6 @@
     "andMore": "等 {{n}} 个",
     "scanning": "正在扫描录制视频..."
   },
-  "filterDisabledDegraded": "滤镜已关闭（降级清除：未能恢复原有校色）",
   "imageConverter": {
     "title": "图片转换",
     "selectInput": "选择图片",
