@@ -30,6 +30,7 @@ mod feature_flags;
 mod hotkey;
 mod main_window;
 mod matroska;
+pub mod nbmusic;
 mod media_keys;
 mod music;
 mod network_optimize;
@@ -614,6 +615,10 @@ pub fn run() {
         music::get_local_lyric,
         music::verify_local_covers,
         music::delete_cover_cache_files,
+        nbmusic::mux_nbmusic,
+        nbmusic::probe_nbmusic,
+        nbmusic::load_nbmusic_project,
+        nbmusic::parse_nbmusic_subtitle,
         // === 音乐播放器 API ===
         music_api::music_search,
         music_api::music_song_url,

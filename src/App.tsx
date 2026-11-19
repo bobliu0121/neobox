@@ -53,6 +53,7 @@ import {
   AudioSpeedPage,
   VideoConverterPage,
   MkaMuxerPage,
+  NbmusicEditorPage,
   CorruptFilePage,
   BilibiliDownloadPage,
   MusicPage,
@@ -545,6 +546,12 @@ function App() {
                     path="/mka-muxer"
                     element={
                       <MkaMuxerPage />
+                    }
+                  />
+                  <Route
+                    path="/nbmusic-editor"
+                    element={
+                      <NbmusicEditorPage />
                     }
                   />
                   <Route

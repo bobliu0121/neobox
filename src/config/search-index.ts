@@ -194,6 +194,14 @@ export const searchIndex: SearchItem[] = [
     keywords: ["mka", "matroska", "合成", "封装", "字幕", "封面", "音频"],
   },
   {
+    id: "nbmusic-editor",
+    nameKey: "sidebar.nbmusicEditor",
+    path: "/nbmusic-editor",
+    icon: Music,
+    category: "builtin-tool",
+    keywords: ["nbmusic", "neobox", "合成", "编辑", "字幕", "多声道", "封面", "字体", "高潮"],
+  },
+  {
     id: "memory-limit",
     nameKey: "optimization.memoryLimit.title",
     path: "/optimize/memory-limit",

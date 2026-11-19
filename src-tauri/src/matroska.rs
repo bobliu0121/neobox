@@ -145,19 +145,19 @@ fn concat(parts: &[Vec<u8>]) -> Vec<u8> {
 
 // ─────────────────────────── 音轨数据结构 ───────────────────────────
 
-struct AudioFrame {
-    ts_ms: u64,
-    dur_ms: u64,
-    data: Vec<u8>,
+pub(crate) struct AudioFrame {
+    pub(crate) ts_ms: u64,
+    pub(crate) dur_ms: u64,
+    pub(crate) data: Vec<u8>,
 }
 
-struct MuxAudio {
-    codec_id: String,
-    codec_private: Vec<u8>,
-    sample_rate: f64,
-    channels: u64,
-    default_duration_ns: u64,
-    frames: Vec<AudioFrame>,
+pub(crate) struct MuxAudio {
+    pub(crate) codec_id: String,
+    pub(crate) codec_private: Vec<u8>,
+    pub(crate) sample_rate: f64,
+    pub(crate) channels: u64,
+    pub(crate) default_duration_ns: u64,
+    pub(crate) frames: Vec<AudioFrame>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +165,25 @@ pub struct SubtitleEvent {
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
+}
+
+/// 供 `.nbmusic` 编辑页导入外部字幕使用的结构化事件。
+/// `text` 是去掉 ASS 覆盖标签、HTML 标签后的可见文本；
+/// `chars` 是 ASS 卡拉 OK 标签（`\k` / `\kf` / `\ko` / `\K`）推导出的逐字时间片。
+#[derive(Debug, Clone)]
+pub(crate) struct SubtitleImportEvent {
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+    pub(crate) text: String,
+    pub(crate) chars: Vec<SubtitleImportChar>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubtitleImportChar {
+    pub(crate) text: String,
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+    pub(crate) mode: Option<String>,
 }
 
 struct MuxSubtitle {
@@ -393,7 +412,7 @@ fn temp_path(suffix: &str) -> PathBuf {
 }
 
 /// 读取任意音频并准备为 Matroska 可写入的帧序列
-fn prepare_audio(path: &str) -> Result<MuxAudio, String> {
+pub(crate) fn prepare_audio(path: &str) -> Result<MuxAudio, String> {
     let ext = extension_of(path);
     let data = std::fs::read(path).map_err(|e| format!("读取音频失败: {e}"))?;
 
@@ -734,6 +753,234 @@ fn prepare_subtitle(path: &str) -> Result<MuxSubtitle, String> {
     })
 }
 
+/// 解析 ASS 覆盖块里的卡拉 OK 标签，返回（持续时间 ms，模式）。
+/// `\kf` / `\K` 是渐进填充（linear），`\k` / `\ko` 是到点切换（step）。
+fn parse_ass_karaoke_tags(block: &str) -> Vec<(u64, &'static str)> {
+    let mut out = Vec::new();
+    let bytes = block.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let name_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_alphabetic() {
+            index += 1;
+        }
+        let name = &block[name_start..index];
+        let lower = name.to_ascii_lowercase();
+        let is_karaoke = lower == "k" || lower == "kf" || lower == "ko" || name == "K";
+        let value_start = index;
+        if index < bytes.len() && bytes[index] == b'-' {
+            index += 1;
+        }
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if !is_karaoke {
+            continue;
+        }
+        let Ok(value) = block[value_start..index].parse::<u64>() else {
+            continue;
+        };
+        let mode = if name == "K" || lower == "kf" {
+            "linear"
+        } else {
+            "step"
+        };
+        out.push((value.saturating_mul(10), mode));
+    }
+    out
+}
+
+/// 解码 ASS 文本片段里的 `\N` / `\n` / `\h`。
+fn decode_ass_text_chunk(raw: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('N') | Some('n') => out.push('\n'),
+            Some('h') => out.push(' '),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// 把一条 ASS Dialogue 的 Text 字段拆成可见文本与逐字时间片。
+/// 如果首个 `\k` 标签之前存在无时间的文本，则只返回文本、不生成 chars，避免伪造进度。
+fn parse_ass_karaoke_text(
+    raw: &str,
+    start_ms: u64,
+    end_ms: u64,
+) -> (String, Vec<SubtitleImportChar>) {
+    let mut plain = String::new();
+    let mut spans: Vec<SubtitleImportChar> = Vec::new();
+    let mut active: Option<usize> = None;
+    let mut cursor = start_ms;
+    let mut saw_karaoke = false;
+    let mut has_untimed_text = false;
+    let mut pos = 0usize;
+
+    while pos < raw.len() {
+        if raw.as_bytes()[pos] == b'{' {
+            if let Some(close) = raw[pos + 1..].find('}') {
+                let block = &raw[pos + 1..pos + 1 + close];
+                for (duration_ms, mode) in parse_ass_karaoke_tags(block) {
+                    saw_karaoke = true;
+                    if let Some(index) = active {
+                        spans[index].end_ms = cursor.min(end_ms);
+                    }
+                    let span_start = cursor.min(end_ms);
+                    cursor = cursor.saturating_add(duration_ms);
+                    spans.push(SubtitleImportChar {
+                        text: String::new(),
+                        start_ms: span_start,
+                        end_ms: cursor.min(end_ms),
+                        mode: Some(mode.to_string()),
+                    });
+                    active = Some(spans.len() - 1);
+                }
+                pos = pos + 1 + close + 1;
+                continue;
+            }
+            plain.push('{');
+            pos += 1;
+            continue;
+        }
+
+        let next = raw[pos..]
+            .find('{')
+            .map(|offset| pos + offset)
+            .unwrap_or(raw.len());
+        let chunk = decode_ass_text_chunk(&raw[pos..next]);
+        if !chunk.is_empty() {
+            plain.push_str(&chunk);
+            match active {
+                Some(index) => spans[index].text.push_str(&chunk),
+                None => {
+                    if !chunk.is_empty() {
+                        has_untimed_text = true;
+                    }
+                }
+            }
+        }
+        pos = next;
+    }
+
+    if let Some(index) = active {
+        // 最后一片的 end_ms 已由标签时长决定；这里只确保不小于 start。
+        if spans[index].end_ms < spans[index].start_ms {
+            spans[index].end_ms = spans[index].start_ms;
+        }
+    }
+
+    if !saw_karaoke || has_untimed_text {
+        return (plain, Vec::new());
+    }
+
+    let chars = spans
+        .into_iter()
+        .filter(|span| !span.text.is_empty())
+        .collect();
+    (plain, chars)
+}
+
+/// 去掉 SRT / WebVTT 里的 HTML / VTT 标签，保留可见文本。
+fn clean_subtitle_markup(raw: &str) -> String {
+    let mut out = String::new();
+    let mut in_angle = false;
+    let mut in_brace = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' if !in_brace => in_angle = true,
+            '>' if in_angle => in_angle = false,
+            '{' if !in_angle => in_brace = true,
+            '}' if in_brace => in_brace = false,
+            _ if !in_angle && !in_brace => out.push(ch),
+            _ => {}
+        }
+    }
+    decode_ass_text_chunk(&out)
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+}
+
+/// 供 NBMusic 编辑页导入外部字幕使用：
+/// - ASS/SSA：可见文本 + `\k` / `\kf` / `\ko` / `\K` 逐字时间片；
+/// - VTT/SRT：清理标签后的可见文本，行级时间戳。
+pub(crate) fn parse_subtitle_import_events(path: &str) -> Result<Vec<SubtitleImportEvent>, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| format!("读取字幕失败: {e}"))?;
+    let ext = extension_of(path);
+    let is_ass = ext == "ass" || ext == "ssa" || content.contains("[Script Info]");
+
+    if is_ass {
+        let (_header, events, _is_ssa) = parse_ass(&content)?;
+        let mut out = Vec::new();
+        for event in events {
+            let text = event
+                .format_fields
+                .iter()
+                .position(|field| field.eq_ignore_ascii_case("Text"))
+                .and_then(|index| event.fields.get(index))
+                .cloned()
+                .unwrap_or_default();
+            let (plain, chars) = parse_ass_karaoke_text(&text, event.start_ms, event.end_ms);
+            if plain.trim().is_empty() {
+                continue;
+            }
+            out.push(SubtitleImportEvent {
+                start_ms: event.start_ms,
+                end_ms: event.end_ms,
+                text: plain,
+                chars,
+            });
+        }
+        out.sort_by_key(|event| event.start_ms);
+        if out.is_empty() {
+            return Err("ASS/SSA 字幕中没有可导入的台词".to_string());
+        }
+        return Ok(out);
+    }
+
+    let events = if ext == "vtt" || content.trim_start().starts_with("WEBVTT") {
+        parse_vtt(&content)
+    } else {
+        parse_srt(&content)
+    };
+    let mut out = Vec::new();
+    for event in events {
+        let text = clean_subtitle_markup(&event.text);
+        if text.trim().is_empty() {
+            continue;
+        }
+        out.push(SubtitleImportEvent {
+            start_ms: event.start_ms,
+            end_ms: event.end_ms,
+            text,
+            chars: Vec::new(),
+        });
+    }
+    if out.is_empty() {
+        return Err("字幕文件为空或格式无法识别".to_string());
+    }
+    Ok(out)
+}
+
 // ─────────────────────────── 封面 ───────────────────────────
 
 fn detect_image_type(data: &[u8]) -> Option<(&'static str, &'static str)> {
@@ -1009,7 +1256,7 @@ pub fn mux_mka(options: &MuxOptions) -> Result<MuxResult, String> {
 
 // ─────────────────────────── MKA 读取 ───────────────────────────
 
-fn read_vint_id(buf: &[u8], pos: &mut usize) -> Result<u32, String> {
+pub(crate) fn read_vint_id(buf: &[u8], pos: &mut usize) -> Result<u32, String> {
     if *pos >= buf.len() {
         return Err("EBML 数据意外结束".to_string());
     }
@@ -1026,7 +1273,7 @@ fn read_vint_id(buf: &[u8], pos: &mut usize) -> Result<u32, String> {
     Ok(id)
 }
 
-fn read_vint_size(buf: &[u8], pos: &mut usize) -> Result<Option<u64>, String> {
+pub(crate) fn read_vint_size(buf: &[u8], pos: &mut usize) -> Result<Option<u64>, String> {
     if *pos >= buf.len() {
         return Err("EBML 数据意外结束".to_string());
     }
@@ -1051,11 +1298,11 @@ fn read_vint_size(buf: &[u8], pos: &mut usize) -> Result<Option<u64>, String> {
     Ok(if all_ones { None } else { Some(value) })
 }
 
-fn read_uint(buf: &[u8]) -> u64 {
+pub(crate) fn read_uint(buf: &[u8]) -> u64 {
     buf.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64)
 }
 
-fn read_float(buf: &[u8]) -> f64 {
+pub(crate) fn read_float(buf: &[u8]) -> f64 {
     match buf.len() {
         4 => {
             let mut bytes = [0u8; 4];
@@ -1158,7 +1405,7 @@ fn parse_track_entry(body: &[u8]) -> Option<ParsedTrack> {
     Some(track)
 }
 
-fn parse_block_payload<'a>(payload: &'a [u8], cluster_ts: u64) -> Option<(u64, u64, u8, &'a [u8])> {
+pub(crate) fn parse_block_payload<'a>(payload: &'a [u8], cluster_ts: u64) -> Option<(u64, u64, u8, &'a [u8])> {
     if payload.len() < 4 {
         return None;
     }
@@ -1789,6 +2036,78 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].start_ms, 1000);
         assert_eq!(events[0].end_ms, 2500);
+    }
+
+    #[test]
+    fn ass_karaoke_progress() {
+        let raw = r"{\kf32}徐{\kf32}徐{\kf32}放{\kf32}学";
+        let (text, chars) = parse_ass_karaoke_text(raw, 1000, 2280);
+        assert_eq!(text, "徐徐放学");
+        assert_eq!(chars.len(), 4);
+        assert_eq!(chars[0].text, "徐");
+        assert_eq!(chars[0].start_ms, 1000);
+        assert_eq!(chars[0].end_ms, 1320);
+        assert_eq!(chars[0].mode.as_deref(), Some("linear"));
+        assert_eq!(chars[3].end_ms, 2280);
+    }
+
+    #[test]
+    fn ass_karaoke_step_and_extra_tags() {
+        let raw = r"{\k50\pos(960,900)}月{\k50}亮";
+        let (text, chars) = parse_ass_karaoke_text(raw, 0, 1000);
+        assert_eq!(text, "月亮");
+        assert_eq!(chars.len(), 2);
+        assert_eq!(chars[0].start_ms, 0);
+        assert_eq!(chars[0].end_ms, 500);
+        assert_eq!(chars[1].start_ms, 500);
+        assert_eq!(chars[1].end_ms, 1000);
+        assert_eq!(chars[0].mode.as_deref(), Some("step"));
+    }
+
+    #[test]
+    fn ass_karaoke_keeps_untimed_leading_text_out_of_chars() {
+        let raw = r"前缀{\kf32}徐{\kf32}徐";
+        let (text, chars) = parse_ass_karaoke_text(raw, 0, 640);
+        assert_eq!(text, "前缀徐徐");
+        assert!(chars.is_empty());
+    }
+
+    #[test]
+    fn vtt_markup_is_stripped() {
+        assert_eq!(
+            clean_subtitle_markup("<v Speaker>Hello &amp; <i>world</i></v>"),
+            "Hello & world"
+        );
+    }
+
+    #[test]
+    fn ass_karaoke_fixture_counts() {
+        let Ok(path) = std::env::var("NEOBOX_ASS_FIXTURE") else {
+            return;
+        };
+        let events = parse_subtitle_import_events(&path).unwrap();
+        assert_eq!(events.len(), 45);
+        assert_eq!(events[0].text, "徐徐放学铃响三遍");
+        assert_eq!(events[0].chars.len(), 8);
+        for event in &events {
+            let joined = event
+                .chars
+                .iter()
+                .map(|ch| ch.text.as_str())
+                .collect::<String>();
+            if !event.chars.is_empty() {
+                assert_eq!(joined, event.text);
+            }
+            for ch in &event.chars {
+                assert!(ch.start_ms >= event.start_ms);
+                assert!(ch.end_ms <= event.end_ms);
+                assert!(ch.end_ms >= ch.start_ms);
+            }
+            assert!(event
+                .chars
+                .windows(2)
+                .all(|pair| pair[0].end_ms <= pair[1].start_ms));
+        }
     }
 
     #[test]

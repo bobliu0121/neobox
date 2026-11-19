@@ -4726,7 +4726,7 @@ setPlaylistKeyword("");
         filters: [
           {
             name: "音频文件",
-            extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka"],
+            extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka", "nbmusic"],
           },
         ],
       });
@@ -4802,7 +4802,7 @@ setPlaylistKeyword("");
       let imported = 0;
       if (files.length > 0) {
         const audios = files.filter((path) =>
-          /\.(mp3|wav|ogg|m4a|flac|aac|opus|wma|aiff|ape|oga|mka)$/i.test(path)
+          /\.(mp3|wav|ogg|m4a|flac|aac|opus|wma|aiff|ape|oga|mka|nbmusic)$/i.test(path)
         );
         if (audios.length > 0) {
           const result = await storeActions.importLocalSongs(audios);

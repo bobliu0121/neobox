@@ -136,6 +136,25 @@ fn extract_song_cover(
     let mut cover_path = String::new();
     let mut cover_source = "none".to_string();
 
+    // NBMusic 的封面在 Matroska Attachments 中，lofty 不可靠，且不应回退到同目录图片。
+    let is_nbmusic = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("nbmusic"))
+        .unwrap_or(false);
+    if is_nbmusic {
+        if let Some(cache_dir) = cache_dir {
+            if let Some(cover) = crate::nbmusic::extract_cover_to_cache(
+                &path.to_string_lossy(),
+                cache_dir,
+                id,
+            ) {
+                return (cover, "embedded".to_string());
+            }
+        }
+        return (cover_path, cover_source);
+    }
+
     // 1. 内嵌封面：遍历所有标签中的所有内嵌图片，取第一张压缩后写入封面缓存。
     // 注意：必须先压缩再判结果——高清内嵌封面（无损 FLAC 常见 >1MB）压缩后仅数十 KB，
     // 若先按原始字节拦截会导致大封面全部丢失（历史上 >1MB 封面不显示即此因）。
@@ -232,8 +251,8 @@ fn read_audio_metadata(
 }
 
 /// 支持的本地音频扩展名
-pub const SUPPORTED_AUDIO_EXTENSIONS: [&str; 12] = [
-    "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka",
+pub const SUPPORTED_AUDIO_EXTENSIONS: [&str; 13] = [
+    "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka", "nbmusic",
 ];
 
 /// 检查某个扩展名是否受支持（传入时已去掉点号并小写）
@@ -385,7 +404,7 @@ pub async fn get_music_files() -> Result<Vec<MusicFile>, String> {
     Ok(files)
 }
 
-/// MKA 播放缓存键：路径 + 大小 + 修改时间，文件变化后自动失效。
+/// Matroska 系容器（MKA / NBMusic）播放缓存键：路径 + 大小 + 修改时间，文件变化后自动失效。
 fn playback_cache_key(path: &Path, id: &str) -> String {
     let size = std::fs::metadata(path)
         .map(|meta| meta.len())
@@ -396,7 +415,40 @@ fn playback_cache_key(path: &Path, id: &str) -> String {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
-    format!("{:016x}", stable_hash(&format!("{id}|{size}|{mtime}|mka")))
+    let kind = if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("nbmusic"))
+        .unwrap_or(false)
+    {
+        "nbmusic"
+    } else {
+        "mka"
+    };
+    format!("{:016x}", stable_hash(&format!("{id}|{size}|{mtime}|{kind}")))
+}
+
+/// 从 Matroska 系容器中解出可播放音频：MKA → matroska，NBMusic → nbmusic。
+fn extract_container_audio(
+    extension: &str,
+    raw_path: &str,
+    play_dir: &Path,
+    cache_key: &str,
+) -> Result<(String, Option<String>, u64), String> {
+    if extension == "nbmusic" {
+        crate::nbmusic::extract_playable_audio(raw_path, play_dir, cache_key)
+    } else {
+        crate::matroska::extract_playable_audio(raw_path, play_dir, cache_key)
+    }
+}
+
+/// 从 Matroska 系容器读取内嵌字幕并转为 LRC。
+fn container_lyric_from_path(extension: &str, path: &str) -> Result<String, String> {
+    if extension == "nbmusic" {
+        crate::nbmusic::subtitle_lrc_from_path(path)
+    } else {
+        crate::matroska::subtitle_lrc_from_path(path)
+    }
 }
 
 /// 读取单个音频文件的元信息并组装成 LocalSongInfo（供并行导入使用）。
@@ -444,19 +496,38 @@ fn build_local_song_info(
     };
 
     // 读取内嵌元数据（标题/艺术家/专辑/时长/封面）
-    let (title, artist, album, mut duration_ms, mut cover_path, mut cover_source) =
+    let (mut title, mut artist, mut album, mut duration_ms, mut cover_path, mut cover_source) =
         read_audio_metadata(path, folder_cover_cache, cache_dir, &id);
 
-    // MKA：Matroska 容器无法被 WebView 直接播放，也不被 lofty 识别；
+    // MKA / NBMusic：Matroska 系列容器无法被 WebView 直接播放，也不被 lofty 识别；
     // 解封装出音轨写入缓存，播放时使用缓存文件。
     let mut play_path = raw_path.to_string();
     let mut has_lyric = find_local_lyric_path(path).is_some();
-    if extension == "mka" {
+    if extension == "mka" || extension == "nbmusic" {
         // lofty 对 Matroska 的 pictures() 不可靠：读不到内嵌 cover 时会错误地
-        // 走文件夹兜底，把同目录下的图片当成封面。对于 mka 一律清空 lofty 结果，
-        // 只信任 demux_mka 直接解析 Attachments 的结果。
+        // 走文件夹兜底，把同目录下的图片当成封面。对于这类容器一律清空 lofty 结果，
+        // 只信任自己的 demux / probe 结果。
         cover_path.clear();
         cover_source.clear();
+
+        if extension == "nbmusic" {
+            if let Ok((nb_title, nb_artist, nb_album, nb_duration)) =
+                crate::nbmusic::read_basic_metadata(raw_path)
+            {
+                if title.trim().is_empty() {
+                    title = nb_title;
+                }
+                if artist.trim().is_empty() {
+                    artist = nb_artist;
+                }
+                if album.trim().is_empty() {
+                    album = nb_album;
+                }
+                if duration_ms == 0 {
+                    duration_ms = nb_duration;
+                }
+            }
+        }
 
         if let Some(play_dir) = play_cache_dir {
             let cache_key = playback_cache_key(path, &id);
@@ -474,8 +545,7 @@ fn build_local_song_info(
                     if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
                         has_lyric = true;
                     }
-                    // 缓存封面来自 MKA demux；若封面缓存文件缺失（旧版本遗留），
-                    // 重新解封装一次以提取封面。
+                    // 缓存封面可能因清理工具缺失，重新解封装一次以提取封面。
                     let mut cover_found = false;
                     for ext in ["jpg", "png", "webp", "gif"] {
                         let candidate = play_dir.join(format!("{cache_key}_cover.{ext}"));
@@ -487,38 +557,41 @@ fn build_local_song_info(
                         }
                     }
                     if !cover_found {
-                        match crate::matroska::extract_playable_audio(raw_path, play_dir, &cache_key) {
-                            Ok((_, mka_cover, mka_duration)) => {
-                                if duration_ms == 0 && mka_duration > 0 {
-                                    duration_ms = mka_duration;
+                        match extract_container_audio(&extension, raw_path, play_dir, &cache_key) {
+                            Ok((_, container_cover, container_duration)) => {
+                                if duration_ms == 0 && container_duration > 0 {
+                                    duration_ms = container_duration;
                                 }
-                                if let Some(mka_cover) = mka_cover {
-                                    cover_path = mka_cover;
+                                if let Some(container_cover) = container_cover {
+                                    cover_path = container_cover;
                                     cover_source = "embedded".to_string();
                                 }
                             }
                             Err(error) => {
-                                log::warn!("[Music] 重新提取 MKA 封面失败 {}: {error}", path.display());
+                                log::warn!(
+                                    "[Music] 重新提取容器封面失败 {}: {error}",
+                                    path.display()
+                                );
                             }
                         }
                     }
                 }
-                None => match crate::matroska::extract_playable_audio(raw_path, play_dir, &cache_key) {
-                    Ok((cached_path, mka_cover, mka_duration)) => {
+                None => match extract_container_audio(&extension, raw_path, play_dir, &cache_key) {
+                    Ok((cached_path, container_cover, container_duration)) => {
                         play_path = cached_path;
                         if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
                             has_lyric = true;
                         }
-                        if duration_ms == 0 && mka_duration > 0 {
-                            duration_ms = mka_duration;
+                        if duration_ms == 0 && container_duration > 0 {
+                            duration_ms = container_duration;
                         }
-                        if let Some(mka_cover) = mka_cover {
-                            cover_path = mka_cover;
+                        if let Some(container_cover) = container_cover {
+                            cover_path = container_cover;
                             cover_source = "embedded".to_string();
                         }
                     }
                     Err(error) => {
-                        log::warn!("[Music] 解析 MKA 失败 {}: {error}", path.display());
+                        log::warn!("[Music] 解析容器失败 {}: {error}", path.display());
                     }
                 },
             }
@@ -689,11 +762,11 @@ pub async fn get_local_lyric(app: AppHandle, path: String) -> Result<String, Str
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
-    if extension != "mka" {
+    if extension != "mka" && extension != "nbmusic" {
         return Ok(String::new());
     }
 
-    // MKA：优先读取导入时写好的字幕 LRC 缓存，避免每次切歌都解析整个容器
+    // MKA / NBMusic：优先读取导入时写好的字幕 LRC 缓存，避免每次切歌都解析整个容器
     if let Ok(play_dir) = play_cache_dir(&app) {
         let id = std::fs::canonicalize(audio_path)
             .map(|path| path.to_string_lossy().to_string())
@@ -703,14 +776,14 @@ pub async fn get_local_lyric(app: AppHandle, path: String) -> Result<String, Str
         if cached_lrc.is_file() {
             return Ok(std::fs::read_to_string(&cached_lrc).unwrap_or_default());
         }
-        let lrc = crate::matroska::subtitle_lrc_from_path(&path)?;
+        let lrc = container_lyric_from_path(&extension, &path)?;
         if !lrc.is_empty() {
             let _ = std::fs::write(&cached_lrc, &lrc);
         }
         return Ok(lrc);
     }
 
-    crate::matroska::subtitle_lrc_from_path(&path)
+    container_lyric_from_path(&extension, &path)
 }
 
 /// 封面自愈检查请求项：id 为歌曲唯一标识（决定缓存文件名），path 为音频绝对路径，

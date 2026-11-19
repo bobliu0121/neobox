@@ -102,7 +102,7 @@ export const SEARCH_FILTER_PRESETS: SearchFilterPreset[] = [
   ),
   preset(
     "audio",
-    "mp3 flac wav aac ogg m4a wma ape opus aiff mid".split(" "),
+    "mp3 flac wav aac ogg m4a wma ape opus aiff mid mka nbmusic".split(" "),
   ),
   preset(
     "archives",
@@ -189,7 +189,7 @@ export function fileTypeOf(item: SearchItem): string {
   if (!ext) return "file";
   if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico", "tif", "tiff", "heic", "avif", "psd"].includes(ext)) return "image";
   if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts"].includes(ext)) return "video";
-  if (["mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "ape", "opus"].includes(ext)) return "audio";
+  if (["mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "ape", "opus", "mka", "nbmusic"].includes(ext)) return "audio";
   if (["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab", "zst"].includes(ext)) return "archive";
   if (["exe", "msi", "msix", "appx", "bat", "cmd", "com", "lnk"].includes(ext)) return "program";
   if (["rs", "ts", "tsx", "js", "jsx", "py", "java", "c", "cpp", "h", "cs", "go", "php", "html", "css", "json", "xml", "yml", "yaml", "toml", "sh", "ps1", "sql"].includes(ext)) return "code";
