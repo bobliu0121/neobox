@@ -124,12 +124,12 @@ function MainWindowEffects({ musicOnly = false }: { musicOnly?: boolean }) {
         console.warn("[OpenAudio] imported but song not found:", path);
         return;
       }
-      // 先进入音乐页并等待音频元素挂载，否则 playSong 会因 audioRef 为空直接返回
-      // MusicPage 现在是懒加载：先把 chunk 取回来再 navigate，避免「取 chunk + 挂载」两段耗时
-      // 把后面的 2 秒等待预算挤爆（冷启动机械盘上尤其明显）。
+      // 先进入音乐页并等待音频元素挂载，否则 playSong 会因 audioRef 为空直接返回。
+      // 纯播放器页和 MusicPage 都是懒加载，冷启动时给 10 秒预算，避免 chunk 还没挂载
+      // 就被 2 秒超时打断，表现为一直停在加载圈。
       void preloadMusicPage().catch(() => {});
       navigate("/music", { state: { expandPlayer: true } });
-      for (let i = 0; i < 40 && !useMusicStore.getState().audioRef; i += 1) {
+      for (let i = 0; i < 200 && !useMusicStore.getState().audioRef; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       await useMusicStore.getState().playSong(song, [song]);
