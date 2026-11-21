@@ -57,6 +57,7 @@ import {
   CorruptFilePage,
   BilibiliDownloadPage,
   MusicPage,
+  NbmusicPlayerPage,
   preloadMusicPage,
 } from "./routes/lazy-pages";
 import {
@@ -259,9 +260,9 @@ function App({ musicOnly = false }: { musicOnly?: boolean }) {
       <MusicProvider>
         <MainWindowEffects musicOnly />
         <MainLayout musicOnly>
-          <RouteErrorBoundary key="music-only" area="音乐模块">
+          <RouteErrorBoundary key="music-only" area="音乐播放器">
             <Suspense fallback={<RouteFallback />}>
-              <MusicPage />
+              <NbmusicPlayerPage />
             </Suspense>
           </RouteErrorBoundary>
         </MainLayout>

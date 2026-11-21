@@ -64,6 +64,7 @@ export const NbmusicEditorPage = lazy(() => import("@/pages/NbmusicEditorPage"))
 export const CorruptFilePage = lazy(() => import("@/pages/CorruptFilePage"));
 export const BilibiliDownloadPage = lazy(() => import("@/pages/BilibiliDownloadPage"));
 export const MusicPage = lazy(() => import("@/pages/MusicPage"));
+export const NbmusicPlayerPage = lazy(() => import("@/pages/NbmusicPlayerPage"));
 
 /**
  * 预取音乐页 chunk。

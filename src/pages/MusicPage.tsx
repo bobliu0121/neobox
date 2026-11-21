@@ -762,6 +762,8 @@ const CommentPanel = memo(function CommentPanel({
 // ═══════════════════════════════════════════════
 interface ExpandedPlayerProps {
   onClose: () => void;
+  /** 纯播放器模式：铺满窗口、隐藏左上角收起按钮，不能回到音乐搜索页。 */
+  playerOnly?: boolean;
 }
 
 /**
@@ -916,7 +918,7 @@ function CoverBleedLayer({ coverUrl, scrim }: { coverUrl: string; scrim: string 
   );
 }
 
-const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerProps) {
+export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly = false }: ExpandedPlayerProps) {
   const currentSong = useMusicStore((s) => s.currentSong);
   const isPlaying = useMusicStore((s) => s.isPlaying);
   const volume = useMusicStore((s) => s.volume);
@@ -1161,16 +1163,17 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
   if (!currentSong) return null;
 
   const isLiked = likedSongIds.has(currentSong.id);
+  const fillViewport = playerOnly || pageFullscreen;
 
   const playerEl = (
     <Box
-      position={pageFullscreen ? "fixed" : "absolute"}
+      position={fillViewport ? "fixed" : "absolute"}
       top={0}
       left={0}
       right={0}
       bottom={0}
-      pt={pageFullscreen ? "48px" : 0}
-      zIndex={pageFullscreen ? 950 : 9999}
+      pt={fillViewport ? "48px" : 0}
+      zIndex={fillViewport ? 950 : 9999}
       bg={isModern
         ? modernBgFinal
         : isCover
@@ -1183,9 +1186,9 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
                 ? "linear-gradient(160deg, #dfdfe2 0%, #d8d8dc 55%, #d1d1d6 100%)"
                 : bgColor}
       backdropFilter={isModern || isCover || isImmersive || isSpectrum || isVinyl ? "none" : "blur(20px)"}
-      borderRadius={pageFullscreen ? 0 : "xl"}
+      borderRadius={fillViewport ? 0 : "xl"}
       overflow="hidden"
-      boxShadow={pageFullscreen ? "none" : "xl"}
+      boxShadow={fillViewport ? "none" : "xl"}
       sx={{
         "@keyframes expandedPlayerSlideUp": {
           from: { transform: "translateY(100%)", opacity: 0 },
@@ -1244,44 +1247,46 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ onClose }: ExpandedPlayerP
           反复销毁/重建 WebGL context 导致切回无效果 */}
       <SpectrumScene audioRef={audioRef} isPlaying={isPlaying} coverColor={vividBg} active={isSpectrum} />
       {/* 顶部栏：关闭按钮 + 沉浸模式全屏按钮（光标无移动自动隐藏） */}
-      <HStack
-        justify="space-between"
-        p={4}
-        flexShrink={0}
-        position="relative"
-        zIndex={2}
-        opacity={uiHidden ? 0 : 1}
-        transform={uiHidden ? "translateY(-10px)" : "translateY(0)"}
-        pointerEvents={uiHidden ? "none" : "auto"}
-        visibility={uiHidden ? "hidden" : "visible"}
-        sx={{ transition: "opacity 0.35s ease, transform 0.35s ease, visibility 0.35s ease" }}
-      >
-        <HStack spacing={3}>
-          <Tooltip label="收起">
-            <IconButton
-              aria-label="Close"
-              icon={<ChevronDown size={24} />}
-              size="sm"
-              variant="ghost"
-              onClick={handleCloseWithAnimation}
-              sx={{ color: effectiveTextColor, _hover: { bg: effectiveHoverBg } }}
-            />
-          </Tooltip>
-          <Tooltip label={pageFullscreen ? "退出全屏" : "进入全屏"}>
-            <IconButton
-              aria-label="Fullscreen"
-              icon={pageFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
-              size="sm"
-              variant="ghost"
-              onClick={handleToggleFullscreen}
-              sx={{
-                color: pageFullscreen ? activeColor : effectiveTextColor,
-                _hover: { bg: effectiveHoverBg },
-              }}
-            />
-          </Tooltip>
+      {!playerOnly && (
+        <HStack
+          justify="space-between"
+          p={4}
+          flexShrink={0}
+          position="relative"
+          zIndex={2}
+          opacity={uiHidden ? 0 : 1}
+          transform={uiHidden ? "translateY(-10px)" : "translateY(0)"}
+          pointerEvents={uiHidden ? "none" : "auto"}
+          visibility={uiHidden ? "hidden" : "visible"}
+          sx={{ transition: "opacity 0.35s ease, transform 0.35s ease, visibility 0.35s ease" }}
+        >
+          <HStack spacing={3}>
+            <Tooltip label="收起">
+              <IconButton
+                aria-label="Close"
+                icon={<ChevronDown size={24} />}
+                size="sm"
+                variant="ghost"
+                onClick={handleCloseWithAnimation}
+                sx={{ color: effectiveTextColor, _hover: { bg: effectiveHoverBg } }}
+              />
+            </Tooltip>
+            <Tooltip label={pageFullscreen ? "退出全屏" : "进入全屏"}>
+              <IconButton
+                aria-label="Fullscreen"
+                icon={pageFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+                size="sm"
+                variant="ghost"
+                onClick={handleToggleFullscreen}
+                sx={{
+                  color: pageFullscreen ? activeColor : effectiveTextColor,
+                  _hover: { bg: effectiveHoverBg },
+                }}
+              />
+            </Tooltip>
+          </HStack>
         </HStack>
-      </HStack>
+      )}
 
       {/* 主体：音域回响为全屏 3D 地形律动场景（在播放器容器层渲染，此处留空）；
           沉浸模式为全屏歌词可视化；否则左（封面+信息）+ 右（歌词）。
