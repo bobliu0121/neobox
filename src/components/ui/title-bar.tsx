@@ -9,7 +9,7 @@ import { GlobalSearch } from "./global-search";
 import { CloseConfirmDialog } from "../CloseConfirmDialog";
 import { store } from "@/lib/store";
 
-export function TitleBar() {
+export function TitleBar({ musicOnly = false }: { musicOnly?: boolean }) {
   const iconColor = useColorModeValue("gray.600", "gray.400");
   const hoverColor = useColorModeValue("gray.800", "gray.200");
   const closeHoverColor = useColorModeValue("red.600", "red.400");
@@ -147,6 +147,11 @@ export function TitleBar() {
   };
 
   const handleClose = async () => {
+    // 音乐专属模式没有托盘，关闭窗口必须直接退出，避免隐藏后无法再唤起。
+    if (musicOnly) {
+      await performClose();
+      return;
+    }
     const behavior = closeBehaviorRef.current;
     switch (behavior) {
       case "close":
@@ -207,7 +212,7 @@ export function TitleBar() {
           <Flex
             align="center"
             gap={3}
-            ml={navPosition === "top" ? "16px" : "112px"}
+            ml={musicOnly ? "16px" : navPosition === "top" ? "16px" : "112px"}
             transition="margin 0.4s cubic-bezier(0.4, 0, 0.2, 1)"
             onMouseDown={(e) => e.stopPropagation()}
           >
@@ -225,7 +230,7 @@ export function TitleBar() {
               sx={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.28))" }}
             />
             {/* 沉浸页面全屏：搜索框淡出，左上角显示"缩小"（退出全屏）按钮 */}
-            {searchBarVisible && (
+            {!musicOnly && searchBarVisible && (
               <Box
                 opacity={pageFs ? 0 : 1}
                 visibility={pageFs ? "hidden" : "visible"}

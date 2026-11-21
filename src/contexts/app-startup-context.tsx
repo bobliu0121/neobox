@@ -176,7 +176,13 @@ export function useAppStartup() {
   return useContext(AppStartupContext);
 }
 
-export function AppStartupProvider({ children }: { children: ReactNode }) {
+export function AppStartupProvider({
+  children,
+  musicOnly = false,
+}: {
+  children: ReactNode;
+  musicOnly?: boolean;
+}) {
   const [isStartupComplete, setIsStartupComplete] = useState(false);
   const [startupProgress, setStartupProgress] = useState(0);
   const [startupMessage, setStartupMessage] = useState("正在启动...");
@@ -733,6 +739,30 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
       return;
     }
 
+    // 音乐专属模式（双击 .nbmusic/.mka 启动）：不加载硬件、悬浮框、灵动岛等
+    // 其他功能配置，只补齐播放器需要的音乐热键展示状态，然后立即放行首屏。
+    if (musicOnly) {
+      (async () => {
+        try {
+          await Promise.all([
+            loadHotkeysEnabled(),
+            loadMusicPrevHotkey(),
+            loadMusicNextHotkey(),
+            loadMusicPlayPauseHotkey(),
+            loadMusicPrevHotkeyEnabled(),
+            loadMusicNextHotkeyEnabled(),
+            loadMusicPlayPauseHotkeyEnabled(),
+          ]);
+        } catch (error) {
+          console.error("Failed to load music-only startup settings:", error);
+        } finally {
+          setStartupProgress(100);
+          setIsStartupComplete(true);
+        }
+      })();
+      return;
+    }
+
     const runStartup = async () => {
       const tasks = [
         { name: "overlay-settings", fn: loadOverlaySettings, weight: 1 },
@@ -798,7 +828,7 @@ const saveOverlaySettings = async (settings: OverlaySettings) => {
 
     return () => {};
 
-  }, []);
+  }, [musicOnly]);
 
   return (
     <AppStartupContext.Provider

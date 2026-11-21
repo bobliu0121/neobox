@@ -101,7 +101,7 @@ function StartupAdHost() {
  * 放在独立组件里而不是 App 内部：App 对各个独立窗口有早返回，
  * 主窗口专用的 Hook 如果写在早返回之后会违反 Hooks 调用顺序。
  */
-function MainWindowEffects() {
+function MainWindowEffects({ musicOnly = false }: { musicOnly?: boolean }) {
   const navigate = useNavigate();
   const lastOpenAudioRef = useRef<{ path: string; at: number } | null>(null);
 
@@ -162,6 +162,7 @@ function MainWindowEffects() {
   // 开机自启(--autostart)模式：后端已离屏预热加载本窗口，前端初始化完成后隐藏到托盘，
   // 复用 minimize_to_tray 正确更新后端可见性并触发 EcoQoS。
   useEffect(() => {
+    if (musicOnly) return;
     (async () => {
       try {
         const autostart = await invoke<boolean>("is_autostart_mode");
@@ -170,11 +171,12 @@ function MainWindowEffects() {
         console.error("autostart hide check failed:", e);
       }
     })();
-  }, []);
+  }, [musicOnly]);
 
   // 恢复上次使用的动态壁纸（GIF / HTML）。延迟到启动流程稳定后再创建置底窗口，
-  // 避免与开屏动画/主窗口首帧抢 WebView2 资源。
+  // 避免与开屏动画/主窗口首帧抢 WebView2 资源。音乐专属模式不恢复。
   useEffect(() => {
+    if (musicOnly) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
@@ -189,12 +191,12 @@ function MainWindowEffects() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [musicOnly]);
 
   return null;
 }
 
-function App() {
+function App({ musicOnly = false }: { musicOnly?: boolean }) {
   const { isStartupComplete } = useAppStartup();
   const location = useLocation();
   // 启动动画是否已经完全淡出：与「启动任务完成」分开，
@@ -247,6 +249,23 @@ function App() {
       <Suspense fallback={<TransparentWindowFallback />}>
         <WallpaperWindowPage />
       </Suspense>
+    );
+  }
+
+  // 音乐专属启动模式：双击 .nbmusic / .mka 打开时只渲染音乐页，
+  // 不挂载启动动画、开屏广告、主页、灵动岛桥接及其他模块。
+  if (musicOnly) {
+    return (
+      <MusicProvider>
+        <MainWindowEffects musicOnly />
+        <MainLayout musicOnly>
+          <RouteErrorBoundary key="music-only" area="音乐模块">
+            <Suspense fallback={<RouteFallback />}>
+              <MusicPage />
+            </Suspense>
+          </RouteErrorBoundary>
+        </MainLayout>
+      </MusicProvider>
     );
   }
 

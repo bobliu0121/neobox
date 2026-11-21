@@ -256,6 +256,8 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
           return "CLASS1 : Effect Type\n9: Version\nPreview\n0: Double Params Flag\n1: Total number of elements\n";
         case "take_pending_open_audio":
           return null;
+        case "is_music_only_mode":
+          return false;
         default:
           if (cmd.startsWith("plugin:")) return;
           console.warn("[Tauri Mock] Unhandled command:", cmd, args);

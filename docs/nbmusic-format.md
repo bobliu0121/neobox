@@ -1198,6 +1198,8 @@ Track 1 的 `channelPrograms`：
   * 后端 `audio_path_from_args` 识别 `.mka` / `.nbmusic` 路径，经 `PENDING_OPEN_AUDIO` 暂存并通过 `open-audio-file` 事件交给前端；单实例运行时由主实例接管第二次启动的参数。
   * 前端收到后调用音乐模块的 `importLocalSongs`，导入完成即播放，并导航到 `/music` 并展开播放器。
   * 便携版启动时由 `file_association::ensure_nbmusic_open_with` 写入 HKCU：`.nbmusic` 的 `OpenWithProgids`、`NeoBox.nbmusic` ProgID、`Applications\neobox.exe` 的 `SupportedTypes`。只把 NeoBox 加入「打开方式」候选，不抢占默认关联；用户在资源管理器中确认后即可双击直接打开。
+  * 双击 `.nbmusic` / `.mka` 会进入**音乐专属模式**：后端置位 `MUSIC_ONLY_MODE`，只启动音乐 API、音频代理、播放控制热键、SMTC 与媒体键；监控子进程、硬件记录、悬浮框轮询、内存清理、CPU 调度、连点器、桌面歌词热键、外部播放器轮询和托盘均不初始化。主窗口关闭即退出进程。
+  * 音乐专属模式的界面只渲染音乐页与窗口控制，隐藏侧边栏、全局搜索、启动动画、开屏广告、主页和灵动岛桥接；启动配置只加载音乐热键展示状态。
   * 提权重启（UAC）会原样保留命令行参数，避免文件路径在二次启动时丢失。
   * 安装版同时在 `tauri.conf.json` 的 `bundle.fileAssociations` 声明 `.nbmusic`（`audio/x-nbmusic`）。
 

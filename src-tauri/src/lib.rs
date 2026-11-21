@@ -83,6 +83,11 @@ use tauri::Manager;
 /// 支持 `.mka` 与 `.nbmusic`。前端就绪后主动取走，避免事件监听晚于启动参数而丢失。
 static PENDING_OPEN_AUDIO: Mutex<Option<String>> = Mutex::new(None);
 
+/// 音乐专属启动模式：双击 `.nbmusic` / `.mka` 打开时置位。
+/// 该模式下只初始化音乐相关能力（播放、API、媒体键、SMTC），
+/// 不启动监控、悬浮框、硬件记录、连点器、托盘等其他功能。
+static MUSIC_ONLY_MODE: AtomicBool = AtomicBool::new(false);
+
 fn audio_path_from_args(args: &[String]) -> Option<String> {
     args.iter()
         .skip(1)
@@ -115,6 +120,11 @@ fn take_pending_open_audio() -> Option<String> {
         .lock()
         .ok()
         .and_then(|mut pending| pending.take())
+}
+
+#[tauri::command]
+fn is_music_only_mode() -> bool {
+    MUSIC_ONLY_MODE.load(Ordering::SeqCst)
 }
 
 /// 启动时对 `settings.json` 做一次容错自检（详见 `setup` 里的调用处注释）。
@@ -358,6 +368,18 @@ fn is_autostart_mode() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 在创建窗口前就确定启动模式并暂存待打开文件：
+    // 前端首帧会立即 invoke `is_music_only_mode`，不能等 setup 里再置位，
+    // 否则极短时间内可能读到 false 而先渲染完整界面。
+    let startup_args: Vec<String> = std::env::args().collect();
+    let startup_audio = audio_path_from_args(&startup_args);
+    MUSIC_ONLY_MODE.store(startup_audio.is_some(), Ordering::SeqCst);
+    if let Some(path) = startup_audio {
+        if let Ok(mut pending) = PENDING_OPEN_AUDIO.lock() {
+            *pending = Some(path);
+        }
+    }
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 重复启动时：统一走托盘打开主窗口入口（恢复任务栏、若处于离屏预热则归位到屏幕内）
@@ -424,14 +446,9 @@ pub fn run() {
             #[cfg(windows)]
             file_association::ensure_nbmusic_open_with();
 
-            // 直接拖到 exe 或双击文件关联启动：命令行参数里带 .mka / .nbmusic 时先暂存，
-            // 前端就绪后取走并导入音乐模块播放
-            let startup_args: Vec<String> = std::env::args().collect();
-            if let Some(path) = audio_path_from_args(&startup_args) {
-                if let Ok(mut pending) = PENDING_OPEN_AUDIO.lock() {
-                    *pending = Some(path);
-                }
-            }
+            // 直接拖到 exe 或双击文件关联启动：启动参数已在 run() 入口解析，
+            // 这里只需让 setup 后续逻辑读取同一模式标志。
+            let music_only = MUSIC_ONLY_MODE.load(Ordering::SeqCst);
             // 初始化音乐 API 和音频代理
             let app_handle_for_music = app.handle().clone();
             music_api::audio_proxy::set_app_handle(app_handle_for_music.clone());
@@ -476,31 +493,33 @@ pub fn run() {
                     std::env::current_dir().ok(),
                 );
             }
-            sensor::start_sensor_process(app);
+            if !music_only {
+                sensor::start_sensor_process(app);
 
-            // 桌面歌词窗口：安装 WM_MOVING 拦截，拖动时实时钳制窗口在工作区内
-            // （碰撞体），任何部分都不允许移出屏幕外或压住任务栏。
-            let _ = utils::cursor::install_lyrics_move_clamp(app.handle());
+                // 桌面歌词窗口：安装 WM_MOVING 拦截，拖动时实时钳制窗口在工作区内
+                // （碰撞体），任何部分都不允许移出屏幕外或压住任务栏。
+                let _ = utils::cursor::install_lyrics_move_clamp(app.handle());
 
-            utils::sys_info::check_and_send_statistics(app);
-            overlay_panel::start_hardware_poller();
-            hardware_report::start_recording();
+                utils::sys_info::check_and_send_statistics(app);
+                overlay_panel::start_hardware_poller();
+                hardware_report::start_recording();
 
-            // 初始化内存清理勾选项配置（读取持久化配置，供定时清理使用）
-            let app_handle_for_memory_clean = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = optimization::init_memory_clean_config(app_handle_for_memory_clean).await;
-            });
+                // 初始化内存清理勾选项配置（读取持久化配置，供定时清理使用）
+                let app_handle_for_memory_clean = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = optimization::init_memory_clean_config(app_handle_for_memory_clean).await;
+                });
 
-            // 启动时自动应用已保存的 CPU 调度规则
-            let app_handle_for_rules = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                cpu_scheduler::apply_all_saved_rules(&app_handle_for_rules).await;
-            });
+                // 启动时自动应用已保存的 CPU 调度规则
+                let app_handle_for_rules = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    cpu_scheduler::apply_all_saved_rules(&app_handle_for_rules).await;
+                });
 
-            // 启动时自动清理旧版开机自启残留（计划任务/启动快捷方式），
-            // 确保只保留当前的注册表 Run 键启动项
-            auto_start::cleanup_legacy_auto_start();
+                // 启动时自动清理旧版开机自启残留（计划任务/启动快捷方式），
+                // 确保只保留当前的注册表 Run 键启动项
+                auto_start::cleanup_legacy_auto_start();
+            }
 
             // Main window: intercept taskbar Close / Alt+F4 → hide instead of destroy，
             // 并通知前端窗口可见性变化（最小化/隐藏到托盘时暂停动态背景视频，降低 CPU 占用）
@@ -510,6 +529,11 @@ pub fn run() {
                     match event {
                         tauri::WindowEvent::CloseRequested { api, .. } => {
                             api.prevent_close();
+                            // 音乐专属模式没有托盘，关闭窗口即退出进程。
+                            if MUSIC_ONLY_MODE.load(Ordering::SeqCst) {
+                                main_clone.app_handle().exit(0);
+                                return;
+                            }
                             main_window::save_current_position(&main_clone.app_handle());
                             let _ = main_clone.hide();
                             emit_main_visibility(&main_clone.app_handle(), false);
@@ -526,9 +550,11 @@ pub fn run() {
             // 显示器信息改为前端按需加载 (get_displays 内部已有缓存逻辑)，
             // 不在启动阶段预填，避免阻塞 WebView 加载导致白屏。
 
-            match tray::init_tray(app.handle()) {
-                Ok(_) => log::info!("Tray initialized successfully"),
-                Err(e) => log::error!("Failed to initialize tray: {}", e),
+            if !music_only {
+                match tray::init_tray(app.handle()) {
+                    Ok(_) => log::info!("Tray initialized successfully"),
+                    Err(e) => log::error!("Failed to initialize tray: {}", e),
+                }
             }
 
             // 开机自启模式（--autostart 参数）：主窗口在 tauri.conf.json 中已设 visible:false。
@@ -567,42 +593,76 @@ pub fn run() {
                 }
             }
 
-            // 提前从持久化存储加载悬浮框设置，确保快捷键触发时使用已保存的配置而非默认值
-            overlay_panel::try_load_persisted_settings(app.handle());
-
             // 启动时直接从持久化配置读取用户设置的快捷键并注册，
-            // 不再依赖前端启动后覆盖，避免用户自定义热键重启后失效
-            let overlay_hotkey = hotkey::load_saved_hotkey(app.handle(), "overlay-hotkey", "Shift+F10");
-            let autoclicker_hotkey = hotkey::load_saved_hotkey(app.handle(), "autoclicker-hotkey", "F8");
+            // 不再依赖前端启动后覆盖，避免用户自定义热键重启后失效。
+            // 音乐专属模式只恢复播放控制热键，悬浮框/连点器/歌词按钮热键不启动。
             let music_prev_hotkey = hotkey::load_saved_hotkey(app.handle(), "music-prev-hotkey", "Alt+[");
             let music_next_hotkey = hotkey::load_saved_hotkey(app.handle(), "music-next-hotkey", "Alt+]");
             let music_playpause_hotkey = hotkey::load_saved_hotkey(app.handle(), "music-playpause-hotkey", "Alt+Space");
-            let lyrics_btn_hotkey = hotkey::load_saved_hotkey(app.handle(), "lyrics-btn-hotkey", "");
             hotkey::set_hotkeys_enabled(hotkey::load_saved_hotkeys_enabled(app.handle()));
 
-            // 恢复每个热键的独立开关（在注册热键前设置，使 apply_hotkeys_enabled 能正确判断）
-            // 连点器热键默认关闭，其余热键默认开启
-            hotkey::set_overlay_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "overlay-hotkey-enabled", true));
-            hotkey::set_autoclicker_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "autoclicker-hotkey-enabled", false));
-            hotkey::set_music_prev_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "music-prev-hotkey-enabled", true));
-            hotkey::set_music_next_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "music-next-hotkey-enabled", true));
-            hotkey::set_music_playpause_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "music-playpause-hotkey-enabled", true));
-            hotkey::set_lyric_btn_enabled(hotkey::load_saved_hotkey_enabled(app.handle(), "lyrics-btn-hotkey-enabled", true));
+            if !music_only {
+                // 提前从持久化存储加载悬浮框设置，确保快捷键触发时使用已保存的配置而非默认值
+                overlay_panel::try_load_persisted_settings(app.handle());
 
-            let _ = hotkey::init_overlay(app.handle(), &overlay_hotkey);
-            let _ = hotkey::init_autoclicker(app.handle(), &autoclicker_hotkey);
+                let overlay_hotkey =
+                    hotkey::load_saved_hotkey(app.handle(), "overlay-hotkey", "Shift+F10");
+                let autoclicker_hotkey =
+                    hotkey::load_saved_hotkey(app.handle(), "autoclicker-hotkey", "F8");
+                let lyrics_btn_hotkey =
+                    hotkey::load_saved_hotkey(app.handle(), "lyrics-btn-hotkey", "");
+
+                // 恢复每个热键的独立开关（在注册热键前设置，使 apply_hotkeys_enabled 能正确判断）
+                // 连点器热键默认关闭，其余热键默认开启
+                hotkey::set_overlay_enabled(hotkey::load_saved_hotkey_enabled(
+                    app.handle(),
+                    "overlay-hotkey-enabled",
+                    true,
+                ));
+                hotkey::set_autoclicker_enabled(hotkey::load_saved_hotkey_enabled(
+                    app.handle(),
+                    "autoclicker-hotkey-enabled",
+                    false,
+                ));
+                hotkey::set_lyric_btn_enabled(hotkey::load_saved_hotkey_enabled(
+                    app.handle(),
+                    "lyrics-btn-hotkey-enabled",
+                    true,
+                ));
+
+                let _ = hotkey::init_overlay(app.handle(), &overlay_hotkey);
+                let _ = hotkey::init_autoclicker(app.handle(), &autoclicker_hotkey);
+                let _ = hotkey::init_lyrics_btn_toggle(app.handle(), &lyrics_btn_hotkey);
+            }
+
+            hotkey::set_music_prev_enabled(hotkey::load_saved_hotkey_enabled(
+                app.handle(),
+                "music-prev-hotkey-enabled",
+                true,
+            ));
+            hotkey::set_music_next_enabled(hotkey::load_saved_hotkey_enabled(
+                app.handle(),
+                "music-next-hotkey-enabled",
+                true,
+            ));
+            hotkey::set_music_playpause_enabled(hotkey::load_saved_hotkey_enabled(
+                app.handle(),
+                "music-playpause-hotkey-enabled",
+                true,
+            ));
             let _ = hotkey::init_music_prev(app.handle(), &music_prev_hotkey);
             let _ = hotkey::init_music_next(app.handle(), &music_next_hotkey);
             let _ = hotkey::init_music_playpause(app.handle(), &music_playpause_hotkey);
-            let _ = hotkey::init_lyrics_btn_toggle(app.handle(), &lyrics_btn_hotkey);
 
             // 若保存的总开关为“关闭”，上面已注册的热键需立即注销以释放按键
             if !hotkey::is_hotkeys_enabled() {
                 hotkey::apply_hotkeys_enabled(app.handle(), false);
             }
 
-            // 启动外部客户端播放的后台系统媒体会话轮询
-            external_player::start(app.handle().clone());
+            // 启动外部客户端播放的后台系统媒体会话轮询（音乐专属模式不需要）
+            if !music_only {
+                external_player::start(app.handle().clone());
+            }
 
             // 注册本应用内置播放器的 SMTC 媒体会话（音量浮层/锁屏显示「NeoBox」并支持媒体键控制）
             smtc::start(app.handle().clone());
@@ -1106,6 +1166,7 @@ pub fn run() {
         file_corrupt::corrupt_file_random,
         file_corrupt::corrupt_estimate,
         take_pending_open_audio,
+        is_music_only_mode,
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,

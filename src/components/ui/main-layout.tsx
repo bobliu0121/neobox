@@ -44,9 +44,11 @@ export function useNavPosition() {
 
 interface MainLayoutProps {
   children: ReactNode;
+  /** 音乐专属启动模式：隐藏侧边栏和全局搜索，只保留音乐页与窗口控制。 */
+  musicOnly?: boolean;
 }
 
-export function MainLayout({ children }: MainLayoutProps) {
+export function MainLayout({ children, musicOnly = false }: MainLayoutProps) {
   const bgColor = useColorModeValue("#fafafa", "#0a0a0a");
   const { backgroundMode, customBgImages, activeBgIndex, dynamicBgVideo, activePresetIndex, presetBackgrounds, backgroundBlur, jellyBounceEnabled, mrColorMode, mrCustomColor } = useBackground();
   const { config } = useThemeColor();
@@ -302,20 +304,20 @@ export function MainLayout({ children }: MainLayoutProps) {
         </Box>
       )}
       {showMrBg && <MRBackground blur={backgroundBlur} colors={mrColors} />}
-      <TitleBar />
-      <Sidebar />
+      <TitleBar musicOnly={musicOnly} />
+      {!musicOnly && <Sidebar />}
       <Box 
         id="app-main-scroll"
         tabIndex={-1}
         outline="none"
         position="relative"
         zIndex={1}
-        ml={isNavTop ? 0 : "96px"}
-        pt={isNavTop ? "120px" : "56px"}
+        ml={musicOnly ? 0 : isNavTop ? 0 : "96px"}
+        pt={musicOnly ? "56px" : isNavTop ? "120px" : "56px"}
         pb={8}
         transition="margin 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s cubic-bezier(0.4, 0, 0.2, 1)"
-        px={8} 
-        pr="40px" 
+        px={musicOnly ? 0 : 8}
+        pr={musicOnly ? 0 : "40px"}
         overflowY="auto"
         overflowX="hidden"
         h="calc(100vh)"
