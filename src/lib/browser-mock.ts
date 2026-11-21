@@ -254,7 +254,7 @@ if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
           return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
         case "read_text_file":
           return "CLASS1 : Effect Type\n9: Version\nPreview\n0: Double Params Flag\n1: Total number of elements\n";
-        case "take_pending_open_mka":
+        case "take_pending_open_audio":
           return null;
         default:
           if (cmd.startsWith("plugin:")) return;

@@ -1194,6 +1194,13 @@ Track 1 的 `channelPrograms`：
   * 打开已有 `.nbmusic` 时通过 `load_nbmusic_project` 回读完整工程，保存时保留原 `NBMUSIC_ID` 与轨道 UID；
   * 字幕导入通过 `parse_nbmusic_subtitle` 复用 SRT / VTT / ASS / SSA 解析。
 
+* 双击打开 `.nbmusic`：
+  * 后端 `audio_path_from_args` 识别 `.mka` / `.nbmusic` 路径，经 `PENDING_OPEN_AUDIO` 暂存并通过 `open-audio-file` 事件交给前端；单实例运行时由主实例接管第二次启动的参数。
+  * 前端收到后调用音乐模块的 `importLocalSongs`，导入完成即播放，并导航到 `/music` 并展开播放器。
+  * 便携版启动时由 `file_association::ensure_nbmusic_open_with` 写入 HKCU：`.nbmusic` 的 `OpenWithProgids`、`NeoBox.nbmusic` ProgID、`Applications\neobox.exe` 的 `SupportedTypes`。只把 NeoBox 加入「打开方式」候选，不抢占默认关联；用户在资源管理器中确认后即可双击直接打开。
+  * 提权重启（UAC）会原样保留命令行参数，避免文件路径在二次启动时丢失。
+  * 安装版同时在 `tauri.conf.json` 的 `bundle.fileAssociations` 声明 `.nbmusic`（`audio/x-nbmusic`）。
+
 * 后续可补：
   * 逐字高亮与读音/翻译分行渲染的实时预览；
   * 内嵌字体加载与缺字回退；

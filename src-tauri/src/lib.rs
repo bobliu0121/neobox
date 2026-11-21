@@ -27,6 +27,8 @@ mod island_window;
 mod jedec;
 
 mod feature_flags;
+#[cfg(windows)]
+mod file_association;
 mod hotkey;
 mod main_window;
 mod matroska;
@@ -77,35 +79,42 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::Manager;
 
-/// 待打开的 MKA 文件：拖到 exe / 通过文件关联启动时由命令行传入。
-/// 前端就绪后主动取走，避免事件监听晚于启动参数而丢失。
-static PENDING_OPEN_MKA: Mutex<Option<String>> = Mutex::new(None);
+/// 待打开的音乐容器文件：拖到 exe / 通过文件关联启动时由命令行传入。
+/// 支持 `.mka` 与 `.nbmusic`。前端就绪后主动取走，避免事件监听晚于启动参数而丢失。
+static PENDING_OPEN_AUDIO: Mutex<Option<String>> = Mutex::new(None);
 
-fn mka_path_from_args(args: &[String]) -> Option<String> {
+fn audio_path_from_args(args: &[String]) -> Option<String> {
     args.iter()
         .skip(1)
         .find(|arg| {
-            !arg.starts_with('-')
-                && std::path::Path::new(arg)
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("mka"))
-                    .unwrap_or(false)
+            if arg.starts_with('-') {
+                return false;
+            }
+            std::path::Path::new(arg)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| {
+                    ext.eq_ignore_ascii_case("mka") || ext.eq_ignore_ascii_case("nbmusic")
+                })
+                .unwrap_or(false)
         })
         .cloned()
 }
 
-fn queue_open_mka<R: tauri::Runtime>(app: &tauri::AppHandle<R>, path: &str) {
+fn queue_open_audio<R: tauri::Runtime>(app: &tauri::AppHandle<R>, path: &str) {
     use tauri::Emitter;
-    if let Ok(mut pending) = PENDING_OPEN_MKA.lock() {
+    if let Ok(mut pending) = PENDING_OPEN_AUDIO.lock() {
         *pending = Some(path.to_string());
     }
-    let _ = app.emit("open-mka-file", path.to_string());
+    let _ = app.emit("open-audio-file", path.to_string());
 }
 
 #[tauri::command]
-fn take_pending_open_mka() -> Option<String> {
-    PENDING_OPEN_MKA.lock().ok().and_then(|mut pending| pending.take())
+fn take_pending_open_audio() -> Option<String> {
+    PENDING_OPEN_AUDIO
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take())
 }
 
 /// 启动时对 `settings.json` 做一次容错自检（详见 `setup` 里的调用处注释）。
@@ -353,9 +362,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 重复启动时：统一走托盘打开主窗口入口（恢复任务栏、若处于离屏预热则归位到屏幕内）
             crate::tray::show_main_window(app);
-            // 从资源管理器把 .mka 拖到已运行的 exe 上：新进程的路径参数转交给主实例
-            if let Some(path) = mka_path_from_args(&args) {
-                queue_open_mka(app, &path);
+            // 从资源管理器把 .mka / .nbmusic 拖到已运行的 exe，或双击文件关联启动：
+            // 新进程的路径参数转交给主实例
+            if let Some(path) = audio_path_from_args(&args) {
+                queue_open_audio(app, &path);
             }
         }))
         .plugin(tauri_plugin_shell::init())
@@ -410,10 +420,15 @@ pub fn run() {
                 log::warn!("[Settings] 启动自检失败: {e}");
             }
 
-            // 直接拖到 exe 启动：命令行参数里带 .mka 时先暂存，前端就绪后取走并播放
+            // 便携版没有安装器：启动时把当前 exe 注册为 .nbmusic 的「打开方式」候选。
+            #[cfg(windows)]
+            file_association::ensure_nbmusic_open_with();
+
+            // 直接拖到 exe 或双击文件关联启动：命令行参数里带 .mka / .nbmusic 时先暂存，
+            // 前端就绪后取走并导入音乐模块播放
             let startup_args: Vec<String> = std::env::args().collect();
-            if let Some(path) = mka_path_from_args(&startup_args) {
-                if let Ok(mut pending) = PENDING_OPEN_MKA.lock() {
+            if let Some(path) = audio_path_from_args(&startup_args) {
+                if let Ok(mut pending) = PENDING_OPEN_AUDIO.lock() {
                     *pending = Some(path);
                 }
             }
@@ -1090,7 +1105,7 @@ pub fn run() {
         file_convert::read_text_file,
         file_corrupt::corrupt_file_random,
         file_corrupt::corrupt_estimate,
-        take_pending_open_mka,
+        take_pending_open_audio,
 
         // === 壁纸管理 ===
         wallpaper::set_wallpaper,

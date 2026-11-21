@@ -103,14 +103,15 @@ function StartupAdHost() {
  */
 function MainWindowEffects() {
   const navigate = useNavigate();
-  const lastOpenMkaRef = useRef<{ path: string; at: number } | null>(null);
+  const lastOpenAudioRef = useRef<{ path: string; at: number } | null>(null);
 
-  // 把 .mka 拖到 exe（或通过文件关联启动）后：导入本地歌库、立即播放并打开播放器
-  const openMkaFile = useCallback(async (path: string) => {
+  // 把 .mka / .nbmusic 拖到 exe，或双击文件关联启动后：
+  // 导入本地歌库、立即播放并打开音乐模块
+  const openAudioFile = useCallback(async (path: string) => {
     const key = path.toLowerCase();
-    const last = lastOpenMkaRef.current;
+    const last = lastOpenAudioRef.current;
     if (last && last.path === key && Date.now() - last.at < 1500) return;
-    lastOpenMkaRef.current = { path: key, at: Date.now() };
+    lastOpenAudioRef.current = { path: key, at: Date.now() };
     try {
       const store = useMusicStore.getState();
       await store.importLocalSongs([path]);
@@ -119,7 +120,7 @@ function MainWindowEffects() {
         (item) => (item._localPath || "").toLowerCase() === key
       );
       if (!song) {
-        console.warn("[OpenMKA] imported but song not found:", path);
+        console.warn("[OpenAudio] imported but song not found:", path);
         return;
       }
       // 先进入音乐页并等待音频元素挂载，否则 playSong 会因 audioRef 为空直接返回
@@ -132,8 +133,8 @@ function MainWindowEffects() {
       }
       await useMusicStore.getState().playSong(song, [song]);
     } catch (e) {
-      console.error("[OpenMKA] open failed:", e);
-      lastOpenMkaRef.current = null;
+      console.error("[OpenAudio] open failed:", e);
+      lastOpenAudioRef.current = null;
     }
   }, [navigate]);
 
@@ -142,21 +143,21 @@ function MainWindowEffects() {
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        unlisten = await listen<string>("open-mka-file", (event) => {
-          if (typeof event.payload === "string") void openMkaFile(event.payload);
+        unlisten = await listen<string>("open-audio-file", (event) => {
+          if (typeof event.payload === "string") void openAudioFile(event.payload);
         });
-        // 处理启动时命令行参数（拖到 exe 打开）
-        const pending = await invoke<string | null>("take_pending_open_mka");
-        if (!disposed && pending) await openMkaFile(pending);
+        // 处理启动时命令行参数（拖到 exe / 双击文件关联打开）
+        const pending = await invoke<string | null>("take_pending_open_audio");
+        if (!disposed && pending) await openAudioFile(pending);
       } catch (e) {
-        console.error("[OpenMKA] listener setup failed:", e);
+        console.error("[OpenAudio] listener setup failed:", e);
       }
     })();
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [openMkaFile]);
+  }, [openAudioFile]);
 
   // 开机自启(--autostart)模式：后端已离屏预热加载本窗口，前端初始化完成后隐藏到托盘，
   // 复用 minimize_to_tray 正确更新后端可见性并触发 EcoQoS。

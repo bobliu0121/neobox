@@ -100,11 +100,39 @@ fn ensure_elevation() {
             .chain(std::iter::once(0))
             .collect();
         let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+
+        // 文件关联/拖拽启动时，路径在命令行参数里；UAC 重启必须原样带上，
+        // 否则提权后的实例会丢掉 `.nbmusic` 路径，只剩一个空主窗口。
+        let params_text = std::env::args_os()
+            .skip(1)
+            .map(|arg| {
+                let text = arg.to_string_lossy();
+                if text.is_empty() {
+                    "\"\"".to_string()
+                } else if text.chars().any(|ch| ch.is_whitespace() || ch == '"') {
+                    format!("\"{}\"", text.replace('"', "\\\""))
+                } else {
+                    text.into_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let params: Vec<u16> = if params_text.is_empty() {
+            Vec::new()
+        } else {
+            params_text.encode_utf16().chain(std::iter::once(0)).collect()
+        };
+        let params_ptr = if params.is_empty() {
+            std::ptr::null()
+        } else {
+            params.as_ptr()
+        };
+
         let result = ShellExecuteW(
             std::ptr::null_mut(),
             verb.as_ptr(),
             exe.as_ptr(),
-            std::ptr::null(),
+            params_ptr,
             std::ptr::null(),
             SW_SHOWNORMAL as i32,
         );

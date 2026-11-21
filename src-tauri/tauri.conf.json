@@ -77,6 +77,13 @@
         "description": "NeoBox Matroska 音频",
         "mimeType": "audio/x-matroska",
         "role": "Editor"
+      },
+      {
+        "ext": ["nbmusic"],
+        "name": "NeoBox NBMusic",
+        "description": "NeoBox NBMusic 音乐工程",
+        "mimeType": "audio/x-nbmusic",
+        "role": "Editor"
       }
     ]
   }
