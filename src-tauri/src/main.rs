@@ -57,6 +57,21 @@ fn main() {
     neobox_lib::run();
 }
 
+/// 命令行参数里是否带 `.nbmusic` / `.mka` 文件。
+/// 这类启动走纯播放器模式，跳过 UAC，避免听歌也要管理员授权。
+#[cfg(windows)]
+fn is_music_file_launch() -> bool {
+    std::env::args_os().skip(1).any(|arg| {
+        std::path::Path::new(&arg)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                ext.eq_ignore_ascii_case("nbmusic") || ext.eq_ignore_ascii_case("mka")
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// 检测当前进程是否已提权；未提权则通过 ShellExecuteW("runas") 以管理员重启自身。
 /// UAC 被拒绝或启动失败时直接退出（NeoBox 的核心功能依赖管理员权限）。
 #[cfg(windows)]
@@ -69,6 +84,12 @@ fn ensure_elevation() {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    // 双击 `.nbmusic` / `.mka` 进入纯播放器模式，只用到播放器、音频代理、
+    // 媒体键等普通权限能力，不需要管理员；这里直接放行，避免每次听歌弹 UAC。
+    if is_music_file_launch() {
+        return;
+    }
 
     unsafe {
         let mut token: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();

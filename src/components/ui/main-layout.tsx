@@ -233,77 +233,82 @@ export function MainLayout({ children, musicOnly = false }: MainLayoutProps) {
     <Box
       position="relative"
       minHeight="100vh"
-      bg="transparent"
+      bg={musicOnly ? "#000" : "transparent"}
     >
-      {/* 背景交叉淡化层：用 <img> 而非 CSS background-image，
-          原因：CSS value 有约 2MB 上限，大图 data URL 会被截断导致黑色 */}
-      <Box sx={{
-        "@keyframes bgFadeIn": {
-          from: { opacity: 0 },
-          to: { opacity: 1 },
-        },
-      }}>
-        {bgLayers.map((layer) => (
-          <Box
-            key={layer.id}
-            position="fixed"
-            top={0}
-            left={0}
-            right={0}
-            bottom={0}
-            zIndex={0}
-            opacity={layer.fading ? 0 : 1}
-            overflow="hidden"
-            transition={layer.fading ? "opacity 0.5s ease-in-out" : undefined}
-            animation={!layer.fading ? "bgFadeIn 0.5s ease-in-out" : undefined}
-          >
-            <img
-              src={layer.url}
-              alt=""
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                display: "block",
-                filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
-                willChange: backgroundBlur > 0 ? "filter" : undefined,
-              }}
-            />
+      {/* 音乐专属模式不加载任何软件壁纸/动态背景/主题背景 */}
+      {!musicOnly && (
+        <>
+          {/* 背景交叉淡化层：用 <img> 而非 CSS background-image，
+              原因：CSS value 有约 2MB 上限，大图 data URL 会被截断导致黑色 */}
+          <Box sx={{
+            "@keyframes bgFadeIn": {
+              from: { opacity: 0 },
+              to: { opacity: 1 },
+            },
+          }}>
+            {bgLayers.map((layer) => (
+              <Box
+                key={layer.id}
+                position="fixed"
+                top={0}
+                left={0}
+                right={0}
+                bottom={0}
+                zIndex={0}
+                opacity={layer.fading ? 0 : 1}
+                overflow="hidden"
+                transition={layer.fading ? "opacity 0.5s ease-in-out" : undefined}
+                animation={!layer.fading ? "bgFadeIn 0.5s ease-in-out" : undefined}
+              >
+                <img
+                  src={layer.url}
+                  alt=""
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                    filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+                    willChange: backgroundBlur > 0 ? "filter" : undefined,
+                  }}
+                />
+              </Box>
+            ))}
           </Box>
-        ))}
-      </Box>
-      {showDynamicBg && (
-        <Box
-          position="fixed"
-          top={0}
-          left={0}
-          right={0}
-          bottom={0}
-          zIndex={0}
-          overflow="hidden"
-          opacity={videoReady ? 1 : 0}
-          transition="opacity 0.6s ease-in"
-        >
-          <video
-            ref={videoRef}
-            src={videoSrc!}
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            onLoadedData={() => setVideoReady(true)}
-            onError={(e) => console.error("视频加载失败:", e)}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
-            }}
-          />
-        </Box>
+          {showDynamicBg && (
+            <Box
+              position="fixed"
+              top={0}
+              left={0}
+              right={0}
+              bottom={0}
+              zIndex={0}
+              overflow="hidden"
+              opacity={videoReady ? 1 : 0}
+              transition="opacity 0.6s ease-in"
+            >
+              <video
+                ref={videoRef}
+                src={videoSrc!}
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="auto"
+                onLoadedData={() => setVideoReady(true)}
+                onError={(e) => console.error("视频加载失败:", e)}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+                }}
+              />
+            </Box>
+          )}
+          {showMrBg && <MRBackground blur={backgroundBlur} colors={mrColors} />}
+        </>
       )}
-      {showMrBg && <MRBackground blur={backgroundBlur} colors={mrColors} />}
       <TitleBar musicOnly={musicOnly} />
       {!musicOnly && <Sidebar />}
       <Box 

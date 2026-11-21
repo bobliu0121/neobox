@@ -217,18 +217,20 @@ export function TitleBar({ musicOnly = false }: { musicOnly?: boolean }) {
             onMouseDown={(e) => e.stopPropagation()}
           >
             {/* 品牌图标：标题栏最左侧，配合全屏启动动画统一视觉标识。
-                此前 logoSrc 只是一个未被使用的变量（死代码），这里让它真正渲染。 */}
-            <Box
-              as="img"
-              src={logoSrc}
-              alt="NeoBox"
-              h="26px"
-              objectFit="contain"
-              flexShrink={0}
-              draggable={false}
-              pointerEvents="none"
-              sx={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.28))" }}
-            />
+                纯播放器模式不显示品牌 Logo，避免遮挡播放器。 */}
+            {!musicOnly && (
+              <Box
+                as="img"
+                src={logoSrc}
+                alt="NeoBox"
+                h="26px"
+                objectFit="contain"
+                flexShrink={0}
+                draggable={false}
+                pointerEvents="none"
+                sx={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.28))" }}
+              />
+            )}
             {/* 沉浸页面全屏：搜索框淡出，左上角显示"缩小"（退出全屏）按钮 */}
             {!musicOnly && searchBarVisible && (
               <Box
