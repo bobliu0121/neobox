@@ -969,6 +969,9 @@ async function pushSmtc(force = false) {
 const MAX_PLAY_QUEUE = 2000;
 
 let playSongSeq = 0;
+// 持久化音量是否已读入内存。冷启动时 openAudioFile 可能早于 init() 开始播放，
+// 若此时直接使用默认 0.7，会把用户上次保存的静音/低音量覆盖掉。
+let persistedVolumeLoaded = false;
 
 // ── 播放/暂停音量缓入缓出 ──
 // 进度按已流逝时间计算：定时器被后台节流时只会跳变到终点，不会卡在半途
@@ -1420,7 +1423,14 @@ export const useMusicStore = create<MusicState>((set, get) => ({
       const dlFontFamily = await store.get<string>("desktopLyricsFontFamily");
       const dlShowTranslation = await store.get<boolean>("desktopLyricsShowTranslation");
       const dlHideUnlockBtn = await store.get<boolean>("desktopLyricsHideUnlockBtn");
-      if (vol != null) set({ volume: vol, prevVolume: vol > 0 ? vol : 0.7 });
+      if (vol != null) {
+        set({ volume: vol, prevVolume: vol > 0 ? vol : 0.7 });
+        // 音频元素可能已在播放页创建并被 playSong 提前使用：把持久化音量立即补到元素上，
+        // 否则上次保存为静音(0)时，冷启动仍会按默认 0.7 发声。
+        const audio = get().audioRef;
+        if (audio) audio.volume = vol;
+      }
+      persistedVolumeLoaded = true;
       if (mode) set({ playMode: mode });
       if (quality) set({ playbackQuality: quality });
       if (fontSize != null) set({ lyricsFontSize: fontSize });
@@ -1796,6 +1806,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
       // 绑定 SMTC 推送与播放状态同步：无论音频被前端/系统媒体键/外部路径暂停或恢复，
       // isPlaying 都跟随 <audio> 真实状态，保证灵动岛/播放器按钮图标始终同步。
       bindSmtcHandlers(audio);
+      // 新音频元素继承 store 当前音量，避免刚创建时用浏览器默认 1.0 出声。
+      audio.volume = get().volume;
     }
     set({ audioRef: audio });
   },
@@ -2050,6 +2062,23 @@ export const useMusicStore = create<MusicState>((set, get) => ({
     // 立即停止当前播放，防止旧歌在新 URL 获取期间播完并触发 ended → nextTrack 竞态
     // 同时递增序列号，使任何正在飞行中的 playSong 调用被忽略
     const mySeq = ++playSongSeq;
+    // 冷启动时先等持久化音量读入：openAudioFile 的播放可能早于 init()，
+    // 如果直接使用默认 0.7，会覆盖用户上次保存的静音(0)。
+    if (!persistedVolumeLoaded) {
+      try {
+        const store = await getStore();
+        const vol = await store.get<number>("volume");
+        persistedVolumeLoaded = true;
+        if (vol != null) {
+          set({ volume: vol, prevVolume: vol > 0 ? vol : get().prevVolume });
+          const currentAudio = get().audioRef;
+          if (currentAudio) currentAudio.volume = vol;
+        }
+      } catch {
+        // 读取失败则保留当前内存值，下次播放再试
+      }
+    }
+    if (mySeq !== playSongSeq) return;
     // 取消进行中的音量渐变，防止旧定时器在切歌后拉低新歌音量甚至误暂停
     cancelVolumeFade();
     // 清源必须走 clearAudioSource（内部已 pause）：直接赋空串会立刻派发一次
@@ -2124,7 +2153,8 @@ export const useMusicStore = create<MusicState>((set, get) => ({
           audioUrl = convertFileSrc(localPath);
         }
         audio.src = audioUrl;
-        audio.volume = state.volume;
+        // 使用 await 后的最新音量：冷启动时音量可能在本次 playSong 等待期间才从磁盘恢复
+        audio.volume = get().volume;
         try {
           await audio.play();
           if (mySeq !== playSongSeq) return;
@@ -2229,7 +2259,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
       if (mySeq !== playSongSeq) return;
 
       audio.src = audioUrl;
-      audio.volume = state.volume;
+      audio.volume = get().volume;
       await audio.play();
 
       if (mySeq !== playSongSeq) return;

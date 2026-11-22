@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Center, Spinner } from "@chakra-ui/react";
 import { useMusicStore } from "@/stores/music-store";
 import { ExpandedPlayer } from "./MusicPage";
@@ -11,7 +11,6 @@ import { ExpandedPlayer } from "./MusicPage";
  */
 export default function NbmusicPlayerPage() {
   const currentSong = useMusicStore((s) => s.currentSong);
-  const autoOpenedLyricsRef = useRef(false);
 
   // 纯播放器不挂载 MusicPage，但 openAudioFile / playSong 依赖 store 里的 audioRef。
   // 这里必须自己创建并注册音频元素，否则启动时会一直等不到 audioRef，卡在加载页。
@@ -38,16 +37,7 @@ export default function NbmusicPlayerPage() {
     })();
   }, []);
 
-  // 双击 .nbmusic 打开的纯播放器默认启用桌面歌词，且只在本次启动自动打开一次。
-  // 不能依赖 !desktopLyricsVisible 反复触发：否则用户点播放器按钮关闭后，
-  // 该 effect 会立刻又把窗口打开，表现为按钮点了没反应。
-  useEffect(() => {
-    if (!currentSong || autoOpenedLyricsRef.current) return;
-    autoOpenedLyricsRef.current = true;
-    if (!useMusicStore.getState().desktopLyricsVisible) {
-      void useMusicStore.getState().setDesktopLyricsVisible(true);
-    }
-  }, [currentSong]);
+  // 纯播放器不自动开启桌面歌词：默认关闭，完全由播放器按钮手动开关。
 
   if (!currentSong) {
     return (
