@@ -30,6 +30,7 @@ import { useThemeColor } from "@/contexts/theme-color-context";
 interface LyricsControlBarProps {
   isPlaying: boolean;
   playMode: PlayMode;
+  singleLoopOnly?: boolean;
   volume: number;
   onControl: (action: ControlAction, value?: number) => void;
 }
@@ -50,6 +51,7 @@ const btnBase: React.CSSProperties = {
 function LyricsControlBarInner({
   isPlaying,
   playMode,
+  singleLoopOnly = false,
   volume,
   onControl,
 }: LyricsControlBarProps) {
@@ -147,6 +149,7 @@ function LyricsControlBarInner({
         </button>
       </Tooltip>
 
+      {!singleLoopOnly && (
       <Tooltip
         label={playMode === "one" ? "单曲循环" : playMode === "shuffle" ? "随机播放" : playMode === "heartbeat" ? "心动模式" : "列表循环"}
       >
@@ -170,6 +173,7 @@ function LyricsControlBarInner({
           )}
         </button>
       </Tooltip>
+      )}
 
       {/* 音量：图标 + 悬浮展开调节条（主题色） */}
       <div

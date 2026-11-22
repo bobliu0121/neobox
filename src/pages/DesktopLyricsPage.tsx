@@ -77,6 +77,7 @@ export default function DesktopLyricsPage() {
     estimatedTime,
     isPlaying,
     playMode,
+    singleLoopOnly,
     settings,
     isLocked,
     volume,
@@ -289,6 +290,7 @@ export default function DesktopLyricsPage() {
           <LyricsControlBar
             isPlaying={isPlaying}
             playMode={playMode}
+            singleLoopOnly={singleLoopOnly}
             volume={volume}
             onControl={handleControl}
           />

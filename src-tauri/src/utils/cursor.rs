@@ -118,7 +118,9 @@ unsafe fn clamp_rect_to_work_area(rect: &mut windows_sys::Win32::Foundation::REC
     // 右边缘：不得越过其所在显示器工作区的右边界（整体平移，保持宽度）
     if let Some(wa) = work_area_at(rect.right - 1, cy) {
         if rect.right > wa.right {
-            rect.left = rect.right - w;
+            // 用 min 而不是直接取 rect.right - w：窗口整体在屏幕右侧外时，
+            // 原来的写法会算出原 left，等于完全没移动。
+            rect.left = rect.left.min(wa.right - w);
         }
     }
     // 顶边缘：不得越过其所在显示器工作区的上边界
@@ -130,7 +132,9 @@ unsafe fn clamp_rect_to_work_area(rect: &mut windows_sys::Win32::Foundation::REC
     // 底边缘：不得越过其所在显示器工作区的下边界（整体平移，保持高度）
     if let Some(wa) = work_area_at(cx, rect.bottom - 1) {
         if rect.bottom > wa.bottom {
-            rect.top = rect.bottom - h;
+            // 同理，窗口整体在屏幕下方外时直接取 rect.bottom - h 仍停在屏幕外，
+            // 必须和当前 top 取较小值，才能把它拉回工作区。
+            rect.top = rect.top.min(wa.bottom - h);
         }
     }
     rect.right = rect.left + w;

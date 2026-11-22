@@ -30,7 +30,12 @@ export default function NbmusicPlayerPage() {
     }
 
     state.setAudioRef(audio);
-    void useMusicStore.getState().init();
+    void (async () => {
+      await useMusicStore.getState().init();
+      // nbmusic 纯播放器固定单曲循环：设置初始化可能读回上次的列表/随机模式，
+      // 必须在 init 完成后再锁定一次，并通知桌面歌词隐藏模式切换按钮。
+      useMusicStore.setState({ playMode: "one", singleLoopOnly: true });
+    })();
   }, []);
 
   // 双击 .nbmusic 打开的纯播放器默认启用桌面歌词；

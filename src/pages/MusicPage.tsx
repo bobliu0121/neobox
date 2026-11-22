@@ -1926,6 +1926,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
             )}
           </Box>
           <HStack spacing={4} justify="center">
+          {!playerOnly && (
           <Tooltip label={playMode === "one" ? "单曲循环" : playMode === "shuffle" ? "随机播放" : playMode === "heartbeat" ? "心动模式" : "列表循环"}>
             <IconButton
               aria-label="Play mode"
@@ -1936,6 +1937,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
               onClick={() => useMusicStore.getState().togglePlayMode()}
             />
           </Tooltip>
+          )}
           <Tooltip label={`上一曲 (${musicPrevHotkey})`}>
           <IconButton
             aria-label="Prev"

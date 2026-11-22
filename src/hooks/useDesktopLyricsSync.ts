@@ -50,6 +50,7 @@ export function useDesktopLyricsSync() {
   const [karaokeLines, setKaraokeLines] = useState<KaraokeLine[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playMode, setPlayMode] = useState<PlayMode>("list");
+  const [singleLoopOnly, setSingleLoopOnly] = useState(false);
   const [volume, setVolumeState] = useState(0.7);
   const [settings, setSettings] = useState<DesktopLyricsSettings>(DEFAULT_SETTINGS);
   const [isLocked, setIsLocked] = useState(false);
@@ -141,10 +142,14 @@ export function useDesktopLyricsSync() {
           isPlaying: boolean;
           playMode: PlayMode;
           volume: number;
+          singleLoopOnly?: boolean;
         }>("desktop-lyrics:state", (e) => {
           setIsPlaying(e.payload.isPlaying);
           setPlayMode(e.payload.playMode);
           setVolumeState(e.payload.volume ?? 0.7);
+          if (e.payload.singleLoopOnly !== undefined) {
+            setSingleLoopOnly(e.payload.singleLoopOnly);
+          }
           isPlayingRef.current = e.payload.isPlaying;
           if (e.payload.isPlaying) {
             lastSyncRef.current = performance.now();
@@ -236,6 +241,7 @@ export function useDesktopLyricsSync() {
     estimatedTime,
     isPlaying,
     playMode,
+    singleLoopOnly,
     volume,
     settings,
     isLocked,

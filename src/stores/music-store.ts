@@ -306,6 +306,8 @@ interface MusicState {
   // 键盘媒体键控制（仅更新内存态）
   setMediaKeysEnabled: (enabled: boolean) => void;
   // 立即重推一次 SMTC 播放状态（重新开启媒体键后马上恢复系统媒体会话）
+  // 纯播放器（双击 .nbmusic）固定单曲循环，隐藏所有播放模式切换入口
+  singleLoopOnly: boolean;
   refreshSmtc: () => void;
   setCurrentTime: (t: number) => void;
   setDuration: (d: number) => void;
@@ -1038,6 +1040,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
   volume: 0.7,
   prevVolume: 0.7,
   playMode: "list",
+  singleLoopOnly: false,
   playQueue: [],
   currentIndex: -1,
   heartbeatQueue: [],
@@ -1591,6 +1594,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
             isPlaying: get().isPlaying,
             playMode: get().playMode,
             volume: get().volume,
+            singleLoopOnly: get().singleLoopOnly,
           });
         }, 50);
       })
@@ -2825,6 +2829,12 @@ export const useMusicStore = create<MusicState>((set, get) => ({
       if (win) {
         if (visible) {
           await win.show();
+          // 窗口在隐藏状态下恢复位置时可能仍停在旧分辨率/旧缩放坐标上，
+          // show 之后再做一次物理像素钳制，确保确实落在当前显示器工作区内。
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          try {
+            await invoke("clamp_lyrics_window_position");
+          } catch {}
           await win.setFocus();
           startTimeSync();
           // 发送当前歌曲数据（此时新窗口可能还没挂载，listener 尚未注册）
@@ -2834,6 +2844,7 @@ export const useMusicStore = create<MusicState>((set, get) => ({
             isPlaying: get().isPlaying,
             playMode: get().playMode,
             volume: get().volume,
+            singleLoopOnly: get().singleLoopOnly,
           });
           // 延迟重推：给桌面歌词窗口足够时间完成 React 挂载和 listener 注册
           [1500, 3000].forEach((ms) => {
