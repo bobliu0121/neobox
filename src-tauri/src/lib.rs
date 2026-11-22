@@ -374,14 +374,20 @@ pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let startup_audio = audio_path_from_args(&startup_args);
     MUSIC_ONLY_MODE.store(startup_audio.is_some(), Ordering::SeqCst);
+    // 音乐文件启动不注册单实例插件：`.nbmusic` 再次双击会启动独立进程/独立窗口，
+    // 而不是把路径塞给已打开的播放器。普通 NeoBox 启动仍保持单实例。
+    let music_launch = startup_audio.is_some();
     if let Some(path) = startup_audio {
         if let Ok(mut pending) = PENDING_OPEN_AUDIO.lock() {
             *pending = Some(path);
         }
     }
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let builder = tauri::Builder::default();
+    let builder = if music_launch {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 重复启动时：统一走托盘打开主窗口入口（恢复任务栏、若处于离屏预热则归位到屏幕内）
             crate::tray::show_main_window(app);
             // 从资源管理器把 .mka / .nbmusic 拖到已运行的 exe，或双击文件关联启动：
@@ -390,6 +396,8 @@ pub fn run() {
                 queue_open_audio(app, &path);
             }
         }))
+    };
+    let app = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -688,6 +696,7 @@ pub fn run() {
         music::import_local_music,
         music::import_local_music_folder,
         music::get_local_lyric,
+        music::extract_audio_cover,
         music::verify_local_covers,
         music::delete_cover_cache_files,
         nbmusic::mux_nbmusic,

@@ -72,6 +72,127 @@ fn stable_hash(s: &str) -> u64 {
     hash
 }
 
+/// 递归查找 ISO BMFF（MP4 / M4A / MOV）里的指定 box，返回载荷区间。
+/// 只对容器 box 下钻，避开 mdat 等大块媒体数据。
+fn find_mp4_box(data: &[u8], start: usize, end: usize, target: &[u8], depth: usize) -> Option<(usize, usize)> {
+    if depth > 10 {
+        return None;
+    }
+    let mut pos = start;
+    while pos + 8 <= end {
+        let size32 = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        let typ = &data[pos + 4..pos + 8];
+        let mut header = 8usize;
+        let size = if size32 == 1 {
+            if pos + 16 > end {
+                break;
+            }
+            header = 16;
+            u64::from_be_bytes([
+                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
+                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+            ]) as usize
+        } else if size32 == 0 {
+            end - pos
+        } else {
+            size32 as usize
+        };
+        if size < header || pos + size > end {
+            break;
+        }
+        if typ == target {
+            return Some((pos + header, pos + size));
+        }
+        let container = matches!(
+            typ,
+            b"moov" | b"udta" | b"meta" | b"ilst" | b"trak" | b"mdia" | b"minf" | b"stbl"
+        );
+        if container {
+            // meta 是 full box：载荷前 4 字节是 version + flags
+            let inner = if typ == b"meta" { pos + header + 4 } else { pos + header };
+            if let Some(found) = find_mp4_box(data, inner, pos + size, target, depth + 1) {
+                return Some(found);
+            }
+        }
+        pos += size;
+    }
+    None
+}
+
+/// 从 MP4 / M4A / MOV 的 `moov/udta/meta/ilst/covr` 读取内嵌封面。
+/// 只读取 moov 所在字节区间，不把整个视频文件载入内存。
+fn read_mp4_cover_from_file(path: &Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let mut pos: u64 = 0;
+    while pos + 8 <= file_len {
+        file.seek(SeekFrom::Start(pos)).ok()?;
+        let mut head = [0u8; 16];
+        file.read_exact(&mut head[..8]).ok()?;
+        let size32 = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+        let typ = [head[4], head[5], head[6], head[7]];
+        let mut header = 8u64;
+        let size = if size32 == 1 {
+            file.read_exact(&mut head[8..16]).ok()?;
+            header = 16;
+            u64::from_be_bytes([head[8], head[9], head[10], head[11], head[12], head[13], head[14], head[15]])
+        } else if size32 == 0 {
+            file_len.saturating_sub(pos)
+        } else {
+            size32 as u64
+        };
+        if size < header || pos.saturating_add(size) > file_len {
+            break;
+        }
+        if typ == *b"moov" {
+            let mut buf = vec![0u8; size as usize];
+            file.seek(SeekFrom::Start(pos)).ok()?;
+            file.read_exact(&mut buf).ok()?;
+            let (start, end) = find_mp4_box(&buf, 8, buf.len(), b"covr", 0)?;
+            // covr 下是一个或多个 data atom，跳过 4 字节 data type + 4 字节 locale
+            let (payload, payload_end) = find_mp4_box(&buf, start, end, b"data", 0)?;
+            if payload_end <= payload + 8 {
+                return None;
+            }
+            return Some(buf[payload + 8..payload_end].to_vec());
+        }
+        pos = pos.saturating_add(size);
+    }
+    None
+}
+
+/// 读取音频 / 视频容器中的内嵌封面，返回（原始图片字节，MIME）。
+/// 优先 lofty（MP3 / FLAC / M4A / MP4 标签），失败时对 ISO BMFF 手工解析 covr。
+fn read_embedded_cover_data(path: &Path) -> Option<(Vec<u8>, &'static str)> {
+    if let Ok(tagged_file) = lofty::read_from_path(path) {
+        for tag in tagged_file.tags() {
+            for pic in tag.pictures() {
+                let data = pic.data();
+                if data.is_empty() || data.len() > COVER_INPUT_MAX_BYTES {
+                    continue;
+                }
+                return Some((data.to_vec(), detect_image_mime(data)));
+            }
+        }
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "mp4" | "m4a" | "m4v" | "mov") {
+        if let Some(data) = read_mp4_cover_from_file(path) {
+            if !data.is_empty() && data.len() <= COVER_INPUT_MAX_BYTES {
+                return Some((data.clone(), detect_image_mime(&data)));
+            }
+        }
+    }
+    None
+}
+
 /// 把压缩后的封面数据写入缓存目录，返回文件绝对路径。
 /// 文件已存在且长度一致时跳过写入直接返回路径，支持重复导入去重；
 /// 长度不一致视为半截/损坏文件，覆盖重写以自修复。
@@ -155,30 +276,16 @@ fn extract_song_cover(
         return (cover_path, cover_source);
     }
 
-    // 1. 内嵌封面：遍历所有标签中的所有内嵌图片，取第一张压缩后写入封面缓存。
+    // 1. 内嵌封面：lofty 优先，MP4/M4A/MOV 回退到手工解析 covr。
     // 注意：必须先压缩再判结果——高清内嵌封面（无损 FLAC 常见 >1MB）压缩后仅数十 KB，
     // 若先按原始字节拦截会导致大封面全部丢失（历史上 >1MB 封面不显示即此因）。
-    if let Ok(tagged_file) = lofty::read_from_path(path) {
-        for t in tagged_file.tags() {
-            for pic in t.pictures() {
-                let data = pic.data();
-                // 仅拦截空数据与极端异常的巨型 blob（防御损坏数据拖垮解码器），正常高清封面放行
-                if data.is_empty() || data.len() > COVER_INPUT_MAX_BYTES {
-                    continue;
-                }
-                let mime = detect_image_mime(data);
-                let (data, mime) = downscale_cover(data, mime);
-                if let Some(cache_dir) = cache_dir {
-                    cover_path = save_cover_file(cache_dir, id, &data, &mime);
-                }
-                if !cover_path.is_empty() {
-                    cover_source = "embedded".to_string();
-                    break;
-                }
-            }
-            if !cover_path.is_empty() {
-                break;
-            }
+    if let Some((data, mime)) = read_embedded_cover_data(path) {
+        let (data, mime) = downscale_cover(&data, mime);
+        if let Some(cache_dir) = cache_dir {
+            cover_path = save_cover_file(cache_dir, id, &data, &mime);
+        }
+        if !cover_path.is_empty() {
+            cover_source = "embedded".to_string();
         }
     }
 
@@ -910,6 +1017,28 @@ pub async fn delete_cover_cache_files(app: AppHandle, paths: Vec<String>) -> Res
     Ok(())
 }
 
+/// 从音频 / 视频容器读取内嵌封面并写入缓存，供 `.nbmusic` 编辑页在添加音频时自动补封面。
+/// 只认内嵌封面，不回退同目录图片，避免把无关图片带进工程。
+#[tauri::command]
+pub fn extract_audio_cover(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    let cache_dir = cover_cache_dir(&app)?;
+    let source = Path::new(&path);
+    if !source.is_file() {
+        return Ok(None);
+    }
+    let Some((data, mime)) = read_embedded_cover_data(source) else {
+        return Ok(None);
+    };
+    let (data, mime) = downscale_cover(&data, mime);
+    if data.is_empty() {
+        return Ok(None);
+    }
+    let id = std::fs::canonicalize(source)
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.clone());
+    Ok(Some(save_cover_file(&cache_dir, &id, &data, &mime)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +1075,39 @@ mod tests {
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!(meta.len() as usize, out.len(), "缓存文件应完整写入");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MP4 的 moov/udta/meta/ilst/covr 应能手工解析出封面
+    #[test]
+    fn mp4_covr_cover_is_detected() {
+        fn boxed(typ: &[u8; 4], body: Vec<u8>) -> Vec<u8> {
+            let mut out = Vec::with_capacity(body.len() + 8);
+            out.extend_from_slice(&((body.len() + 8) as u32).to_be_bytes());
+            out.extend_from_slice(typ);
+            out.extend_from_slice(&body);
+            out
+        }
+        // 只要 PNG 魔数即可被 detect_image_mime 识别
+        let png = b"\x89PNG\r\n\x1a\nfake-cover-bytes".to_vec();
+        let mut data_body = vec![0u8, 0, 0, 0x0E, 0, 0, 0, 0]; // data type + locale
+        data_body.extend_from_slice(&png);
+        let covr = boxed(b"covr", boxed(b"data", data_body));
+        let ilst = boxed(b"ilst", covr);
+        let meta = boxed(b"meta", {
+            let mut body = vec![0u8; 4];
+            body.extend_from_slice(&ilst);
+            body
+        });
+        let udta = boxed(b"udta", meta);
+        let moov = boxed(b"moov", udta);
+        let ftyp = boxed(b"ftyp", b"isom\x00\x00\x00\x00".to_vec());
+        let path = std::env::temp_dir().join("neobox_mp4_cover_test.mp4");
+        let mut file = ftyp;
+        file.extend_from_slice(&moov);
+        std::fs::write(&path, &file).unwrap();
+        let extracted = read_mp4_cover_from_file(&path).expect("应识别 MP4 covr");
+        assert_eq!(extracted, png);
+        let _ = std::fs::remove_file(path);
     }
 
     /// 损坏的半截缓存文件（长度不一致）应被覆盖重写而非跳过

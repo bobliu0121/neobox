@@ -2036,7 +2036,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
           {/* 歌词高亮颜色 + 歌词字体大小 + 音质选择 - 右侧（沉浸/音域回响模式隐藏歌词高亮/字号） */}
           <Box position="absolute" right={0} top="50%" transform="translateY(-50%)">
             <HStack spacing={2} align="center">
-              {!isImmersive && !isSpectrum && (
+              {!playerOnly && !isImmersive && !isSpectrum && (
               <>
               {/* 歌词高亮颜色选择器（透明彩胶下联动胶片颜色：选色即固定为手动色） */}
               <Tooltip label={isVinyl ? "胶片/歌词颜色" : "歌词高亮颜色"}>
@@ -2095,6 +2095,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
               </Tooltip>
               </>
               )}
+              {!playerOnly && (
               <Popover placement="top-end" isLazy strategy="fixed">
                 <Tooltip label="音质选择">
                   <PopoverTrigger>
@@ -2137,6 +2138,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
                   </Fade>
                 </Portal>
               </Popover>
+              )}
             <Tooltip label={desktopLyricsVisible ? "关闭桌面歌词" : "开启桌面歌词"}>
               <IconButton
                 aria-label="Desktop lyrics"
@@ -2151,6 +2153,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
                 }}
               />
             </Tooltip>
+            {!playerOnly && (
             <Tooltip label="播放队列" isDisabled={queuePanelOpen}>
               <IconButton
                 aria-label="Queue"
@@ -2161,6 +2164,7 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
                 sx={{ color: effectiveTextColor, _hover: { bg: effectiveHoverBg } }}
               />
             </Tooltip>
+            )}
             </HStack>
           </Box>
         </Box>

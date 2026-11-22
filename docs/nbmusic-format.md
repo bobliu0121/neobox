@@ -14,7 +14,7 @@
 * 字幕：写入 `S_TEXT/NBMUSIC` 轨，轨道级 JSON 存在 `CodecPrivate`，每条 Cue 一个 `BlockGroup + BlockDuration`；支持逐字进度、翻译、读音 segments、样式和内嵌字体引用。
 * 高潮：写入全局 Tag `NBMUSIC_CLIMAX`。
 * 专用编辑页：`/nbmusic-editor`（内置工具「NBMusic 编辑」），支持新建工程、打开已有 `.nbmusic` 继续编辑、音频轨 / 字幕轨 / 字号附件 / 高潮编辑，并通过 `mux_nbmusic` 另存。
-* 编辑回读：`load_nbmusic_project` 把内嵌音频/封面/字体解到临时目录并返回完整 Cue 结构；`parse_nbmusic_subtitle` 复用 MKA 的 SRT / VTT / ASS / SSA 解析器导入字幕，其中 ASS 的 `\k` / `\kf` / `\ko` / `\K` 会转换为逐字 `chars`（`\kf`/`\K` 为 `linear`，`\k`/`\ko` 为 `step`），导入含逐字数据的字幕轨会自动加入 `karaoke` 角色。
+* 编辑回读：`load_nbmusic_project` 把内嵌音频/封面/字体解到临时目录并返回完整 Cue 结构；`parse_nbmusic_subtitle` 复用 MKA 的 SRT / VTT / ASS / SSA 解析器导入字幕，其中 ASS 的 `\k` / `\kf` / `\ko` / `\K` 会转换为逐字 `chars`（`\kf`/`\K` 为 `linear`，`\k`/`\ko` 为 `step`），导入含逐字数据的字幕轨会自动加入 `karaoke` 角色。SRT / VTT / ASS 的双行字幕会拆成 Cue 正文 + 内联 `translations`（第一行为歌词，第二行为翻译），字幕后端导出 LRC 时以 `\N` 连接两行，播放器与桌面歌词显示为原文/翻译两行。
 * 当前限制：v1 暂不写 `SeekHead/Cues`；Opus 未纳入基线；字体只做内嵌与缓存，不做子集化；编辑页保存为“另存”语义，不直接覆盖源文件。
 
 ## 1. 设计目标
@@ -1200,6 +1200,9 @@ Track 1 的 `channelPrograms`：
   * 便携版启动时由 `file_association::ensure_nbmusic_open_with` 写入 HKCU：`.nbmusic` 的 `OpenWithProgids`、`NeoBox.nbmusic` ProgID、`Applications\neobox.exe` 的 `SupportedTypes`。只把 NeoBox 加入「打开方式」候选，不抢占默认关联；用户在资源管理器中确认后即可双击直接打开。
   * 双击 `.nbmusic` / `.mka` 会进入**音乐专属模式**：后端置位 `MUSIC_ONLY_MODE`，只启动音乐 API、音频代理、播放控制热键、SMTC 与媒体键；监控子进程、硬件记录、悬浮框轮询、内存清理、CPU 调度、连点器、桌面歌词热键、外部播放器轮询和托盘均不初始化。主窗口关闭即退出进程。
   * 音乐专属模式的界面只渲染展开播放器本体与窗口控制：隐藏侧边栏、全局搜索、启动动画、开屏广告、主页、灵动岛桥接，以及播放器左上角的「收起/返回音乐首页」按钮；搜索、歌单和音乐首页不会出现，无法从播放器切回音乐搜索界面。
+  * 纯播放器默认启用桌面歌词，并隐藏播放队列、音质选择、歌词颜色/字号等音乐首页相关按钮，只保留播放控制、音量与桌面歌词开关。
+  * `.nbmusic` / `.mka` 启动不注册单实例插件：已经打开播放器时再次双击文件，会启动一个独立进程和独立播放器窗口，多个窗口/多首歌可同时存在，互不接管播放队列。
+  * 编辑页添加 MP3 / FLAC / M4A / MP4 等音频时，会读取容器内嵌封面并自动填入工程封面；MP4 / M4A / MOV 的内嵌 `covr` 封面在 lofty 读取失败时由 ISO BMFF box 解析器兜底提取。
   * 提权重启（UAC）会原样保留命令行参数，避免文件路径在二次启动时丢失。
   * 安装版同时在 `tauri.conf.json` 的 `bundle.fileAssociations` 声明 `.nbmusic`（`audio/x-nbmusic`）。
 

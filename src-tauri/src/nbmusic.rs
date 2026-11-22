@@ -1909,16 +1909,7 @@ pub fn extract_playable_audio(
         .ok_or_else(|| ".nbmusic 没有可用音频轨".to_string())?;
 
     if let Some(subtitle) = pick_subtitle(&demux, audio) {
-        let events: Vec<crate::matroska::SubtitleEvent> = subtitle
-            .cues
-            .iter()
-            .map(|cue| crate::matroska::SubtitleEvent {
-                start_ms: cue.start_ms,
-                end_ms: cue.end_ms,
-                text: cue.text.clone(),
-            })
-            .collect();
-        let lrc = crate::matroska::subtitle_lrc_from_events(&events);
+        let lrc = subtitle_lrc_from_cues(&subtitle.cues);
         if !lrc.is_empty() {
             let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v2.lrc")), lrc);
         }
@@ -1982,6 +1973,33 @@ pub fn extract_playable_audio(
     Ok((playable.to_string_lossy().to_string(), cover_path, demux.duration_ms))
 }
 
+/// 把 `.nbmusic` 的 Cue 转成 LRC：正文第一行是歌词，内联翻译作为第二行，
+/// 由前端 parseLrc 还原成主歌词 + 翻译两行显示。
+fn subtitle_lrc_from_cues(cues: &[Cue]) -> String {
+    let events: Vec<crate::matroska::SubtitleEvent> = cues
+        .iter()
+        .map(|cue| {
+            let mut text = cue.text.trim().to_string();
+            if let Some(translation) = cue
+                .translations
+                .iter()
+                .find(|item| !item.text.trim().is_empty())
+            {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(translation.text.trim());
+            }
+            crate::matroska::SubtitleEvent {
+                start_ms: cue.start_ms,
+                end_ms: cue.end_ms,
+                text,
+            }
+        })
+        .collect();
+    crate::matroska::subtitle_lrc_from_events(&events)
+}
+
 pub fn subtitle_lrc_from_path(path: &str) -> Result<String, String> {
     let demux = demux_nbmusic(path)?;
     let audio = demux
@@ -1995,16 +2013,7 @@ pub fn subtitle_lrc_from_path(path: &str) -> Result<String, String> {
     let Some(subtitle) = subtitle else {
         return Ok(String::new());
     };
-    let events: Vec<crate::matroska::SubtitleEvent> = subtitle
-        .cues
-        .iter()
-        .map(|cue| crate::matroska::SubtitleEvent {
-            start_ms: cue.start_ms,
-            end_ms: cue.end_ms,
-            text: cue.text.clone(),
-        })
-        .collect();
-    Ok(crate::matroska::subtitle_lrc_from_events(&events))
+    Ok(subtitle_lrc_from_cues(&subtitle.cues))
 }
 
 pub fn extract_cover_to_cache(
@@ -2039,6 +2048,50 @@ pub async fn load_nbmusic_project(path: String) -> Result<NbmusicProject, String
         .map_err(|error| format!("NBMusic 编辑工程解包异常: {error}"))?
 }
 
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|ch| {
+        matches!(
+            ch as u32,
+            0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF
+        )
+    })
+}
+
+/// 双行字幕拆分：第一行作为歌词正文，其余行合并为翻译。
+/// 语言按第二行文字判断：中文优先 `zh`，否则英文 `en`，无法判断则 `und`。
+fn split_bilingual_subtitle(text: &str) -> (String, Vec<InlineTranslation>) {
+    let normalized = text
+        .replace("\\N", "\n")
+        .replace("\\n", "\n")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+    let lines: Vec<&str> = normalized
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return (text.trim().to_string(), Vec::new());
+    }
+    let main = lines[0].to_string();
+    let translation = lines[1..].join(" ");
+    let lang = if contains_cjk(&translation) && !contains_cjk(&main) {
+        "zh"
+    } else if contains_cjk(&main) && !contains_cjk(&translation) {
+        "en"
+    } else {
+        "und"
+    };
+    (
+        main,
+        vec![InlineTranslation {
+            lang: lang.to_string(),
+            text: translation,
+        }],
+    )
+}
+
 #[tauri::command]
 pub async fn parse_nbmusic_subtitle(path: String) -> Result<Vec<Cue>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2046,27 +2099,35 @@ pub async fn parse_nbmusic_subtitle(path: String) -> Result<Vec<Cue>, String> {
         Ok(events
             .into_iter()
             .enumerate()
-            .map(|(index, event)| Cue {
-                id: Some(format!("c{}", index + 1)),
-                start_ms: event.start_ms,
-                end_ms: event.end_ms,
-                text: event.text,
-                chars: event
-                    .chars
-                    .into_iter()
-                    .map(|ch| CharSpan {
-                        text: ch.text,
-                        start_ms: ch.start_ms,
-                        end_ms: ch.end_ms,
-                        mode: ch.mode,
-                        reading: None,
-                        progress: None,
-                        confidence: None,
-                    })
-                    .collect(),
-                pronunciations: Vec::new(),
-                translations: Vec::new(),
-                style: None,
+            .map(|(index, event)| {
+                // 有逐字进度时不拆行，避免拆行后 chars 与正文对不上
+                let (text, translations) = if event.chars.is_empty() {
+                    split_bilingual_subtitle(&event.text)
+                } else {
+                    (event.text, Vec::new())
+                };
+                Cue {
+                    id: Some(format!("c{}", index + 1)),
+                    start_ms: event.start_ms,
+                    end_ms: event.end_ms,
+                    text,
+                    chars: event
+                        .chars
+                        .into_iter()
+                        .map(|ch| CharSpan {
+                            text: ch.text,
+                            start_ms: ch.start_ms,
+                            end_ms: ch.end_ms,
+                            mode: ch.mode,
+                            reading: None,
+                            progress: None,
+                            confidence: None,
+                        })
+                        .collect(),
+                    pronunciations: Vec::new(),
+                    translations,
+                    style: None,
+                }
             })
             .collect())
     })
@@ -2106,6 +2167,17 @@ mod tests {
         let decoded: Cue = serde_json::from_value(json).unwrap();
         assert_eq!(decoded.text, "月亮");
         assert_eq!(decoded.chars.len(), 1);
+    }
+
+    #[test]
+    fn bilingual_subtitle_splits_translation() {
+        let (main, translations) = split_bilingual_subtitle(
+            "Now for the official national weather service forecast.\n现在由国家气象局播报天气预报",
+        );
+        assert_eq!(main, "Now for the official national weather service forecast.");
+        assert_eq!(translations.len(), 1);
+        assert_eq!(translations[0].lang, "zh");
+        assert_eq!(translations[0].text, "现在由国家气象局播报天气预报");
     }
 
     #[test]

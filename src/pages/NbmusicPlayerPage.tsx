@@ -11,6 +11,7 @@ import { ExpandedPlayer } from "./MusicPage";
  */
 export default function NbmusicPlayerPage() {
   const currentSong = useMusicStore((s) => s.currentSong);
+  const desktopLyricsVisible = useMusicStore((s) => s.desktopLyricsVisible);
 
   // 纯播放器不挂载 MusicPage，但 openAudioFile / playSong 依赖 store 里的 audioRef。
   // 这里必须自己创建并注册音频元素，否则启动时会一直等不到 audioRef，卡在加载页。
@@ -31,6 +32,14 @@ export default function NbmusicPlayerPage() {
     state.setAudioRef(audio);
     void useMusicStore.getState().init();
   }, []);
+
+  // 双击 .nbmusic 打开的纯播放器默认启用桌面歌词；
+  // 等歌曲导入完成后再显示，避免桌面歌词窗口先弹出空白。
+  useEffect(() => {
+    if (currentSong && !desktopLyricsVisible) {
+      void useMusicStore.getState().setDesktopLyricsVisible(true);
+    }
+  }, [currentSong, desktopLyricsVisible]);
 
   if (!currentSong) {
     return (

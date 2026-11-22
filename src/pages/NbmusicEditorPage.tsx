@@ -183,7 +183,7 @@ type MuxResult = {
 
 // ─────────────────────────── 工具 ───────────────────────────
 
-const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|flac|aac|opus|wma|aiff|ape|oga|mka|nbmusic)$/i;
+const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|mp4|flac|aac|opus|wma|aiff|ape|oga|mka|nbmusic)$/i;
 const SUBTITLE_EXT_RE = /\.(srt|vtt|ass|ssa)$/i;
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif)$/i;
 const FONT_EXT_RE = /\.(ttf|otf|woff|woff2)$/i;
@@ -606,8 +606,19 @@ export default function NbmusicEditorPage() {
   }, [project.audioTracks.length]);
 
   const addAudioPaths = useCallback(
-    (paths: string[]) => {
+    async (paths: string[]) => {
       if (!paths.length) return;
+      // 添加音频时顺手读取容器内嵌封面（MP3 / FLAC / M4A / MP4 等），
+      // 工程还没有封面就自动填入，避免用户再手动找图。
+      const covers = await Promise.all(
+        paths.map(async (path) => {
+          try {
+            return await invoke<string | null>("extract_audio_cover", { path });
+          } catch {
+            return null;
+          }
+        }),
+      );
       setProject((current) => {
         let uid = Number(nextUid(current));
         const hasDefault = current.audioTracks.some((track) => track.default);
@@ -619,6 +630,7 @@ export default function NbmusicEditorPage() {
         });
         return {
           ...current,
+          coverPath: current.coverPath || covers.find((cover): cover is string => !!cover) || null,
           audioTracks: [...current.audioTracks, ...added],
           title: current.title || stem(paths[0]),
         };
@@ -637,14 +649,14 @@ export default function NbmusicEditorPage() {
           {
             name: "音频文件",
             extensions: [
-              "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka",
+              "mp3", "wav", "ogg", "m4a", "mp4", "flac", "aac", "opus", "wma", "aiff", "ape", "oga", "mka",
             ],
           },
           { name: "所有文件", extensions: ["*"] },
         ],
       });
       const paths = typeof selected === "string" ? [selected] : selected ?? [];
-      addAudioPaths(paths as string[]);
+      await addAudioPaths(paths as string[]);
     } catch (e) {
       toast({ title: String(e), status: "error", duration: 4000 });
     }
@@ -986,7 +998,7 @@ export default function NbmusicEditorPage() {
       const subtitles = paths.filter((path) => SUBTITLE_EXT_RE.test(path));
       const images = paths.filter((path) => IMAGE_EXT_RE.test(path));
       const fonts = paths.filter((path) => FONT_EXT_RE.test(path));
-      if (audio.length) addAudioPaths(audio);
+      if (audio.length) await addAudioPaths(audio);
       if (images.length) patchProject({ coverPath: images[0] });
       if (fonts.length) {
         setProject((current) => ({
