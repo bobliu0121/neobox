@@ -13,6 +13,7 @@ use crate::matroska::{
     parse_block_payload, parse_subtitle_import_events, prepare_audio, read_float, read_uint,
     read_vint_id, read_vint_size,
 };
+use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -1875,20 +1876,61 @@ fn write_cover_cache(
     cover: &Option<(String, Vec<u8>)>,
 ) -> Option<String> {
     let (mime, data) = cover.as_ref()?;
-    let ext = match mime.as_str() {
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        _ => "jpg",
-    };
-    let path = cache_dir.join(format!("{cache_key}_cover.{ext}"));
-    match std::fs::write(&path, data) {
-        Ok(()) => Some(path.to_string_lossy().to_string()),
-        Err(error) => {
-            log::warn!("[NBMusic] 写封面缓存失败：{error}");
-            None
+
+    // 播放缓存不落 PNG：PNG 封面解码后统一转成 JPEG 写入。
+    // 这样播放/导入 `.nbmusic` 时缓存目录只会有 jpg，不会每次生成大体积 png。
+    let mut jpeg: Option<Vec<u8>> = None;
+    let (ext, bytes): (&str, &[u8]) = if mime == "image/png" {
+        let img = match image::load_from_memory_with_format(data, image::ImageFormat::Png) {
+            Ok(img) => img,
+            Err(error) => {
+                log::warn!("[NBMusic] 解码 PNG 封面失败，跳过封面缓存：{error}");
+                return None;
+            }
+        };
+        let rgb = img.to_rgb8();
+        let (width, height) = rgb.dimensions();
+        let mut out = Vec::new();
+        {
+            let mut cursor = std::io::Cursor::new(&mut out);
+            if let Err(error) = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 90)
+                .write_image(
+                    rgb.as_raw(),
+                    width,
+                    height,
+                    image::ExtendedColorType::Rgb8,
+                )
+            {
+                log::warn!("[NBMusic] PNG 封面转 JPEG 失败，跳过封面缓存：{error}");
+                return None;
+            }
         }
+        jpeg = Some(out);
+        ("jpg", jpeg.as_deref().unwrap_or_default())
+    } else if mime == "image/gif" {
+        ("gif", data.as_slice())
+    } else if mime == "image/webp" {
+        ("webp", data.as_slice())
+    } else {
+        ("jpg", data.as_slice())
+    };
+
+    let path = cache_dir.join(format!("{cache_key}_cover.{ext}"));
+    let intact = std::fs::metadata(&path)
+        .map(|meta| meta.len() == bytes.len() as u64)
+        .unwrap_or(false);
+    if !intact && std::fs::write(&path, bytes).is_err() {
+        log::warn!("[NBMusic] 写封面缓存失败：{}", path.display());
+        return None;
     }
+
+    // 清掉旧版本遗留的 PNG 封面缓存，避免同一首歌同时留 png/jpg 两份。
+    let stale_png = cache_dir.join(format!("{cache_key}_cover.png"));
+    if stale_png != path && stale_png.is_file() {
+        let _ = std::fs::remove_file(&stale_png);
+    }
+
+    Some(path.to_string_lossy().to_string())
 }
 
 /// 把 .nbmusic 的主音频解到缓存目录，返回可播放文件路径、封面缓存、时长。
@@ -2201,6 +2243,43 @@ mod tests {
         assert_eq!(meta.uid, "2");
         assert_eq!(meta.audio_bindings[0].channels.as_deref(), Some(&[1][..]));
         assert_eq!(meta.roles, roles);
+    }
+
+    #[test]
+    fn png_cover_cache_is_written_as_jpeg() {
+        let dir = std::env::temp_dir().join("neobox_nbmusic_cover_png_to_jpeg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let img = image::RgbImage::from_fn(48, 32, |x, y| {
+            image::Rgb([(x * 5) as u8, (y * 7) as u8, 180])
+        });
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                img.as_raw(),
+                img.width(),
+                img.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+
+        let path = write_cover_cache(
+            &dir,
+            "cover-test",
+            &Some(("image/png".to_string(), png)),
+        )
+        .expect("PNG 封面应成功转 JPEG 并写入缓存");
+        assert!(path.ends_with("cover-test_cover.jpg"), "缓存路径应为 jpg: {path}");
+        assert!(
+            !dir.join("cover-test_cover.png").exists(),
+            "播放缓存不应生成 png"
+        );
+        let jpeg = std::fs::read(&path).unwrap();
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "输出应为 JPEG 数据");
+        assert!(image::load_from_memory(&jpeg).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
