@@ -22,7 +22,10 @@ pub fn ensure_nbmusic_open_with() {
         .and_then(|name| name.to_str())
         .unwrap_or("neobox.exe");
     let command = format!("\"{}\" \"%1\"", exe_text.replace('"', "\\\""));
-    let icon = format!("\"{}\",0", exe_text.replace('"', "\\\""));
+    // `.nbmusic` 文件图标使用独立的 NBmusic 图标，而不是 NeoBox 软件图标。
+    // 便携版没有安装器，这里把内嵌 ICO 写到 LocalAppData 后注册 DefaultIcon。
+    let icon = nbmusic_file_icon()
+        .unwrap_or_else(|| format!("\"{}\",0", exe_text.replace('"', "\\\"")));
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let prog_key_path = r"Software\Classes\NeoBox.nbmusic\shell\open\command";
@@ -36,8 +39,18 @@ pub fn ensure_nbmusic_open_with() {
         .open_subkey(&app_key_path)
         .and_then(|key| key.get_value::<String, _>(""))
         .ok();
+    let current_icon = hkcu
+        .open_subkey(r"Software\Classes\NeoBox.nbmusic\DefaultIcon")
+        .and_then(|key| key.get_value::<String, _>(""))
+        .ok();
+    let current_ext_icon = hkcu
+        .open_subkey(r"Software\Classes\.nbmusic\DefaultIcon")
+        .and_then(|key| key.get_value::<String, _>(""))
+        .ok();
     if current_prog.as_deref() == Some(command.as_str())
         && current_app.as_deref() == Some(command.as_str())
+        && current_icon.as_deref() == Some(icon.as_str())
+        && current_ext_icon.as_deref() == Some(icon.as_str())
     {
         return;
     }
@@ -48,6 +61,29 @@ pub fn ensure_nbmusic_open_with() {
     }
     log::info!("[FileAssoc] 已注册 .nbmusic 打开方式: {exe_text}");
     notify_shell_association_changed();
+}
+
+#[cfg(windows)]
+fn nbmusic_file_icon() -> Option<String> {
+    // 编译期嵌入专门用于 `.nbmusic` 文件的 ICO，避免和 NeoBox 应用图标混用。
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/nbmusic.ico");
+    let dir = dirs::data_local_dir()?.join("NeoBox").join("icons");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        log::warn!("[FileAssoc] 创建文件图标缓存目录失败: {error}");
+        return None;
+    }
+    let path = dir.join("nbmusic.ico");
+    let intact = std::fs::metadata(&path)
+        .map(|meta| meta.len() == ICON_BYTES.len() as u64)
+        .unwrap_or(false);
+    if !intact {
+        if let Err(error) = std::fs::write(&path, ICON_BYTES) {
+            log::warn!("[FileAssoc] 写入 .nbmusic 文件图标失败: {error}");
+            return None;
+        }
+    }
+    let path_text = path.to_string_lossy().replace('"', "\\\"");
+    Some(format!("\"{path_text}\",0"))
 }
 
 #[cfg(windows)]
@@ -68,6 +104,12 @@ fn register(
         .map_err(|e| format!("创建 .nbmusic 键失败: {e}"))?;
     set_value(&ext, "Content Type", "audio/x-nbmusic")?;
     set_value(&ext, "PerceivedType", "audio")?;
+    // 扩展级 DefaultIcon：即使尚未把 NeoBox 设为默认程序，.nbmusic 文件也显示
+    // NBmusic 专属图标；不会改变默认打开程序。
+    let (ext_icon, _) = ext
+        .create_subkey("DefaultIcon")
+        .map_err(|e| format!("创建 .nbmusic DefaultIcon 失败: {e}"))?;
+    set_value(&ext_icon, "", icon)?;
     let (open_with, _) = ext
         .create_subkey("OpenWithProgids")
         .map_err(|e| format!("创建 OpenWithProgids 失败: {e}"))?;

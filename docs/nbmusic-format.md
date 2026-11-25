@@ -1197,7 +1197,7 @@ Track 1 的 `channelPrograms`：
 * 双击打开 `.nbmusic`：
   * 后端 `audio_path_from_args` 识别 `.mka` / `.nbmusic` 路径，经 `PENDING_OPEN_AUDIO` 暂存并通过 `open-audio-file` 事件交给前端；单实例运行时由主实例接管第二次启动的参数。
   * 前端收到后调用音乐模块的 `importLocalSongs`，导入完成即播放，并导航到 `/music` 并展开播放器。
-  * 便携版启动时由 `file_association::ensure_nbmusic_open_with` 写入 HKCU：`.nbmusic` 的 `OpenWithProgids`、`NeoBox.nbmusic` ProgID、`Applications\neobox.exe` 的 `SupportedTypes`。只把 NeoBox 加入「打开方式」候选，不抢占默认关联；用户在资源管理器中确认后即可双击直接打开。
+  * 便携版启动时由 `file_association::ensure_nbmusic_open_with` 写入 HKCU：`.nbmusic` 的 `OpenWithProgids`、`NeoBox.nbmusic` ProgID、`Applications\neobox.exe` 的 `SupportedTypes`。`NeoBox.nbmusic\DefaultIcon` 指向内嵌的独立 NBmusic 文件图标（启动时释放到 `%LOCALAPPDATA%\NeoBox\icons\nbmusic.ico`），不使用 NeoBox 软件图标；只把 NeoBox 加入「打开方式」候选，不抢占默认关联；用户在资源管理器中确认后即可双击直接打开。
   * 双击 `.nbmusic` / `.mka` 会进入**音乐专属模式**：后端置位 `MUSIC_ONLY_MODE`，只启动音乐 API、音频代理、播放控制热键、SMTC 与媒体键；监控子进程、硬件记录、悬浮框轮询、内存清理、CPU 调度、连点器、桌面歌词热键、外部播放器轮询和托盘均不初始化。主窗口关闭即退出进程。
   * 音乐专属模式的界面只渲染展开播放器本体与窗口控制：隐藏侧边栏、全局搜索、启动动画、开屏广告、主页、灵动岛桥接，以及播放器左上角的「收起/返回音乐首页」按钮；搜索、歌单和音乐首页不会出现，无法从播放器切回音乐搜索界面。
   * 纯播放器默认不启用桌面歌词，隐藏播放队列、音质选择、歌词高亮颜色等音乐首页相关按钮，只保留播放控制、音量、字幕字号与桌面歌词开关。桌面歌词完全由播放器右下角的按钮手动开启/关闭，启动时不会自动弹出。播放模式固定为单曲循环，主播放器与桌面歌词控制栏都不显示列表/单曲/随机模式切换按钮。
