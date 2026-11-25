@@ -402,7 +402,7 @@ pub(crate) fn transcode_to_adts(input: &str, output: &str) -> Result<(), String>
 }
 
 /// 解码任意音频/视频音轨为 PCM 并写出标准 WAV（不经过 SinkWriter 编码器）。
-fn decode_audio_to_wav(input: &str, output: &str) -> Result<(), String> {
+pub(crate) fn decode_audio_to_wav(input: &str, output: &str) -> Result<(), String> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
             .ok()

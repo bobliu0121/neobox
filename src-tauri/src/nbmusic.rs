@@ -15,7 +15,7 @@ use crate::matroska::{
 };
 use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // ─────────────────────────── 常量 ───────────────────────────
 
@@ -1950,57 +1950,29 @@ pub fn extract_playable_audio(
         .or_else(|| demux.audio_tracks.first())
         .ok_or_else(|| ".nbmusic 没有可用音频轨".to_string())?;
 
-    if let Some(subtitle) = pick_subtitle(&demux, audio) {
-        let lrc = subtitle_lrc_from_cues(&subtitle.cues);
-        if !lrc.is_empty() {
-            let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v2.lrc")), lrc);
-        }
+    let lrc = if demux.audio_tracks.len() >= 2 {
+        dual_subtitle_lrc(&demux)
+    } else {
+        pick_subtitle(&demux, audio)
+            .map(|subtitle| subtitle_lrc_from_cues(&subtitle.cues))
+            .unwrap_or_default()
+    };
+    if !lrc.is_empty() {
+        let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v2.lrc")), lrc);
     }
 
-    let codec = audio.codec_id.to_ascii_uppercase();
-    let (ext, needs_remux) = if codec.starts_with("A_AAC") {
-        ("aac", true)
-    } else if codec.starts_with("A_MPEG") {
-        ("mp3", false)
-    } else if codec.starts_with("A_FLAC") {
-        ("flac", false)
-    } else if codec.starts_with("A_PCM") {
-        ("wav", false)
-    } else {
-        return Err(format!("暂不支持播放 .nbmusic 的 {} 编码", audio.codec_id));
-    };
-
-    let temp_audio = cache_dir.join(format!("{cache_key}.{ext}"));
-    let demux_audio = crate::matroska::DemuxAudio {
-        codec_id: audio.codec_id.clone(),
-        codec_private: audio.codec_private.clone(),
-        sample_rate: audio.sample_rate,
-        channels: audio.channels,
-        bit_depth: audio.bit_depth,
-        frames: audio.frames.clone(),
-        duration_ms: demux.duration_ms,
-        cover: demux.cover.clone(),
-        subtitle: None,
-    };
-    crate::matroska::write_playable_audio(&demux_audio, &temp_audio)?;
-
-    let playable = if needs_remux {
-        let m4a = cache_dir.join(format!("{cache_key}.m4a"));
-        match crate::file_convert::convert_audio_impl(
-            &temp_audio.to_string_lossy(),
-            &m4a.to_string_lossy(),
-        ) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&temp_audio);
-                m4a
-            }
+    // 双轨工程：把两条音轨分别解成 PCM，再合成为一个立体声文件，
+    // 左轨只进左声道、右轨只进右声道，前端仍然只需一个 audio 元素。
+    let playable = if demux.audio_tracks.len() >= 2 {
+        match build_dual_stereo_playable(&demux, cache_dir, cache_key) {
+            Ok(path) => path,
             Err(error) => {
-                log::warn!("[NBMusic] AAC 封装 M4A 失败，回退直接播放 ADTS：{error}");
-                temp_audio.clone()
+                log::warn!("[NBMusic] 双轨立体声合成失败，回退单轨播放：{error}");
+                extract_single_track_playable(audio, &demux, cache_dir, cache_key)?
             }
         }
     } else {
-        temp_audio.clone()
+        extract_single_track_playable(audio, &demux, cache_dir, cache_key)?
     };
 
     let cover_path = write_cover_cache(cache_dir, cache_key, &demux.cover);
@@ -2013,6 +1985,236 @@ pub fn extract_playable_audio(
     }
 
     Ok((playable.to_string_lossy().to_string(), cover_path, demux.duration_ms))
+}
+
+fn audio_codec_extension(codec_id: &str) -> Result<(&'static str, bool), String> {
+    let codec = codec_id.to_ascii_uppercase();
+    if codec.starts_with("A_AAC") {
+        Ok(("aac", true))
+    } else if codec.starts_with("A_MPEG") {
+        Ok(("mp3", false))
+    } else if codec.starts_with("A_FLAC") {
+        Ok(("flac", false))
+    } else if codec.starts_with("A_PCM") {
+        Ok(("wav", false))
+    } else {
+        Err(format!("暂不支持播放 .nbmusic 的 {codec_id} 编码"))
+    }
+}
+
+/// 解封装单条音频轨到缓存，AAC 额外封装成 M4A（浏览器不能直接播 ADTS）。
+fn write_track_playable(
+    track: &DemuxAudioTrack,
+    duration_ms: u64,
+    cache_dir: &Path,
+    stem: &str,
+) -> Result<PathBuf, String> {
+    let (ext, needs_remux) = audio_codec_extension(&track.codec_id)?;
+    let temp_audio = cache_dir.join(format!("{stem}.{ext}"));
+    let demux_audio = crate::matroska::DemuxAudio {
+        codec_id: track.codec_id.clone(),
+        codec_private: track.codec_private.clone(),
+        sample_rate: track.sample_rate,
+        channels: track.channels,
+        bit_depth: track.bit_depth,
+        frames: track.frames.clone(),
+        duration_ms,
+        cover: None,
+        subtitle: None,
+    };
+    crate::matroska::write_playable_audio(&demux_audio, &temp_audio)?;
+    if !needs_remux {
+        return Ok(temp_audio);
+    }
+    let m4a = cache_dir.join(format!("{stem}.m4a"));
+    match crate::file_convert::convert_audio_impl(
+        &temp_audio.to_string_lossy(),
+        &m4a.to_string_lossy(),
+    ) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temp_audio);
+            Ok(m4a)
+        }
+        Err(error) => {
+            log::warn!("[NBMusic] AAC 封装 M4A 失败，回退直接播放 ADTS：{error}");
+            Ok(temp_audio)
+        }
+    }
+}
+
+fn extract_single_track_playable(
+    audio: &DemuxAudioTrack,
+    demux: &NbmusicDemux,
+    cache_dir: &Path,
+    cache_key: &str,
+) -> Result<PathBuf, String> {
+    write_track_playable(audio, demux.duration_ms, cache_dir, cache_key)
+}
+
+fn build_dual_stereo_playable(
+    demux: &NbmusicDemux,
+    cache_dir: &Path,
+    cache_key: &str,
+) -> Result<PathBuf, String> {
+    let m4a = cache_dir.join(format!("{cache_key}.stereo.m4a"));
+    if m4a.is_file() && std::fs::metadata(&m4a).map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(m4a);
+    }
+
+    let tracks: Vec<&DemuxAudioTrack> = demux.audio_tracks.iter().take(2).collect();
+    if tracks.len() < 2 {
+        return Err("音频轨不足两条".to_string());
+    }
+
+    let mut track_files: Vec<PathBuf> = Vec::new();
+    let mut wav_files: Vec<PathBuf> = Vec::new();
+    let result = (|| -> Result<PathBuf, String> {
+        for (index, track) in tracks.iter().enumerate() {
+            let stem = format!("{cache_key}.track{index}");
+            let track_file = write_track_playable(track, demux.duration_ms, cache_dir, &stem)?;
+            track_files.push(track_file.clone());
+            let wav = cache_dir.join(format!("{stem}.decoded.wav"));
+            crate::file_convert::decode_audio_to_wav(
+                &track_file.to_string_lossy(),
+                &wav.to_string_lossy(),
+            )?;
+            wav_files.push(wav);
+        }
+
+        let stereo_wav = cache_dir.join(format!("{cache_key}.stereo.wav"));
+        mix_dual_tracks_to_stereo_wav(&wav_files[0], &wav_files[1], &stereo_wav)?;
+
+        match crate::file_convert::convert_audio_impl(
+            &stereo_wav.to_string_lossy(),
+            &m4a.to_string_lossy(),
+        ) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&stereo_wav);
+                Ok(m4a.clone())
+            }
+            Err(error) => {
+                log::warn!("[NBMusic] 立体声 WAV 封装 M4A 失败，直接播放 WAV：{error}");
+                Ok(stereo_wav)
+            }
+        }
+    })();
+
+    for path in track_files.iter().chain(wav_files.iter()) {
+        let _ = std::fs::remove_file(path);
+    }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&m4a);
+    }
+    result
+}
+
+struct PcmWav {
+    sample_rate: u32,
+    channels: u16,
+    bits: u16,
+    is_float: bool,
+    block_align: usize,
+    data: Vec<u8>,
+}
+
+fn read_pcm_wav(path: &Path) -> Result<PcmWav, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取解码 WAV 失败: {e}"))?;
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("解码结果不是标准 WAV".to_string());
+    }
+    let format = u16::from_le_bytes([bytes[20], bytes[21]]);
+    let channels = u16::from_le_bytes([bytes[22], bytes[23]]);
+    let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
+    let bits = u16::from_le_bytes([bytes[34], bytes[35]]);
+    let block_align = u16::from_le_bytes([bytes[32], bytes[33]]) as usize;
+    if &bytes[36..40] != b"data" {
+        return Err("解码 WAV 缺少 data 块".to_string());
+    }
+    let data_len = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+    let end = 44usize.saturating_add(data_len).min(bytes.len());
+    if channels == 0 || block_align == 0 || sample_rate == 0 {
+        return Err("解码 WAV 参数无效".to_string());
+    }
+    Ok(PcmWav {
+        sample_rate,
+        channels,
+        bits,
+        is_float: format == 3,
+        block_align,
+        data: bytes[44..end].to_vec(),
+    })
+}
+
+fn wav_sample_at(wav: &PcmWav, frame: usize, channel: usize) -> f32 {
+    let bytes_per_sample = (wav.bits as usize / 8).max(1);
+    let offset = frame * wav.block_align + channel.min(wav.channels as usize - 1) * bytes_per_sample;
+    if offset + bytes_per_sample > wav.data.len() {
+        return 0.0;
+    }
+    let data = &wav.data[offset..offset + bytes_per_sample];
+    if wav.is_float {
+        return match wav.bits {
+            32 => f32::from_bits(u32::from_le_bytes([data[0], data[1], data[2], data[3]])),
+            64 => f64::from_le_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]) as f32,
+            _ => 0.0,
+        };
+    }
+    match wav.bits {
+        8 => (data[0] as f32 - 128.0) / 128.0,
+        16 => i16::from_le_bytes([data[0], data[1]]) as f32 / 32768.0,
+        24 => i32::from_le_bytes([0, data[0], data[1], data[2]]) as f32 / 8_388_608.0,
+        32 => i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f32 / 2_147_483_648.0,
+        _ => 0.0,
+    }
+}
+
+/// 两条轨都是「单声道内容复制到左右」的立体声容器：左轨取左声道，右轨取右声道。
+fn mix_dual_tracks_to_stereo_wav(
+    left_path: &Path,
+    right_path: &Path,
+    output: &Path,
+) -> Result<(), String> {
+    let left = read_pcm_wav(left_path)?;
+    let right = read_pcm_wav(right_path)?;
+    if left.sample_rate != right.sample_rate {
+        return Err(format!(
+            "两条音轨采样率不一致（{} / {}），无法直接合成",
+            left.sample_rate, right.sample_rate
+        ));
+    }
+    let frames = (left.data.len() / left.block_align).min(right.data.len() / right.block_align);
+    let mut pcm = Vec::with_capacity(frames * 4);
+    for frame in 0..frames {
+        let l = wav_sample_at(&left, frame, 0);
+        let r = wav_sample_at(&right, frame, 0);
+        let l = (l.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        let r = (r.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        pcm.extend_from_slice(&l.to_le_bytes());
+        pcm.extend_from_slice(&r.to_le_bytes());
+    }
+
+    let channels: u16 = 2;
+    let bits: u16 = 16;
+    let block_align = channels * (bits / 8);
+    let byte_rate = left.sample_rate * block_align as u32;
+    let data_len = pcm.len() as u32;
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&left.sample_rate.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&bits.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(&pcm);
+    std::fs::write(output, out).map_err(|e| format!("写入立体声 WAV 失败: {e}"))
 }
 
 /// 把 `.nbmusic` 的 Cue 转成 LRC：正文第一行是歌词，内联翻译作为第二行，
@@ -2042,8 +2244,83 @@ fn subtitle_lrc_from_cues(cues: &[Cue]) -> String {
     crate::matroska::subtitle_lrc_from_events(&events)
 }
 
+/// 双轨工程把两条字幕轨合并成一条 LRC：同一时间的第一条字幕作主行、
+/// 第二条作翻译行，前端 parseLrc 会还原成上下两行同时显示。
+fn dual_subtitle_lrc(demux: &NbmusicDemux) -> String {
+    let tracks: Vec<&DemuxSubtitleTrack> = demux
+        .subtitle_tracks
+        .iter()
+        .filter(|track| !track.cues.is_empty())
+        .take(2)
+        .collect();
+    if tracks.len() < 2 {
+        return tracks
+            .first()
+            .map(|track| subtitle_lrc_from_cues(&track.cues))
+            .unwrap_or_default();
+    }
+
+    let cue_text = |cue: &Cue| cue.text.replace('\r', "").trim().to_string();
+    let mut events: Vec<crate::matroska::SubtitleEvent> = Vec::new();
+
+    if tracks[0].cues.len() == tracks[1].cues.len() {
+        for (left, right) in tracks[0].cues.iter().zip(tracks[1].cues.iter()) {
+            let mut lines = Vec::new();
+            let left_text = cue_text(left);
+            let right_text = cue_text(right);
+            if !left_text.is_empty() {
+                lines.push(left_text);
+            }
+            if !right_text.is_empty() && lines.iter().all(|line| line != &right_text) {
+                lines.push(right_text);
+            }
+            if lines.is_empty() {
+                continue;
+            }
+            events.push(crate::matroska::SubtitleEvent {
+                start_ms: left.start_ms.min(right.start_ms),
+                end_ms: left.end_ms.max(right.end_ms),
+                text: lines.join("\n"),
+            });
+        }
+    } else {
+        let mut by_time: std::collections::BTreeMap<u64, (u64, Vec<String>)> =
+            std::collections::BTreeMap::new();
+        for track in &tracks {
+            for cue in &track.cues {
+                let text = cue_text(cue);
+                if text.is_empty() {
+                    continue;
+                }
+                let entry = by_time
+                    .entry(cue.start_ms)
+                    .or_insert_with(|| (cue.end_ms, Vec::new()));
+                entry.0 = entry.0.max(cue.end_ms);
+                if entry.1.last().map(|last| last != &text).unwrap_or(true) {
+                    entry.1.push(text);
+                }
+            }
+        }
+        for (start_ms, (end_ms, lines)) in by_time {
+            events.push(crate::matroska::SubtitleEvent {
+                start_ms,
+                end_ms,
+                text: lines.join("\n"),
+            });
+        }
+    }
+
+    crate::matroska::subtitle_lrc_from_events(&events)
+}
+
 pub fn subtitle_lrc_from_path(path: &str) -> Result<String, String> {
     let demux = demux_nbmusic(path)?;
+    if demux.audio_tracks.len() >= 2 {
+        let lrc = dual_subtitle_lrc(&demux);
+        if !lrc.is_empty() {
+            return Ok(lrc);
+        }
+    }
     let audio = demux
         .audio_tracks
         .iter()

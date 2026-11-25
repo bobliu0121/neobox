@@ -638,12 +638,24 @@ fn build_local_song_info(
 
         if let Some(play_dir) = play_cache_dir {
             let cache_key = playback_cache_key(path, &id);
+            // `.nbmusic` 的双轨工程必须使用合成后的立体声缓存；旧版单轨缓存
+            // （{key}.mp3 等）不能再直接复用，否则会继续只播一条音轨、只显示一条字幕。
             let mut cached = None;
-            for ext in ["m4a", "aac", "mp3", "flac", "wav"] {
-                let candidate = play_dir.join(format!("{cache_key}.{ext}"));
-                if candidate.is_file() {
-                    cached = Some(candidate.to_string_lossy().to_string());
-                    break;
+            if extension == "nbmusic" {
+                for ext in ["stereo.m4a", "stereo.wav"] {
+                    let candidate = play_dir.join(format!("{cache_key}.{ext}"));
+                    if candidate.is_file() {
+                        cached = Some(candidate.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            } else {
+                for ext in ["m4a", "aac", "mp3", "flac", "wav"] {
+                    let candidate = play_dir.join(format!("{cache_key}.{ext}"));
+                    if candidate.is_file() {
+                        cached = Some(candidate.to_string_lossy().to_string());
+                        break;
+                    }
                 }
             }
             match cached {
