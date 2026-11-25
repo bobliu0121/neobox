@@ -43,6 +43,8 @@ interface DisplayState {
   index: number;
   text: string;
   translation?: string;
+  /** 双声道字幕：text / translation 分列左右显示 */
+  dual?: boolean;
   phase: Phase;
   // 入场动画类型：转动 / 字符靠拢，二者随机二选一
   anim: "rotate" | "spread";
@@ -172,6 +174,7 @@ function ImmersiveLyricsViewInner({
       index: idx,
       text: raw || "♪ ♪ ♪",
       translation: line?.translation?.trim() || undefined,
+      dual: Boolean(line?.dual && line?.translation?.trim()),
       phase: "enter",
       // 转动 / 字符靠拢 随机二选一（与字数无关）
       anim: Math.random() < 0.5 ? "rotate" : "spread",
@@ -332,6 +335,71 @@ function ImmersiveLyricsViewInner({
       // 绝不在渲染中移除动画，从根源避免"移除瞬间缩小/回退"的跳变
       gAnim = "immersiveGhostEnter 0.85s cubic-bezier(0.22,0.8,0.36,1) forwards";
     }
+
+    // 双声道：左右字幕分列显示；相同时后端已合并成单行，不会进入此分支。
+    if (st.dual && st.translation) {
+      const dualSize = Math.max(24, Math.round(fgSize * 0.64));
+      const sideAnim =
+        st.phase === "exit"
+          ? "immersiveExit 0.52s ease-in forwards"
+          : isSpread
+            ? "immersiveEnterLong 0.8s cubic-bezier(0.22,0.8,0.36,1) forwards"
+            : "immersiveBlurIn 0.72s cubic-bezier(0.25,0.8,0.35,1) forwards";
+      const sideShadowAnim =
+        st.phase === "exit"
+          ? "immersiveShadowOut 0.52s ease-in forwards"
+          : isSpread
+            ? "immersiveShadowIn 0.8s cubic-bezier(0.22,0.8,0.36,1) forwards"
+            : "immersiveShadowIn 0.72s cubic-bezier(0.25,0.8,0.35,1) forwards";
+      return (
+        <Box
+          key={`dual-${st.index}`}
+          position="absolute"
+          inset={0}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          px={8}
+        >
+          <Box display="flex" alignItems="center" justifyContent="center" gap={6} w="88%">
+            {[st.text, st.translation].map((text, side) => (
+              <Box
+                key={side}
+                flex={1}
+                minW={0}
+                display="flex"
+                justifyContent="center"
+                textAlign="center"
+              >
+                <Box
+                  sx={{
+                    animation: sideAnim,
+                    ...(st.phase === "hold" ? { filter: "blur(0px)", opacity: 1 } : {}),
+                  }}
+                >
+                  <Text
+                    sx={{
+                      fontSize: `${dualSize}px`,
+                      fontWeight: 900,
+                      fontFamily: LYRIC_FONT,
+                      color: fgTextColor,
+                      textShadow: fgTextShadow,
+                      animation: sideShadowAnim,
+                      lineHeight: 1.3,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "keep-all",
+                    }}
+                  >
+                    {text}
+                  </Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      );
+    }
+
     return (
       <Box
         key={`pair-${st.index}`}

@@ -216,6 +216,8 @@ pub struct NbmusicAudioInput {
     pub language: Option<String>,
     pub title: Option<String>,
     pub default: Option<bool>,
+    /// 双声道工程中的声道角色：left / right；缺省时按轨道顺序推断。
+    pub dual_role: Option<String>,
     #[serde(default)]
     pub channel_programs: Vec<ChannelProgram>,
 }
@@ -246,6 +248,8 @@ pub struct SubtitleTrackInput {
     pub default: Option<bool>,
     pub forced: Option<bool>,
     pub offset_ms: Option<i64>,
+    /// 双声道工程中的字幕声道：left / right；缺省时按字幕轨顺序推断。
+    pub dual_side: Option<String>,
     #[serde(default)]
     pub cues: Vec<Cue>,
 }
@@ -292,6 +296,7 @@ pub struct NbmusicAudioTrackInfo {
     pub language: String,
     pub title: String,
     pub default: bool,
+    pub dual_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -307,6 +312,7 @@ pub struct NbmusicSubtitleTrackInfo {
     pub default: bool,
     pub forced: bool,
     pub offset_ms: Option<i64>,
+    pub dual_side: Option<String>,
     pub cue_count: usize,
 }
 
@@ -338,6 +344,7 @@ pub struct NbmusicProjectAudio {
     pub language: String,
     pub title: String,
     pub default: bool,
+    pub dual_role: Option<String>,
     #[serde(default)]
     pub channel_programs: Vec<ChannelProgram>,
 }
@@ -355,6 +362,7 @@ pub struct NbmusicProjectSubtitle {
     pub default: bool,
     pub forced: bool,
     pub offset_ms: Option<i64>,
+    pub dual_side: Option<String>,
     pub cues: Vec<Cue>,
 }
 
@@ -397,6 +405,7 @@ struct PreparedAudio {
     name: String,
     language: String,
     default: bool,
+    dual_role: Option<String>,
     audio: crate::matroska::MuxAudio,
     channel_programs: Vec<ChannelProgram>,
 }
@@ -410,6 +419,7 @@ struct PreparedSubtitle {
     default: bool,
     forced: bool,
     offset_ms: Option<i64>,
+    dual_side: Option<String>,
     codec_private: Vec<u8>,
     cues: Vec<Cue>,
     bindings: Vec<AudioBinding>,
@@ -457,6 +467,7 @@ pub struct DemuxAudioTrack {
     pub language: String,
     pub title: String,
     pub default: bool,
+    pub dual_role: Option<String>,
     pub channel_programs: Vec<ChannelProgram>,
     pub frames: Vec<(u64, Vec<u8>)>,
 }
@@ -473,6 +484,7 @@ pub struct DemuxSubtitleTrack {
     pub default: bool,
     pub forced: bool,
     pub offset_ms: Option<i64>,
+    pub dual_side: Option<String>,
     pub cues: Vec<Cue>,
 }
 
@@ -659,6 +671,13 @@ fn build_track_entry(
     elem(ID_TRACK_ENTRY, &concat(&fields))
 }
 
+fn normalize_dual_side(value: Option<&str>) -> Option<String> {
+    match value.map(|item| item.trim().to_ascii_lowercase()) {
+        Some(side) if side == "left" || side == "right" => Some(side),
+        _ => None,
+    }
+}
+
 fn build_simple_tag(name: &str, value: &str) -> Vec<u8> {
     elem(
         ID_SIMPLE_TAG,
@@ -802,6 +821,7 @@ pub fn mux_nbmusic_file(options: &NbmusicMuxOptions) -> Result<NbmusicMuxResult,
             name,
             language: input.language.clone().unwrap_or_else(|| "und".to_string()),
             default: input.default.unwrap_or(index == 0),
+            dual_role: normalize_dual_side(input.dual_role.as_deref()),
             audio,
             channel_programs: input.channel_programs.clone(),
         });
@@ -915,6 +935,7 @@ pub fn mux_nbmusic_file(options: &NbmusicMuxOptions) -> Result<NbmusicMuxResult,
             default: input.default.unwrap_or(false),
             forced: input.forced.unwrap_or(false),
             offset_ms: input.offset_ms,
+            dual_side: normalize_dual_side(input.dual_side.as_deref()),
             codec_private,
             cues,
             bindings,
@@ -1023,6 +1044,9 @@ pub fn mux_nbmusic_file(options: &NbmusicMuxOptions) -> Result<NbmusicMuxResult,
                 .map_err(|e| format!("序列化声道信息失败: {e}"))?;
             simple.push(build_simple_tag("NBMUSIC_CHANNEL_PROGRAMS", &json));
         }
+        if let Some(role) = track.dual_role.as_deref() {
+            simple.push(build_simple_tag("NBMUSIC_DUAL_ROLE", role));
+        }
         tag_blocks.push(build_tag(Some(track.uid), simple));
     }
 
@@ -1047,6 +1071,9 @@ pub fn mux_nbmusic_file(options: &NbmusicMuxOptions) -> Result<NbmusicMuxResult,
         }
         if subtitle.forced {
             simple.push(build_simple_tag("NBMUSIC_SUBTITLE_FORCED", "1"));
+        }
+        if let Some(side) = subtitle.dual_side.as_deref() {
+            simple.push(build_simple_tag("NBMUSIC_DUAL_SIDE", side));
         }
         tag_blocks.push(build_tag(Some(subtitle.uid), simple));
     }
@@ -1533,6 +1560,10 @@ pub fn demux_nbmusic(path: &str) -> Result<NbmusicDemux, String> {
             .find(|(name, _)| name == "NBMUSIC_CHANNEL_PROGRAMS")
             .and_then(|(_, value)| serde_json::from_str::<Vec<ChannelProgram>>(value).ok())
             .unwrap_or_default();
+        let dual_role = tags
+            .iter()
+            .find(|(name, _)| name == "NBMUSIC_DUAL_ROLE")
+            .and_then(|(_, value)| normalize_dual_side(Some(value)));
         audio_tracks.push(DemuxAudioTrack {
             uid: track.uid.to_string(),
             codec_id: track.codec_id.clone(),
@@ -1543,6 +1574,7 @@ pub fn demux_nbmusic(path: &str) -> Result<NbmusicDemux, String> {
             language: track.language.clone(),
             title: track.name.clone(),
             default: track.default,
+            dual_role,
             channel_programs,
             frames,
         });
@@ -1602,6 +1634,7 @@ pub fn demux_nbmusic(path: &str) -> Result<NbmusicDemux, String> {
             default: track.default,
             forced,
             offset_ms,
+            dual_side: normalize_dual_side(tag_value("NBMUSIC_DUAL_SIDE").as_deref()),
             cues,
         });
     }
@@ -1702,6 +1735,7 @@ pub fn probe_nbmusic_file(path: &str) -> Result<NbmusicProbe, String> {
                 language: track.language.clone(),
                 title: track.title.clone(),
                 default: track.default,
+                dual_role: track.dual_role.clone(),
             })
             .collect(),
         subtitle_tracks: demux
@@ -1718,6 +1752,7 @@ pub fn probe_nbmusic_file(path: &str) -> Result<NbmusicProbe, String> {
                 default: track.default,
                 forced: track.forced,
                 offset_ms: track.offset_ms,
+                dual_side: track.dual_side.clone(),
                 cue_count: track.cues.len(),
             })
             .collect(),
@@ -1782,6 +1817,7 @@ pub fn load_nbmusic_project_file(path: &str) -> Result<NbmusicProject, String> {
             language: track.language.clone(),
             title: track.title.clone(),
             default: track.default,
+            dual_role: track.dual_role.clone(),
             channel_programs: track.channel_programs.clone(),
         });
     }
@@ -1841,6 +1877,7 @@ pub fn load_nbmusic_project_file(path: &str) -> Result<NbmusicProject, String> {
                 default: track.default,
                 forced: track.forced,
                 offset_ms: track.offset_ms,
+                dual_side: track.dual_side,
                 cues: track.cues,
             })
             .collect(),
@@ -1849,11 +1886,68 @@ pub fn load_nbmusic_project_file(path: &str) -> Result<NbmusicProject, String> {
     })
 }
 
+/// 双声道音频对：优先读取 mux 时写入的 left/right 角色，缺失时回退到轨道顺序。
+fn dual_audio_tracks(demux: &NbmusicDemux) -> Option<(&DemuxAudioTrack, &DemuxAudioTrack)> {
+    if demux.audio_tracks.len() < 2 {
+        return None;
+    }
+    let left = demux
+        .audio_tracks
+        .iter()
+        .find(|track| track.dual_role.as_deref() == Some("left"))
+        .or_else(|| demux.audio_tracks.first())?;
+    let right = demux
+        .audio_tracks
+        .iter()
+        .find(|track| track.dual_role.as_deref() == Some("right") && !std::ptr::eq(*track, left))
+        .or_else(|| {
+            demux
+                .audio_tracks
+                .iter()
+                .find(|track| !std::ptr::eq(*track, left))
+        })?;
+    Some((left, right))
+}
+
+/// 双声道字幕对：优先读取 dualSide，缺失时回退到字幕轨顺序。
+fn dual_subtitle_tracks(demux: &NbmusicDemux) -> Vec<&DemuxSubtitleTrack> {
+    let candidates: Vec<&DemuxSubtitleTrack> = demux
+        .subtitle_tracks
+        .iter()
+        .filter(|track| !track.cues.is_empty())
+        .collect();
+    if candidates.len() < 2 {
+        return candidates;
+    }
+    let left = candidates
+        .iter()
+        .find(|track| track.dual_side.as_deref() == Some("left"))
+        .or_else(|| candidates.first())
+        .copied();
+    let left_uid = left.map(|track| track.uid.as_str());
+    let right = candidates
+        .iter()
+        .find(|track| {
+            track.dual_side.as_deref() == Some("right")
+                && left_uid.map(|uid| track.uid != uid).unwrap_or(true)
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|track| left_uid.map(|uid| track.uid != uid).unwrap_or(true))
+        })
+        .copied();
+    match (left, right) {
+        (Some(left), Some(right)) => vec![left, right],
+        (Some(left), None) => vec![left],
+        _ => Vec::new(),
+    }
+}
+
 fn pick_subtitle<'a>(
     demux: &'a NbmusicDemux,
     audio: &DemuxAudioTrack,
-) -> Option<&'a DemuxSubtitleTrack> {
-    demux
+) -> Option<&'a DemuxSubtitleTrack> {    demux
         .subtitle_tracks
         .iter()
         .filter(|track| !track.cues.is_empty())
@@ -1950,7 +2044,8 @@ pub fn extract_playable_audio(
         .or_else(|| demux.audio_tracks.first())
         .ok_or_else(|| ".nbmusic 没有可用音频轨".to_string())?;
 
-    let lrc = if demux.audio_tracks.len() >= 2 {
+    let dual_pair = dual_audio_tracks(&demux);
+    let lrc = if dual_pair.is_some() {
         dual_subtitle_lrc(&demux)
     } else {
         pick_subtitle(&demux, audio)
@@ -1958,12 +2053,12 @@ pub fn extract_playable_audio(
             .unwrap_or_default()
     };
     if !lrc.is_empty() {
-        let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v2.lrc")), lrc);
+        let _ = std::fs::write(cache_dir.join(format!("{cache_key}.lyrics-v3.lrc")), lrc);
     }
 
     // 双轨工程：把两条音轨分别解成 PCM，再合成为一个立体声文件，
     // 左轨只进左声道、右轨只进右声道，前端仍然只需一个 audio 元素。
-    let playable = if demux.audio_tracks.len() >= 2 {
+    let playable = if dual_pair.is_some() {
         match build_dual_stereo_playable(&demux, cache_dir, cache_key) {
             Ok(path) => path,
             Err(error) => {
@@ -2061,10 +2156,9 @@ fn build_dual_stereo_playable(
         return Ok(m4a);
     }
 
-    let tracks: Vec<&DemuxAudioTrack> = demux.audio_tracks.iter().take(2).collect();
-    if tracks.len() < 2 {
-        return Err("音频轨不足两条".to_string());
-    }
+    let (left, right) =
+        dual_audio_tracks(demux).ok_or_else(|| "音频轨不足两条".to_string())?;
+    let tracks = [left, right];
 
     let mut track_files: Vec<PathBuf> = Vec::new();
     let mut wav_files: Vec<PathBuf> = Vec::new();
@@ -2247,12 +2341,7 @@ fn subtitle_lrc_from_cues(cues: &[Cue]) -> String {
 /// 双轨工程把两条字幕轨合并成一条 LRC：同一时间的第一条字幕作主行、
 /// 第二条作翻译行，前端 parseLrc 会还原成上下两行同时显示。
 fn dual_subtitle_lrc(demux: &NbmusicDemux) -> String {
-    let tracks: Vec<&DemuxSubtitleTrack> = demux
-        .subtitle_tracks
-        .iter()
-        .filter(|track| !track.cues.is_empty())
-        .take(2)
-        .collect();
+    let tracks = dual_subtitle_tracks(demux);
     if tracks.len() < 2 {
         return tracks
             .first()
@@ -2310,12 +2399,17 @@ fn dual_subtitle_lrc(demux: &NbmusicDemux) -> String {
         }
     }
 
-    crate::matroska::subtitle_lrc_from_events(&events)
+    let lrc = crate::matroska::subtitle_lrc_from_events(&events);
+    if lrc.is_empty() {
+        lrc
+    } else {
+        format!("NBMUSIC_DUAL=1\n{lrc}")
+    }
 }
 
 pub fn subtitle_lrc_from_path(path: &str) -> Result<String, String> {
     let demux = demux_nbmusic(path)?;
-    if demux.audio_tracks.len() >= 2 {
+    if dual_audio_tracks(&demux).is_some() {
         let lrc = dual_subtitle_lrc(&demux);
         if !lrc.is_empty() {
             return Ok(lrc);

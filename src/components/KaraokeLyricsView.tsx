@@ -217,6 +217,19 @@ function KaraokeLyricsViewInner({
           {lines.map((line, idx) => {
             const isActive = idx === activeIndex;
             const clickable = Boolean(onSeekToLine);
+            // 双声道：左声道 text、右声道 translation，两列并排；
+            // 左右内容相同或只有一侧有字幕时，保持单行居中。
+            const dualRight = line.dual && line.translation ? line.translation.trim() : "";
+            const dualRightLine: KaraokeLine | null = dualRight
+              ? {
+                  ...line,
+                  text: dualRight,
+                  translation: undefined,
+                  words: undefined,
+                  charCount: Math.max(1, dualRight.length),
+                  hasKaraoke: false,
+                }
+              : null;
             return (
               <Box
                 key={idx}
@@ -235,19 +248,61 @@ function KaraokeLyricsViewInner({
                   ...(lineScale ? { transform: isActive ? "scale(1.02)" : "scale(1)" } : {}),
                 }}
               >
-                <KaraokeLyricLine
-                  line={line}
-                  nextLine={lines[idx + 1]}
-                  isActive={isActive}
-                  isPlaying={isPlaying}
-                  fontSize={fontSize}
-                  activeColor={activeColor}
-                  highlightColor={highlightColor}
-                  textColor={textColor}
-                  subTextColor={subTextColor}
-                  audioRef={audioRef}
-                  align={align}
-                />
+                {dualRightLine ? (
+                  <Box
+                    display="grid"
+                    gridTemplateColumns="1fr 1fr"
+                    columnGap="6%"
+                    alignItems="start"
+                    w="100%"
+                  >
+                    <Box minW={0}>
+                      <KaraokeLyricLine
+                        line={line}
+                        nextLine={lines[idx + 1]}
+                        isActive={isActive}
+                        isPlaying={isPlaying}
+                        fontSize={fontSize}
+                        activeColor={activeColor}
+                        highlightColor={highlightColor}
+                        textColor={textColor}
+                        subTextColor={subTextColor}
+                        audioRef={audioRef}
+                        align={align}
+                        showTranslation={false}
+                      />
+                    </Box>
+                    <Box minW={0}>
+                      <KaraokeLyricLine
+                        line={dualRightLine}
+                        isActive={isActive}
+                        isPlaying={isPlaying}
+                        fontSize={fontSize}
+                        activeColor={activeColor}
+                        highlightColor={highlightColor}
+                        textColor={textColor}
+                        subTextColor={subTextColor}
+                        audioRef={audioRef}
+                        align={align}
+                        showTranslation={false}
+                      />
+                    </Box>
+                  </Box>
+                ) : (
+                  <KaraokeLyricLine
+                    line={line}
+                    nextLine={lines[idx + 1]}
+                    isActive={isActive}
+                    isPlaying={isPlaying}
+                    fontSize={fontSize}
+                    activeColor={activeColor}
+                    highlightColor={highlightColor}
+                    textColor={textColor}
+                    subTextColor={subTextColor}
+                    audioRef={audioRef}
+                    align={line.dual ? "center" : align}
+                  />
+                )}
               </Box>
             );
           })}

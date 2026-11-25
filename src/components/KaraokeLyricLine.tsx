@@ -30,7 +30,9 @@ interface KaraokeLyricLineProps {
   subTextColor: string;
   audioRef?: HTMLAudioElement | null;
   /** 文字对齐，默认居中（透明彩胶等左对齐场景传 "left"） */
-  align?: "center" | "left";
+  align?: "center" | "left" | "right";
+  /** 是否渲染翻译行；双声道左右并排时由外层负责另一声道，设为 false */
+  showTranslation?: boolean;
 }
 
 function KaraokeLyricLineInner({
@@ -44,6 +46,7 @@ function KaraokeLyricLineInner({
   subTextColor,
   audioRef,
   align = "center",
+  showTranslation = true,
 }: KaraokeLyricLineProps) {
   // overlayRef 是顶层高亮文字的容器，RAF 更新它的 width
   const overlayRef = useRef<HTMLSpanElement>(null);
@@ -139,7 +142,7 @@ function KaraokeLyricLineInner({
         >
           {line.text}
         </Text>
-        {line.translation && (
+        {showTranslation && line.translation && (
           <Text
             fontSize={`${fontSize - 4}px`}
             color={subTextColor}
@@ -220,7 +223,7 @@ function KaraokeLyricLineInner({
           {line.text}
         </span>
       </span>
-      {line.translation && (
+      {showTranslation && line.translation && (
         <Text
           fontSize={`${fontSize - 4}px`}
           color={subTextColor}

@@ -206,6 +206,56 @@ function ActiveKaraokeLine({
   );
 }
 
+function buildRightLine(line: KaraokeLine): KaraokeLine | null {
+  const text = line.dual && line.translation ? line.translation.trim() : "";
+  if (!text) return null;
+  return {
+    ...line,
+    text,
+    translation: undefined,
+    words: undefined,
+    charCount: Math.max(1, text.length),
+    hasKaraoke: false,
+  };
+}
+
+function PreviewLine({
+  text,
+  fontSize,
+  fontFamily,
+  baseColor,
+}: {
+  text: string;
+  fontSize: number;
+  fontFamily: string;
+  baseColor: string;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        minWidth: 0,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        fontSize: `${fontSize * 0.7}px`,
+        fontFamily: fontFamily || undefined,
+        fontWeight: "bold",
+        color: baseColor,
+        opacity: 0.6,
+        textShadow: `
+          -1px -1px 0 rgba(0,0,0,0.6),
+          1px -1px 0 rgba(0,0,0,0.6),
+          -1px 1px 0 rgba(0,0,0,0.6),
+          1px 1px 0 rgba(0,0,0,0.6)
+        `,
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
 function LyricsCanvasInner({
   lines,
   currentTime,
@@ -257,6 +307,9 @@ function LyricsCanvasInner({
   const currentLine = lines[activeIndex];
   const nextLine = lines[activeIndex + 1];
 
+  const currentRightLine = buildRightLine(currentLine);
+  const nextRightLine = nextLine ? buildRightLine(nextLine) : null;
+
   return (
     <div
       style={{
@@ -269,17 +322,47 @@ function LyricsCanvasInner({
         gap: "4px",
       }}
     >
-      <ActiveKaraokeLine
-        line={currentLine}
-        nextLine={nextLine}
-        currentTime={currentTime}
-        fontSize={fontSize}
-        fontFamily={fontFamily}
-        highlightColor={highlightColor}
-        baseColor={baseColor}
-        isPlaying={isPlaying}
-        showTranslation={showTranslation}
-      />
+      {currentRightLine ? (
+        <div style={{ display: "flex", width: "100%", gap: "16px", alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ActiveKaraokeLine
+              line={currentLine}
+              nextLine={nextLine}
+              currentTime={currentTime}
+              fontSize={fontSize}
+              fontFamily={fontFamily}
+              highlightColor={highlightColor}
+              baseColor={baseColor}
+              isPlaying={isPlaying}
+              showTranslation={false}
+            />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ActiveKaraokeLine
+              line={currentRightLine}
+              currentTime={currentTime}
+              fontSize={fontSize}
+              fontFamily={fontFamily}
+              highlightColor={highlightColor}
+              baseColor={baseColor}
+              isPlaying={isPlaying}
+              showTranslation={false}
+            />
+          </div>
+        </div>
+      ) : (
+        <ActiveKaraokeLine
+          line={currentLine}
+          nextLine={nextLine}
+          currentTime={currentTime}
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          highlightColor={highlightColor}
+          baseColor={baseColor}
+          isPlaying={isPlaying}
+          showTranslation={showTranslation}
+        />
+      )}
 
       {lineCount === 2 && nextLine && (
         <div
@@ -290,52 +373,48 @@ function LyricsCanvasInner({
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
+            width: "100%",
           }}
         >
-          <span
-            style={{
-              display: "inline-block",
-              whiteSpace: "nowrap",
-              fontSize: `${fontSize * 0.7}px`,
-              fontFamily: fontFamily || undefined,
-              fontWeight: "bold",
-              color: baseColor,
-              opacity: 0.6,
-              textShadow: `
-                -1px -1px 0 rgba(0,0,0,0.6),
-                1px -1px 0 rgba(0,0,0,0.6),
-                -1px 1px 0 rgba(0,0,0,0.6),
-                1px 1px 0 rgba(0,0,0,0.6)
-              `,
-            }}
-          >
-            {nextLine.text}
-          </span>
-          {showTranslation && nextLine.translation && (
-            <span
-              style={{
-                display: "block",
-                maxWidth: "100%",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                fontSize: `${Math.max(14, Math.round(fontSize * 0.48))}px`,
-                fontFamily: fontFamily || undefined,
-                fontWeight: "bold",
-                color: baseColor,
-                opacity: 0.6,
-                lineHeight: 1.3,
-                textShadow: `
-                  -1px -1px 0 rgba(0,0,0,0.8),
-                  1px -1px 0 rgba(0,0,0,0.8),
-                  -1px 1px 0 rgba(0,0,0,0.8),
-                  1px 1px 0 rgba(0,0,0,0.8)
-                `,
-                WebkitFontSmoothing: "antialiased",
-              }}
-            >
-              {nextLine.translation}
-            </span>
+          {nextRightLine ? (
+            <div style={{ display: "flex", width: "100%", gap: "16px", alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <PreviewLine text={nextLine.text} fontSize={fontSize} fontFamily={fontFamily} baseColor={baseColor} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <PreviewLine text={nextRightLine.text} fontSize={fontSize} fontFamily={fontFamily} baseColor={baseColor} />
+              </div>
+            </div>
+          ) : (
+            <>
+              <PreviewLine text={nextLine.text} fontSize={fontSize} fontFamily={fontFamily} baseColor={baseColor} />
+              {showTranslation && nextLine.translation && (
+                <span
+                  style={{
+                    display: "block",
+                    maxWidth: "100%",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    fontSize: `${Math.max(14, Math.round(fontSize * 0.48))}px`,
+                    fontFamily: fontFamily || undefined,
+                    fontWeight: "bold",
+                    color: baseColor,
+                    opacity: 0.6,
+                    lineHeight: 1.3,
+                    textShadow: `
+                      -1px -1px 0 rgba(0,0,0,0.8),
+                      1px -1px 0 rgba(0,0,0,0.8),
+                      -1px 1px 0 rgba(0,0,0,0.8),
+                      1px 1px 0 rgba(0,0,0,0.8)
+                    `,
+                    WebkitFontSmoothing: "antialiased",
+                  }}
+                >
+                  {nextLine.translation}
+                </span>
+              )}
+            </>
           )}
         </div>
       )}

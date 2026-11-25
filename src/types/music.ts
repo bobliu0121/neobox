@@ -118,7 +118,9 @@ export interface KaraokeLine {
   time: number;          // 行开始时间（秒）
   duration: number;      // 行持续时间（秒）
   text: string;          // 整行文本
-  translation?: string;  // 翻译
+  translation?: string;  // 翻译 / 双声道右声道字幕
+  /** 双声道工程：text 为左声道字幕，translation 为右声道字幕 */
+  dual?: boolean;
   words?: LyricWord[];   // 逐词数据（有 YRC 时存在）
   charCount: number;     // 字符数
   hasKaraoke: boolean;   // 是否有逐字数据

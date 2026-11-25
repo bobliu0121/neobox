@@ -638,6 +638,12 @@ fn build_local_song_info(
 
         if let Some(play_dir) = play_cache_dir {
             let cache_key = playback_cache_key(path, &id);
+            // .nbmusic 的双声道字幕带专用标记，使用 v3 缓存避免复用旧版无标记 LRC。
+            let lyric_cache_name = if extension == "nbmusic" {
+                "lyrics-v3.lrc"
+            } else {
+                "lyrics-v2.lrc"
+            };
             // `.nbmusic` 的双轨工程必须使用合成后的立体声缓存；旧版单轨缓存
             // （{key}.mp3 等）不能再直接复用，否则会继续只播一条音轨、只显示一条字幕。
             let mut cached = None;
@@ -661,7 +667,7 @@ fn build_local_song_info(
             match cached {
                 Some(cached_path) => {
                     play_path = cached_path;
-                    if play_dir.join(format!("{cache_key}.lyrics-v2.lrc")).is_file() {
+                    if play_dir.join(format!("{cache_key}.{lyric_cache_name}")).is_file() {
                         has_lyric = true;
                     }
                     // 缓存封面可能因清理工具缺失，重新解封装一次以提取封面。
@@ -891,7 +897,12 @@ pub async fn get_local_lyric(app: AppHandle, path: String) -> Result<String, Str
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.clone());
         let cache_key = playback_cache_key(audio_path, &id);
-        let cached_lrc = play_dir.join(format!("{cache_key}.lyrics-v2.lrc"));
+        let cache_name = if extension == "nbmusic" {
+            format!("{cache_key}.lyrics-v3.lrc")
+        } else {
+            format!("{cache_key}.lyrics-v2.lrc")
+        };
+        let cached_lrc = play_dir.join(cache_name);
         if cached_lrc.is_file() {
             return Ok(std::fs::read_to_string(&cached_lrc).unwrap_or_default());
         }

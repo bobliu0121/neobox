@@ -21,6 +21,7 @@ import {
   IconButton,
   Image,
   Input,
+  Select,
   Tab,
   TabList,
   TabPanel,
@@ -115,6 +116,8 @@ type AudioTrack = {
   language: string;
   title: string;
   default: boolean;
+  /** 双声道位置：left / right；null 表示普通多轨 */
+  dualRole?: "left" | "right" | null;
   channelPrograms: ChannelProgram[];
 };
 
@@ -129,6 +132,8 @@ type SubtitleTrack = {
   default: boolean;
   forced: boolean;
   offsetMs?: number | null;
+  /** 双声道字幕位置：left / right；null 表示普通字幕 */
+  dualSide?: "left" | "right" | null;
   cues: Cue[];
 };
 
@@ -234,6 +239,7 @@ function createAudio(path: string, uid: string): AudioTrack {
     language: "und",
     title: stem(path),
     default: false,
+    dualRole: null,
     channelPrograms: [],
   };
 }
@@ -253,6 +259,7 @@ function createSubtitle(uid: string | number, audio: AudioTrack[]): SubtitleTrac
     default: false,
     forced: false,
     offsetMs: 0,
+    dualSide: null,
     cues: [],
   };
 }
@@ -928,6 +935,7 @@ export default function NbmusicEditorPage() {
             language: track.language || "und",
             title: track.title || undefined,
             default: track.default,
+            dualRole: track.dualRole || undefined,
             channelPrograms: track.channelPrograms,
           })),
           subtitleTracks: project.subtitleTracks
@@ -949,6 +957,7 @@ export default function NbmusicEditorPage() {
               default: track.default,
               forced: track.forced,
               offsetMs: track.offsetMs ?? 0,
+              dualSide: track.dualSide || undefined,
               cues: track.cues.map((cue) => ({
                 id: cue.id,
                 startMs: cue.startMs,
@@ -1268,7 +1277,7 @@ export default function NbmusicEditorPage() {
                           <IconButton aria-label="remove audio" icon={<Trash2 size={14} />} size="xs" variant="ghost" onClick={() => removeAudio(track.uid)} />
                         </HStack>
                         <Text fontSize="2xs" opacity={0.62} wordBreak="break-all" mb={2}>{track.path}</Text>
-                        <Grid templateColumns={{ base: "1fr", md: "1.2fr 0.7fr 0.6fr 0.6fr" }} gap={2} mb={2}>
+                        <Grid templateColumns={{ base: "1fr", md: "1.1fr 0.6fr 0.5fr 0.8fr 0.6fr" }} gap={2} mb={2}>
                           <FormControl>
                             <FormLabel fontSize="2xs">{t("nbmusicEditor.trackTitle")}</FormLabel>
                             <Input size="xs" value={track.title} onChange={(e) => updateAudio(index, { title: e.target.value })} />
@@ -1288,12 +1297,27 @@ export default function NbmusicEditorPage() {
                               onChange={(e) => updateAudio(index, { channels: Math.max(1, Number(e.target.value) || 1) })}
                             />
                           </FormControl>
+                          <FormControl>
+                            <FormLabel fontSize="2xs">{t("nbmusicEditor.dualRole")}</FormLabel>
+                            <Select
+                              size="xs"
+                              value={track.dualRole ?? ""}
+                              onChange={(e) =>
+                                updateAudio(index, { dualRole: (e.target.value || null) as AudioTrack["dualRole"] })
+                              }
+                            >
+                              <option value="">{t("nbmusicEditor.dualNone")}</option>
+                              <option value="left">{t("nbmusicEditor.dualLeft")}</option>
+                              <option value="right">{t("nbmusicEditor.dualRight")}</option>
+                            </Select>
+                          </FormControl>
                           <FormControl display="flex" alignItems="flex-end">
                             <Checkbox size="sm" isChecked={track.default} onChange={(e) => updateAudio(index, { default: e.target.checked })}>
                               {t("nbmusicEditor.defaultTrack")}
                             </Checkbox>
                           </FormControl>
                         </Grid>
+                        <Text fontSize="2xs" opacity={0.6} mb={2}>{t("nbmusicEditor.dualAudioHint")}</Text>
                         <JsonEditor
                           label={t("nbmusicEditor.channelPrograms")}
                           value={track.channelPrograms}
@@ -1347,7 +1371,7 @@ export default function NbmusicEditorPage() {
                           <Text fontSize="sm" fontWeight="bold">{t("nbmusicEditor.trackSettings")}</Text>
                           <IconButton aria-label="remove subtitle" icon={<Trash2 size={14} />} size="xs" variant="ghost" onClick={() => removeSubtitle(activeSubtitle)} />
                         </HStack>
-                        <Grid templateColumns={{ base: "1fr", md: "1.2fr .8fr .8fr .8fr" }} gap={3} mb={3}>
+                        <Grid templateColumns={{ base: "1fr", md: "1.1fr .7fr .7fr .7fr .7fr" }} gap={3} mb={3}>
                           <FormControl>
                             <FormLabel fontSize="2xs">{t("nbmusicEditor.trackTitle")}</FormLabel>
                             <Input size="xs" value={activeSubtitleTrack.title} onChange={(e) => updateSubtitle(activeSubtitle, { title: e.target.value })} />
@@ -1374,7 +1398,24 @@ export default function NbmusicEditorPage() {
                               onChange={(e) => updateSubtitle(activeSubtitle, { offsetMs: Number(e.target.value) || 0 })}
                             />
                           </FormControl>
+                          <FormControl>
+                            <FormLabel fontSize="2xs">{t("nbmusicEditor.dualSide")}</FormLabel>
+                            <Select
+                              size="xs"
+                              value={activeSubtitleTrack.dualSide ?? ""}
+                              onChange={(e) =>
+                                updateSubtitle(activeSubtitle, {
+                                  dualSide: (e.target.value || null) as SubtitleTrack["dualSide"],
+                                })
+                              }
+                            >
+                              <option value="">{t("nbmusicEditor.dualNone")}</option>
+                              <option value="left">{t("nbmusicEditor.dualLeft")}</option>
+                              <option value="right">{t("nbmusicEditor.dualRight")}</option>
+                            </Select>
+                          </FormControl>
                         </Grid>
+                        <Text fontSize="2xs" opacity={0.6} mb={3}>{t("nbmusicEditor.dualSubtitleHint")}</Text>
                         <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap={3} mb={3}>
                           <FormControl>
                             <FormLabel fontSize="2xs">{t("nbmusicEditor.roles")}</FormLabel>

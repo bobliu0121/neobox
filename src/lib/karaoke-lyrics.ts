@@ -122,6 +122,9 @@ export function parseYrc(yrcText: string): KaraokeLine[] {
 export function parseLrcEnhanced(lyric: string, translation?: string): KaraokeLine[] {
   if (!lyric) return [];
 
+  // .nbmusic 双声道工程会在 LRC 顶部写入标记，表明 text / translation
+  // 分别是左右声道字幕，而不是普通歌词 + 翻译。
+  const dual = /^\s*NBMUSIC_DUAL=1\s*$/m.test(lyric);
   const lines: KaraokeLine[] = [];
   const transMap = new Map<number, string>();
 
@@ -161,6 +164,7 @@ export function parseLrcEnhanced(lyric: string, translation?: string): KaraokeLi
         duration: 0,
         text: mainText,
         translation: transMap.get(time) || embeddedTrans || undefined,
+        dual: dual || undefined,
         charCount: Math.max(1, mainText.length),
         hasKaraoke: false,
       });
