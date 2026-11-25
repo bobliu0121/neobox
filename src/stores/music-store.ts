@@ -1523,6 +1523,11 @@ export const useMusicStore = create<MusicState>((set, get) => ({
               get().setVolume(value);
             }
             break;
+          case "font-size":
+            if (typeof value === "number") {
+              void get().setDesktopLyricsFontSize(value);
+            }
+            break;
           case "lock":
             get().setDesktopLyricsLocked(true);
             break;

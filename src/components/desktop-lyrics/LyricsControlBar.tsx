@@ -18,6 +18,7 @@ import {
   Pause,
   Lock,
   X,
+  Type,
   Volume2,
   VolumeX,
   Volume1,
@@ -32,6 +33,7 @@ interface LyricsControlBarProps {
   playMode: PlayMode;
   singleLoopOnly?: boolean;
   volume: number;
+  fontSize: number;
   onControl: (action: ControlAction, value?: number) => void;
 }
 
@@ -53,6 +55,7 @@ function LyricsControlBarInner({
   playMode,
   singleLoopOnly = false,
   volume,
+  fontSize,
   onControl,
 }: LyricsControlBarProps) {
   const { config } = useThemeColor();
@@ -61,6 +64,9 @@ function LyricsControlBarInner({
   // 拖动过程中的本地预览值：避免受控 value 走异步往返被拉回旧值导致“乱跳”
   const [volPreview, setVolPreview] = useState<number | null>(null);
   const displayVol = volPreview ?? volume;
+  const [fontOpen, setFontOpen] = useState(false);
+  const [fontPreview, setFontPreview] = useState<number | null>(null);
+  const displayFont = fontPreview ?? fontSize;
 
   // 音量图标：静音 / 低 / 中 / 高
   const VolIcon = volume <= 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
@@ -79,6 +85,19 @@ function LyricsControlBarInner({
   // 松开滑块 / 收起调节条时回到权威音量值（门店已按最后值回传一致）
   const handleVolPointerUp = useCallback(() => {
     setVolPreview(null);
+  }, []);
+
+  const handleFontChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const size = Number(e.target.value);
+      setFontPreview(size);
+      onControl("font-size", size);
+    },
+    [onControl]
+  );
+
+  const handleFontPointerUp = useCallback(() => {
+    setFontPreview(null);
   }, []);
 
   // 滚轮调节音量：上滚 +5%，下滚 -5%，四舍五入到 0.01，夹在 0~1 之间
@@ -225,6 +244,61 @@ function LyricsControlBarInner({
                 cursor: "pointer",
                 "--vol-color": primary,
                 "--vol-fill": `${Math.round(displayVol * 100)}%`,
+              } as React.CSSProperties
+            }
+          />
+        </div>
+      </div>
+
+      {/* 字幕字号：图标 + 悬浮展开调节条（主题色） */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          borderRadius: "999px",
+          overflow: "hidden",
+        }}
+        onMouseEnter={() => setFontOpen(true)}
+        onMouseLeave={() => {
+          setFontOpen(false);
+          setFontPreview(null);
+        }}
+      >
+        <Tooltip label="字幕大小">
+          <button
+            style={{ ...btnBase, color: primary }}
+            onClick={() => setFontOpen((open) => !open)}
+          >
+            <Type size={16} />
+          </button>
+        </Tooltip>
+        <div
+          style={{
+            width: fontOpen ? 76 : 0,
+            opacity: fontOpen ? 1 : 0,
+            transition: "width 0.25s ease, opacity 0.2s ease",
+            display: "flex",
+            alignItems: "center",
+            paddingRight: fontOpen ? 6 : 0,
+          }}
+        >
+          <input
+            type="range"
+            className="lyrics-vol-slider"
+            min={24}
+            max={60}
+            step={1}
+            value={displayFont}
+            onChange={handleFontChange}
+            onPointerUp={handleFontPointerUp}
+            aria-label="字幕大小"
+            style={
+              {
+                width: 76,
+                margin: 0,
+                cursor: "pointer",
+                "--vol-color": primary,
+                "--vol-fill": `${Math.round(((displayFont - 24) / 36) * 100)}%`,
               } as React.CSSProperties
             }
           />

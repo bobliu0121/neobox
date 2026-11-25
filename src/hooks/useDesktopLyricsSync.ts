@@ -43,7 +43,8 @@ export type ControlAction =
   | "lock"
   | "unlock"
   | "close"
-  | "volume";
+  | "volume"
+  | "font-size";
 
 export function useDesktopLyricsSync() {
   const [song, setSong] = useState<Song | null>(null);

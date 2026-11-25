@@ -234,6 +234,8 @@ export default function DesktopLyricsPage() {
         unlock();
       } else if (action === "volume") {
         setVolume(value ?? 0.7);
+      } else if (action === "font-size") {
+        sendControl(action, value);
       } else {
         sendControl(action);
       }
@@ -292,6 +294,7 @@ export default function DesktopLyricsPage() {
             playMode={playMode}
             singleLoopOnly={singleLoopOnly}
             volume={volume}
+            fontSize={settings.fontSize}
             onControl={handleControl}
           />
         )}
@@ -336,6 +339,7 @@ export default function DesktopLyricsPage() {
           isPlaying={isPlaying}
           playMode={playMode}
           volume={volume}
+          fontSize={settings.fontSize}
           onControl={handleControl}
         />
       )}

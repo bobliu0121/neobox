@@ -2038,7 +2038,9 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
           {/* 歌词高亮颜色 + 歌词字体大小 + 音质选择 - 右侧（沉浸/音域回响模式隐藏歌词高亮/字号） */}
           <Box position="absolute" right={0} top="50%" transform="translateY(-50%)">
             <HStack spacing={2} align="center">
-              {!playerOnly && !isImmersive && !isSpectrum && (
+              {!isImmersive && !isSpectrum && (
+              <>
+              {!playerOnly && (
               <>
               {/* 歌词高亮颜色选择器（透明彩胶下联动胶片颜色：选色即固定为手动色） */}
               <Tooltip label={isVinyl ? "胶片/歌词颜色" : "歌词高亮颜色"}>
@@ -2071,7 +2073,9 @@ export const ExpandedPlayer = memo(function ExpandedPlayer({ onClose, playerOnly
                   />
                 </Tooltip>
               )}
-              <Tooltip label={`歌词字号: ${lyricsFontSize}px`}>
+              </>
+              )}
+              <Tooltip label={`${playerOnly ? "字幕字号" : "歌词字号"}: ${lyricsFontSize}px`}>
                 <HStack spacing={1} align="center">
                   <Text fontSize="xs" color={effectiveSubTextColor} fontWeight="bold" flexShrink={0}>A</Text>
                   <Box
